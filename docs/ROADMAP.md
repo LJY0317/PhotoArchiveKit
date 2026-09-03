@@ -20,6 +20,8 @@ Status: initial implementation complete.
 - [ ] Strict validation of Live Photo still-image-time timed metadata
 - [ ] Versioned sanitized JSONL catalog export and restore test
 - [ ] Incremental scan optimization using stable file facts before re-probing
+- [ ] Partition repeated same-identifier resources within one root into distinct Live Photo occurrences
+- [ ] Keep standalone logical asset identity stable across duplicate-hashing modes
 - [ ] Synthetic public Live Photo fixtures suitable for CI
 
 ## v0.2 — Automatic organization and immutable plans

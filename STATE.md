@@ -70,6 +70,8 @@ The private fixture and temporary catalog are not part of the repository.
 - No versioned JSONL catalog export/restore yet.
 - No incremental metadata/hash cache optimization beyond SQLite persistence.
 - Event grouping is time-based only; semantic folder prediction is planned.
+- Repeated copies of one Live Photo identifier inside the same source root are currently summarized as one ambiguous occurrence; occurrence partitioning for duplicated export folders is pending.
+- Standalone exact copies collapse to one logical asset only when exact-duplicate hashing is enabled; stable identity across scan modes is pending.
 - No PhotoKit, Google Photos, Takeout, rclone, Czkawka, ExifTool, or ffprobe execution adapter yet.
 - Google Photos public API cannot be treated as a full existing-library reconciliation interface.
 - `swift test` is not used in the current local environment because neither XCTest nor the Swift Testing module is available to the command-line toolchain. The repository uses `photoarchive-selftest` and CI runs that executable.

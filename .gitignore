@@ -65,9 +65,6 @@ private-fixtures/
 *.aae
 *.xmp
 
-# Local test source kept only for toolchain diagnostics
-Tests/PhotoArchiveCoreTests/PhotoArchiveCoreTests.swift
-
 # Editor files
 .vscode/
 .idea/
