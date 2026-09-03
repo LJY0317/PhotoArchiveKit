@@ -1,12 +1,12 @@
 # Validation Notes
 
-Validation date: **2026-09-04**
+검증 날짜: **2026-09-04**
 
-This document separates vendor guarantees from local observations. Provider behavior can change; a passing sample is a regression observation, not a permanent Apple or Google contract.
+이 문서는 vendor guarantee와 local observation을 구분한다. provider behavior는 바뀔 수 있으며 sample이 통과했다는 사실은 regression observation이지 permanent Apple/Google contract가 아니다.
 
-## Five-route local sample
+## 5경로 local sample
 
-A disposable set contained three new iPhone Live Photos and one ordinary video. It was acquired through:
+Disposable set에는 새 iPhone Live Photo 3개와 ordinary video 1개가 있었다. 다음 경로로 확보했다.
 
 1. iPhone Photos -> normal AirDrop
 2. iPhone Photos -> AirDrop with **All Photos Data**
@@ -14,22 +14,22 @@ A disposable set contained three new iPhone Live Photos and one ordinary video. 
 4. Google Photos web -> browser download
 5. macOS Image Capture -> filesystem folder
 
-No personal media, raw hash, or raw Live Photo identifier is committed to this repository.
+personal media, raw hash, raw Live Photo identifier는 repository에 commit하지 않는다.
 
 ### Full-byte comparison
 
-| Compared with Image Capture | Still resources | Live motion resources | Ordinary video |
+| Image Capture와 비교 | Still resource | Live motion resource | Ordinary video |
 |---|---:|---:|---:|
 | AirDrop + All Photos Data | identical | identical | identical |
 | Google Photos web | identical | identical | identical |
-| Normal AirDrop | identical | all three absent | identical |
-| Google Photos iOS -> AirDrop | transformed files | pair not preserved | transformed representation |
+| Normal AirDrop | identical | 3개 모두 absent | identical |
+| Google Photos iOS -> AirDrop | transformed file | pair not preserved | transformed representation |
 
-Google web motion filenames used `.MP4` while Image Capture used `.MOV`, but the bytes were identical in this sample. An earlier contrary result was caused by selecting the wrong comparison path.
+Google web motion filename은 `.MP4`, Image Capture는 `.MOV`였지만 이 sample에서 byte는 identical했다. 이전의 반대 결과는 잘못된 comparison path를 선택한 것이 원인이었다.
 
-### PhotoArchiveKit scan result
+### PhotoArchiveKit scan 결과
 
-The five folders were scanned together as separate source roots:
+다섯 folder를 separate source root로 함께 scan했다.
 
 ```text
 source roots                         5
@@ -44,41 +44,41 @@ automatic event suggestions           1
 warnings                              3
 ```
 
-Twenty source-local occurrences collapse to eight logical assets because byte-identical ordinary media and Live Photo copies with the same protected linkage identifier are unified. Per-root completeness remains visible, so a complete copy elsewhere does not hide an incomplete normal-AirDrop occurrence.
+source-local occurrence 20개가 logical asset 8개로 합쳐지는 이유는 byte-identical ordinary media와 같은 protected linkage identifier를 가진 Live Photo copy를 unify하기 때문이다. root별 completeness는 계속 visible하므로 다른 위치의 complete copy가 normal-AirDrop occurrence의 incompleteness를 숨기지 않는다.
 
-The seven exact resource groups are three still images, three motion resources, and one ordinary video preserved identically by multiple routes.
+exact resource group 7개는 여러 경로에서 identical하게 보존된 still image 3개, motion resource 3개, ordinary video 1개다.
 
-## Filename-independence observations
+## Filename independence 관찰
 
-- A correct still/motion pair remained a Live Photo after both filenames changed.
-- A still from one Live Photo and a motion resource from another did not become a Live Photo merely because their basenames matched.
-- The tested Google web HEIC + MP4 pairs imported into Apple Photos as Live Photos.
+- 올바른 still/motion pair는 두 filename을 모두 바꾼 뒤에도 Live Photo로 유지되었다.
+- 한 Live Photo의 still과 다른 Live Photo의 motion resource는 basename을 같게 만들어도 Live Photo가 되지 않았다.
+- test한 Google web HEIC + MP4 pair는 Apple Photos에 Live Photo로 import되었다.
 
-PhotoArchiveKit therefore uses embedded linkage evidence. A basename can be a disambiguation hint but never pairing authority.
+따라서 PhotoArchiveKit은 embedded linkage evidence를 사용한다. basename은 disambiguation hint일 수 있지만 pairing authority가 아니다.
 
-## Meaning of `complete`
+## `complete`의 의미
 
-The current scanner calls an occurrence complete when exactly one recognized still and one recognized motion resource share the same protected Apple identifier inside one source root.
+현재 scanner는 한 source root 안에서 recognized still 1개와 recognized motion resource 1개가 같은 protected Apple identifier를 공유할 때 occurrence를 complete라고 한다.
 
-It does not yet prove:
+아직 다음을 증명하지는 않는다.
 
-- complete media decodability;
-- correct timed `still-image-time` metadata;
-- expected audio;
-- restoration of edits, key-photo choices, or adjustment state;
-- identical behavior in future software versions.
+- complete media decodability
+- correct timed `still-image-time` metadata
+- expected audio
+- edit, key-photo choice, adjustment state restoration
+- future software version에서 identical behavior
 
-## Provenance conclusion
+## Provenance 결론
 
-Byte-identical files cannot reveal whether they came from Image Capture or Google Photos web. Provenance must be recorded from the source root, declared import method, relative path, and scan session rather than inferred from file contents.
+byte-identical file만으로 Image Capture와 Google Photos web 중 어디에서 왔는지 알 수 없다. provenance는 file content에서 추론하지 말고 source root, declared import method, relative path, scan session에서 기록해야 한다.
 
-## Remaining high-value tests
+## 남은 high-value test
 
-- Small test-only Google Takeout export, including one asset in two albums.
-- Edited Live Photos: key photo, crop, color adjustment, mute, Live on/off, and effects.
-- Strict timed-metadata and decode validation.
-- Same-second captures, subseconds, bursts, timezone changes, and metadata-free media.
-- Archive pair -> PhotoKit -> Apple Photos -> Google Photos iOS -> download round trip.
-- rclone upload/download followed by local full-byte comparison.
+- 한 asset이 두 album에 들어간 small test-only Google Takeout export
+- Edited Live Photo: key photo, crop, color adjustment, mute, Live on/off, effect
+- Strict timed-metadata/decode validation
+- Same-second capture, subsecond, burst, timezone change, metadata-free media
+- Archive pair -> PhotoKit -> Apple Photos -> Google Photos iOS -> download round trip
+- rclone upload/download 후 local full-byte comparison
 
-Until those tests are complete, the architecture can safely preserve ordinary files, explicit resource relationships, source provenance, many-to-many collections, and local equality groups without deleting or rewriting anything.
+이 test가 끝나기 전에도 architecture는 ordinary file, explicit resource relationship, source provenance, many-to-many collection, local equality group을 삭제나 rewrite 없이 안전하게 보존할 수 있다.
