@@ -1,109 +1,109 @@
 # Roadmap
 
-The roadmap favors small, verifiable layers. No phase depends on deleting existing originals.
+Roadmap은 작고 검증 가능한 layer를 우선한다. 어느 phase도 existing original을 삭제해야 진행되는 구조가 아니다.
 
-## v0.1 — Read-only scanner and catalog
+## v0.1 — Read-only scanner와 catalog
 
-Status: initial implementation complete.
+상태: initial implementation 완료.
 
-- [x] Swift package and lightweight CLI
-- [x] Multiple configurable source roots
-- [x] ImageIO and AVFoundation metadata probes
-- [x] Live Photo pairing by embedded identifiers
-- [x] Per-root completeness reporting
-- [x] Local exact duplicate groups with opaque public IDs
-- [x] SQLite schema for resources, assets, collections, providers, sessions, and events
-- [x] Time-gap event suggestions
-- [x] Human and sanitized JSON reports
-- [x] Dependency-free synthetic self-test
-- [x] Five-path disposable ingest fixture validation
-- [x] Dated provider capability matrix based on official Google and Apple documentation
-- [x] Automatic-first event organization policy and prior-art boundaries
-- [ ] Strict validation of Live Photo still-image-time timed metadata
-- [ ] Versioned sanitized JSONL catalog export and restore test
-- [ ] Incremental scan optimization using stable file facts before re-probing
-- [ ] Partition repeated same-identifier resources within one root into distinct Live Photo occurrences
-- [ ] Keep standalone logical asset identity stable across duplicate-hashing modes
-- [ ] Synthetic public Live Photo fixtures suitable for CI
+- [x] Swift package와 lightweight CLI
+- [x] 여러 configurable source root
+- [x] ImageIO/AVFoundation metadata probe
+- [x] embedded identifier 기반 Live Photo pairing
+- [x] root별 completeness report
+- [x] opaque public ID를 사용하는 local exact duplicate group
+- [x] resource, asset, collection, provider, session, event용 SQLite schema
+- [x] time-gap event suggestion
+- [x] human-readable 및 sanitized JSON report
+- [x] dependency-free synthetic self-test
+- [x] five-path disposable ingest fixture validation
+- [x] official Google/Apple documentation 기반 dated provider capability matrix
+- [x] automatic-first event organization policy 및 prior-art boundary
+- [ ] Live Photo `still-image-time` timed metadata strict validation
+- [ ] versioned sanitized JSONL catalog export/restore test
+- [ ] stable file fact를 이용한 incremental scan optimization
+- [ ] 한 root 안에서 반복되는 same-identifier resource를 distinct Live Photo occurrence로 partition
+- [ ] duplicate-hashing mode와 무관하게 standalone logical asset identity 안정화
+- [ ] CI에 적합한 synthetic public Live Photo fixture
 
-## v0.2 — Automatic organization and immutable plans
+## v0.2 — Automatic organization과 immutable plan
 
-- [ ] Canonical capture-time resolver with documented source priority
-- [ ] Same-second and burst grouping
-- [ ] Deterministic `YYYYMMDD_HHMMSS[_suffix]` rename proposals
-- [ ] Original-name and reversible rename history
-- [ ] Existing archive folder import as collection examples
-- [ ] Event-level collection proposals
-- [ ] Confidence bands and policy presets
-- [ ] Immutable plan format with preconditions
-- [ ] Finder-compatible shadow review folders or a lightweight generated review index
-- [ ] No mutation by default; explicit plan validation command
+- [ ] documented source priority를 가진 canonical capture-time resolver
+- [ ] same-second 및 burst grouping
+- [ ] deterministic `YYYYMMDD_HHMMSS[_suffix]` rename proposal
+- [ ] original-name 및 reversible rename history
+- [ ] existing archive folder를 collection example로 import
+- [ ] event-level collection proposal
+- [ ] confidence band 및 policy preset
+- [ ] precondition을 가진 immutable plan format
+- [ ] Finder-compatible shadow review folder 또는 lightweight generated review index
+- [ ] 기본은 no mutation; explicit plan validation command
 
-The goal is to classify event groups rather than require one decision per photo.
+목표는 photo별 decision이 아니라 event group을 classify하는 것이다.
 
 ## v0.3 — Safe archive application
 
-- [ ] Verified root marker
-- [ ] Copy to staging, local byte verification, and atomic finalization
-- [ ] Live Photo resource-set transactions
-- [ ] Resume interrupted sessions from checkpoints
-- [ ] Quarantine rather than permanent deletion
-- [ ] Catalog snapshot to archive metadata directory
-- [ ] Replica policy and verification records
-- [ ] Optional rclone adapter using user-installed `rclone`
-- [ ] Never use `rclone sync` as an initial default
+- [ ] verified root marker
+- [ ] staging copy, local byte verification, atomic finalization
+- [ ] Live Photo resource-set transaction
+- [ ] checkpoint에서 interrupted session resume
+- [ ] permanent deletion 대신 quarantine
+- [ ] archive metadata directory에 catalog snapshot
+- [ ] replica policy 및 verification record
+- [ ] user-installed `rclone`을 사용하는 optional rclone adapter
+- [ ] 초기 default로 `rclone sync` 사용 금지
 
 ## v0.4 — Local visual classification
 
-- [ ] Optional Apple Vision feature-print adapter
-- [ ] Record Vision request revision and feature schema
-- [ ] Event-level nearest-neighbor classification from existing folder examples
-- [ ] Optional coarse Vision image labels
-- [ ] Local-only feature cache with erase/rebuild controls
-- [ ] No feature vectors or inferred face data in reports
-- [ ] Optional Czkawka CLI candidate import for similar images/videos
-- [ ] Similarity remains a review signal, never deletion authority
+- [ ] optional Apple Vision feature-print adapter
+- [ ] Vision request revision 및 feature schema 기록
+- [ ] existing folder example 기반 event-level nearest-neighbor classification
+- [ ] optional coarse Vision image label
+- [ ] erase/rebuild control을 가진 local-only feature cache
+- [ ] report에 feature vector/inferred face data 포함 금지
+- [ ] similar image/video용 optional Czkawka CLI candidate import
+- [ ] similarity는 review signal이며 deletion authority가 아님
 
-A simple first classifier should prefer familiar folders learned from the user's archive over a large universal taxonomy.
+첫 classifier는 큰 universal taxonomy보다 사용자의 archive에서 학습한 familiar folder를 우선한다.
 
 ## v0.5 — Apple Photos projection
 
-- [ ] Small Swift PhotoKit bridge
-- [ ] Read assets and user albums with explicit authorization
-- [ ] Import validated `.photo` + `.pairedVideo` resources
-- [ ] Create albums from catalog collections
-- [ ] Add/remove asset membership transactionally
-- [ ] Test against an isolated Photos library before the system library
-- [ ] Preserve original-resource guarantee separately from Apple adjustment history
+- [ ] small Swift PhotoKit bridge
+- [ ] explicit authorization 후 asset/user album 읽기
+- [ ] validated `.photo` + `.pairedVideo` resource import
+- [ ] catalog collection에서 album 생성
+- [ ] asset membership transactional add/remove
+- [ ] system library 전에 isolated Photos library에서 test
+- [ ] Apple adjustment history와 별도로 original-resource guarantee 유지
 
-## v0.6 — Provider exports and Google upload
+## v0.6 — Provider export와 Google upload
 
-- [ ] Fixture-driven Google Takeout parser
-- [ ] Preserve sidecars and raw export layout before normalization
-- [ ] Reconstruct album membership where the observed Takeout schema permits it
-- [ ] Google Photos Picker import for user-selected items
-- [ ] Google Photos Library API upload for supported simple media
-- [ ] Capability report for app-created Google content and albums
-- [ ] Do not claim public API Live Photo upload until an official composite mechanism or a verified safe route exists
-- [ ] Permit upload-without-albums as a useful capability
+- [ ] fixture-driven Google Takeout parser
+- [ ] normalization 전에 sidecar/raw export layout 보존
+- [ ] observed Takeout schema가 허용하는 범위에서 album membership reconstruct
+- [ ] user-selected item용 Google Photos Picker import
+- [ ] supported simple media용 Google Photos Library API upload
+- [ ] app-created Google content/album용 capability report
+- [ ] official composite mechanism 또는 verified safe route가 있기 전에는 public API Live Photo upload를 지원한다고 주장하지 않음
+- [ ] album 없는 upload도 유용한 capability로 허용
 
-Google adapter behavior must follow the current API, not assumptions that broader scopes will return.
+Google adapter behavior는 broader scope가 돌아올 것이라는 가정이 아니라 current API를 따라야 한다.
 
-## Later possibilities
+## 이후 가능성
 
-- Lightweight SwiftUI or local web front end built on the same core
-- Optional Immich/PhotoPrism projection reports
-- Additional file-cloud replicas
-- Multi-Mac catalog snapshot reconciliation
-- Edited Live Photo derivative and adjustment-resource preservation
-- Offline map/timezone enrichment with explicit privacy controls
+- 같은 core를 사용하는 lightweight SwiftUI 또는 local web frontend
+- optional Immich/PhotoPrism projection report
+- additional file-cloud replica
+- multi-Mac catalog snapshot reconciliation
+- edited Live Photo derivative/adjustment-resource preservation
+- explicit privacy control을 가진 offline map/timezone enrichment
 
-## Explicitly deferred
+## 명시적으로 미룸
 
-- background filesystem watchers;
-- always-on server infrastructure;
-- browser automation as a core Google adapter;
-- automatic permanent deletion;
-- enterprise multi-user permissions;
-- content-addressed user-facing storage;
-- silent rewrite of original media metadata.
+- background filesystem watcher
+- always-on server infrastructure
+- browser automation을 core Google adapter로 사용
+- automatic permanent deletion
+- enterprise multi-user permission
+- content-addressed user-facing storage
+- original media metadata silent rewrite
