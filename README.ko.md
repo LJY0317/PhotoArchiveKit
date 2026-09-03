@@ -98,14 +98,17 @@ swift run photoarchive doctor
 swift run photoarchive scan --inbox "~/Photo Inbox"
 ```
 
-여러 source를 함께 scan하면 source 간 exact copy와 Live Photo 관계를 통합할 수 있습니다.
+폴더를 먼저 한곳에 섞지 않고 여러 source를 함께 scan하면 exact copy, provenance, source 간 Live Photo 관계를 통합할 수 있습니다.
 
 ```bash
 swift run photoarchive scan \
-  --inbox "~/Photo Inbox" \
-  --import "~/Downloads/Google Takeout" \
+  --local "~/Pictures" \
+  --takeout "~/Pictures/Takeout" \
+  --takeout "~/Pictures/Takeout-2" \
   --archive "/Volumes/Photo Archive/Photos"
 ```
+
+등록한 root가 서로 중첩되어 있으면 가장 구체적인 root가 해당 파일을 소유합니다. 따라서 위 예시의 Takeout folder는 `~/Pictures`를 통해 다시 scan되지 않으며, 파일 byte만으로 출처를 구분할 수 없는 exact copy도 Google Takeout provenance를 유지할 수 있습니다.
 
 전체 privacy-safe JSON report를 출력합니다.
 
@@ -141,7 +144,11 @@ report는 정제되지만 catalog 자체에는 경로와 로컬 integrity 값이
 
 아래 root option은 여러 번 사용할 수 있습니다.
 
-- `--inbox PATH`
+- `--inbox PATH` — provenance를 모르는 Inbox
+- `--local PATH` — local/iPhone-derived media가 섞인 library root
+- `--apple PATH` — Apple/iPhone에서 직접 가져온 root
+- `--takeout PATH` — Google Photos Takeout export
+- `--google-web PATH` — Google Photos web download
 - `--archive PATH`
 - `--import PATH`
 - `--reference PATH`
@@ -159,6 +166,8 @@ option 없이 입력한 path는 Inbox로 처리합니다.
 ### `photoarchive doctor`
 
 필수 system 기능과 선택적 executable이 `PATH`에 있는지 보고합니다.
+
+Google Takeout root에서는 embedded media metadata로 신뢰할 수 있는 촬영시각을 얻지 못한 경우 sidecar의 `title`과 `photoTakenTime`만 읽습니다. GPS, description 등 다른 Takeout metadata는 이 경로에서 import하지 않습니다.
 
 ## 자동 분류 방향
 
@@ -220,6 +229,7 @@ core는 아래 프로젝트를 포함하거나 요구하지 않지만, 향후 ad
 
 ## 문서
 
+- [프로젝트 초심과 범위 게이트](docs/PROJECT_NORTH_STAR.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [자동 분류 전략](docs/AUTOMATION.md)
 - [Provider 기능](docs/PROVIDER_CAPABILITIES.md)
