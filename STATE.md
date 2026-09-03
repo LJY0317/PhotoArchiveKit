@@ -29,6 +29,10 @@
 - time-gap 기반 event folder suggestion
 - 사람이 읽는 output과 sanitized JSON output
 - 필수 third-party binary 없이 optional tool 감지
+- mixed local, Apple-direct, Google Takeout, Google web root를 구분하는 explicit source provenance
+- 상위 local library 안에 Takeout root가 있어도 가장 구체적인 등록 root가 파일을 소유하도록 하는 nested-root ownership
+- filename이 같아도 내용이 다르면 identity로 합치지 않고 경고하는 filename collision 검출
+- GPS/description은 읽지 않고 `title`과 `photoTakenTime`만 사용하는 최소 Google Takeout sidecar capture-time import
 - 영어/한국어 project overview
 - 날짜가 명시된 Google Photos 및 Apple PhotoKit capability 문서
 - validation 및 optional integration 문서
@@ -47,6 +51,7 @@ scanner는 media에 대해 read-only다. 명시적으로 선택한 SQLite catalo
 
 ## 제품 결정
 
+- `docs/PROJECT_NORTH_STAR.md`가 scope gate다. real library에서 duplicate reconciliation, Live Photo 보존, preferred representation 선택, folder archive plan, verified copy, portable semantic state가 안정적으로 동작하기 전에는 주변 기능으로 확장하지 않는다.
 - portable filesystem archive가 media truth를 저장한다.
 - SQLite가 semantic truth와 provider-neutral desired organization을 저장한다.
 - 수동 작업량은 개별 사진 수가 아니라 ambiguous event group 수에 비례해야 한다.
@@ -108,14 +113,15 @@ private fixture와 temporary catalog는 repository에 포함하지 않는다.
 
 ## 다음 구체 작업
 
-1. media를 변경하지 않고 stable movable root ID와 archive-root marker 추가
-2. strict Live Photo timed-metadata validation 추가
-3. versioned sanitized JSONL catalog export/restore 추가
-4. canonical capture-time 및 reversible rename-plan rule 정의
-5. 기존 folder를 example로 사용하는 event-level archive-folder learning 추가
-6. apply 전에 immutable read-only `plan` command 추가
-7. Takeout parser 작성 전에 작은 Google Takeout fixture 검증
-8. immutable queue, partial-success recovery, explicit Live Photo blocking 기반 Google flat-upload adapter 설계
+1. explicit provenance와 exact/Live Photo evidence를 이용한 read-only preferred-representation reconciliation plan 추가
+2. mutation 전에 stable movable root ID와 archive-root marker 추가
+3. strict Live Photo timed-metadata validation 추가
+4. GPS와 불필요한 metadata를 report에 노출하지 않으면서 migration에 필요한 나머지 Google Takeout sidecar evidence import
+5. versioned sanitized JSONL catalog export/restore 추가
+6. canonical capture-time 및 reversible rename-plan rule 정의
+7. 기존 folder를 example로 사용하는 event-level archive-folder learning 추가
+8. apply 전에 immutable archive destination plan 추가
+9. North Star archive workflow가 real library에서 안정화되기 전에는 Google upload와 broader provider convenience를 보류
 
 ## 재개 지점
 

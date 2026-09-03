@@ -1,8 +1,10 @@
 # PhotoArchiveKit 프로젝트 지침
 
 ## 제품 범위
+- `docs/PROJECT_NORTH_STAR.md`를 제품 범위의 최우선 gate로 사용한다. 새 기능을 제안하거나 구현하기 전에 반드시 읽는다.
+- real library에서 duplicate reconciliation, Live Photo 보존, preferred representation 선택, folder archive plan, verified copy, portable semantic state의 완료 기준을 충족하기 전에는 주변 기능을 우선하지 않는다.
 - PhotoArchiveKit은 local-first, session 기반, 경량 도구로 유지한다. 이후 milestone에서 명시적으로 필요성이 확인되지 않는 한 background daemon이나 filesystem watcher를 추가하지 않는다.
-- core는 third-party executable 없이도 유용해야 한다. 선택적 integration은 사용자가 이미 설치한 도구를 사용할 수 있다.
+- core는 third-party executable 없이도 유용해야 한다. 선택적 integration은 성숙한 duplicate/replication/metadata 기능을 다시 구현하기보다 사용자가 이미 설치한 도구를 활용할 수 있다.
 - Live Photo는 여러 resource를 가진 하나의 logical asset으로 취급한다. 검증된 pair의 한쪽만 move, rename, quarantine, delete하도록 계획하거나 실행하지 않는다.
 
 ## 안전

@@ -56,6 +56,40 @@ warning 3개는 ordinary AirDrop root의 예상된 still-only Live Photo occurre
 - core runtime dependency는 Apple system framework와 SQLite로 제한
 - optional rclone, Czkawka CLI, ExifTool, ffprobe integration은 bundle하지 않음
 
+## 2026-09-04 — Real-library provenance baseline
+
+대규모 mixed local library와 세 개의 Google Takeout export를 nested-root ownership 및 explicit provenance를 적용해 read-only로 scan했다.
+
+Sanitized baseline:
+
+```text
+recognized resources           30240
+media resources                18754
+logical assets                  8178
+logical Live Photos             2710
+exact duplicate groups          8261
+filename collision groups        289
+```
+
+재사용할 결론:
+
+- exact resource group 4,052개가 local-library와 Google-Takeout provenance 경계를 가로질렀다.
+- Live Photo asset 1,346개는 local과 Takeout 양쪽에 complete occurrence가 있었고 still/motion resource가 role별로 byte-identical이었다.
+- exact standalone logical asset 685개가 local과 Takeout 양쪽에서 관찰되었다.
+- 최소 Takeout sidecar importer는 `title`과 `photoTakenTime`만 parse하여 수천 개 media의 provider capture-time evidence를 복구했다. trusted embedded EXIF/QuickTime timestamp는 계속 우선한다.
+- provider/date 조건만으로는 삭제 안전성을 증명할 수 없다. 사용자가 다른 device/provider copy가 있다고 기대해도 Takeout occurrence가 현재 filesystem에서 유일한 complete Live Photo representation일 수 있다.
+- filename은 identity가 아니다. real scan에서 같은 filename이지만 byte content가 다른 group이 수백 개 확인되었다.
+
+이 validation에서는 media file을 수정하지 않았다.
+
+## 2026-09-04 — Product North Star 고정
+
+최초 제품 목적을 `docs/PROJECT_NORTH_STAR.md`와 `AGENTS.md`의 explicit scope gate로 고정했다.
+
+Core completion은 iPhone/Apple, Mac, Google Photos/Takeout, HDD에 흩어진 같은 촬영물을 reconcile하고 Live Photo resource 관계를 보존하며, 사용자 provenance preference를 적용하고, 사람이 읽을 수 있는 folder archive를 만들고, copy를 검증하며, portable provider-neutral semantic state를 유지하는 것을 의미한다.
+
+이 완료 기준이 real library에서 안정적으로 동작하기 전에는 직접 기여하지 않는 기능을 보류한다. Czkawka/Krokiet, rclone, ExifTool, ffprobe, 공식 provider framework처럼 성숙한 외부 도구가 재구현보다 강한 영역은 재사용하고 PhotoArchiveKit은 provider-neutral asset relationship과 archive decision을 소유한다.
+
 ## 아직 필요한 Validation
 
 완료된 fixture만으로 다음 내용을 가정해서는 안 된다.
