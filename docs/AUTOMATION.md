@@ -1,164 +1,164 @@
-# Automatic Organization Strategy
+# 자동 분류 전략
 
-PhotoArchiveKit is designed so that manual work scales with the number of **ambiguous events**, not the number of individual photos.
+PhotoArchiveKit은 수동 작업량이 개별 사진 수가 아니라 **ambiguous event 수**에 비례하도록 설계한다.
 
-The preferred outcome for a large ingest session is:
+큰 ingest session에서 원하는 결과는 다음과 같다.
 
 ```text
-thousands of resources
+수천 개 resource
   -> exact-copy reconciliation
-  -> logical assets
-  -> a small number of event groups
-  -> high-confidence folder proposals
-  -> only uncertain event groups require review
+  -> logical asset
+  -> 소수의 event group
+  -> high-confidence folder proposal
+  -> uncertain event group만 review
 ```
 
-Automatic classification never authorizes deletion. It only proposes organization and provider projection state.
+automatic classification은 deletion을 authorize하지 않는다. organization과 provider projection state만 제안한다.
 
 ## Canonical organization model
 
-Each logical asset can have:
+각 logical asset은 다음을 가질 수 있다.
 
-- one primary filesystem collection, represented by its final archive folder;
-- zero or more additional logical collections stored in SQLite;
-- zero or more provider album projections;
-- provenance observations from every source in which a copy was found.
+- final archive folder로 표현되는 primary filesystem collection 1개
+- SQLite에 저장되는 추가 logical collection 0개 이상
+- provider album projection 0개 이상
+- copy가 발견된 모든 source의 provenance observation
 
-Example:
+예:
 
 ```text
 primary folder:   미국 여행
 collections:      미국 여행, 가족, 2026 Best
-Google Photos:    flat upload may exist without album projection
-Apple Photos:     album membership can mirror the logical collections
+Google Photos:    album projection 없이 flat upload 가능
+Apple Photos:     logical collection을 album membership으로 반영 가능
 ```
 
-A filesystem copy is not created for every additional collection. The many-to-many memberships remain catalog data and can later be projected to a provider that supports them.
+추가 collection마다 filesystem copy를 만들지 않는다. many-to-many membership은 catalog data로 유지하고 이를 지원하는 provider에 나중에 projection할 수 있다.
 
 ## Classification pipeline
 
-### 1. Normalize resources into logical assets
+### 1. Resource를 logical asset으로 정규화
 
-Before classification, PhotoArchiveKit:
+classification 전에 PhotoArchiveKit은:
 
-- pairs Live Photo resources by embedded identifiers;
-- keeps completeness status per source root;
-- groups byte-identical resources locally;
-- distinguishes a complete Live Photo from a still-only copy;
-- preserves transformed or re-encoded versions as separate representations until equivalence is established.
+- embedded identifier로 Live Photo resource를 pair하고
+- source root별 completeness status를 유지하고
+- byte-identical resource를 로컬에서 group하고
+- complete Live Photo와 still-only copy를 구분하고
+- equivalence가 확립되기 전에는 transformed/re-encoded version을 별도 representation으로 유지한다.
 
-This prevents duplicate copies from voting several times in the classifier.
+이렇게 해야 duplicate copy가 classifier에서 여러 표를 행사하지 않는다.
 
-### 2. Segment assets into events
+### 2. Asset을 event로 분할
 
-Event-level decisions provide the largest reduction in manual work. The current implementation groups trusted capture times using a configurable time gap and proposes conservative date folders.
+event-level decision이 manual work를 가장 크게 줄인다. 현재 구현은 trusted capture time을 configurable time gap으로 group하고 보수적인 date folder를 제안한다.
 
-Planned event evidence includes:
+향후 event evidence:
 
-- capture instant and local calendar date;
-- timezone confidence;
-- short gaps and overnight boundaries;
-- burst and same-second sequences;
-- neighboring Live Photos, photos, and videos;
-- source import session;
-- optional coarse location cells calculated locally.
+- capture instant와 local calendar date
+- timezone confidence
+- short gap과 overnight boundary
+- burst와 same-second sequence
+- neighboring Live Photo/photo/video
+- source import session
+- 로컬에서 계산하는 optional coarse location cell
 
-An event remains one unit unless strong evidence suggests that it should be split.
+강한 evidence가 없는 한 event는 하나의 unit으로 유지한다.
 
-### 3. Learn from the existing archive
+### 3. 기존 archive에서 학습
 
-The archive's existing folders are labeled examples. PhotoArchiveKit should not impose a universal taxonomy such as `Travel`, `People`, or `Nature` unless the user chooses it.
+기존 archive folder가 labeled example이다. 사용자가 선택하지 않는 한 `Travel`, `People`, `Nature` 같은 universal taxonomy를 강요하지 않는다.
 
-For each known folder, the local model can summarize non-secret features such as:
+각 known folder에 대해 local model은 다음과 같은 feature를 요약할 수 있다.
 
-- typical dates or recurring calendar periods;
-- event duration and asset count distribution;
-- camera/source characteristics;
-- locally derived location regions when enabled;
-- optional local visual feature centroids;
-- user-confirmed aliases and hierarchy.
+- typical date 또는 recurring calendar period
+- event duration 및 asset count distribution
+- camera/source characteristic
+- enable된 경우 locally derived location region
+- optional local visual feature centroid
+- user-confirmed alias와 hierarchy
 
-A new event is compared with these folder profiles. The classifier returns candidates with explicit evidence and confidence rather than a single unexplained answer.
+새 event를 folder profile과 비교해 하나의 unexplained answer가 아니라 explicit evidence와 confidence를 가진 candidate를 반환한다.
 
 ```text
 Event E000142
 candidate: 일본 여행
 confidence: high
 reasons:
-  - same local region as confirmed examples
-  - adjacent dates to an existing trip event
-  - visual similarity to confirmed event clusters
+  - confirmed example과 같은 local region
+  - existing trip event와 인접한 날짜
+  - confirmed event cluster와 visual similarity
 ```
 
-Agent-facing reports must omit raw GPS coordinates, feature vectors, face representations, perceptual hashes, and image-derived embeddings. They may expose only coarse reasons and confidence.
+agent-facing report에는 raw GPS coordinate, feature vector, face representation, perceptual hash, image-derived embedding을 포함하지 않는다. coarse reason과 confidence만 노출할 수 있다.
 
 ### 4. Optional local visual analysis
 
-Visual classification is optional and local-only. A future macOS adapter may use Apple Vision/Core ML to calculate image feature prints and coarse labels without uploading media.
+visual classification은 optional이며 local-only다. future macOS adapter는 Apple Vision/Core ML로 media를 upload하지 않고 image feature print와 coarse label을 계산할 수 있다.
 
-Rules:
+규칙:
 
-- analyze one representative still for a Live Photo rather than sampling its motion video by default;
-- cache features locally with the model/revision identifier;
-- permit complete cache deletion and deterministic rebuilding;
-- never send vectors, thumbnails, frames, or face geometry to an agent or cloud service;
-- do not enable face recognition in the initial classifier;
-- do not make visual similarity an identity or deletion decision.
+- Live Photo는 기본적으로 motion video를 sampling하지 않고 representative still 하나를 분석한다.
+- feature를 model/revision identifier와 함께 로컬 cache한다.
+- complete cache deletion과 deterministic rebuilding을 허용한다.
+- vector, thumbnail, frame, face geometry를 agent/cloud에 보내지 않는다.
+- initial classifier에서는 face recognition을 enable하지 않는다.
+- visual similarity를 identity 또는 deletion decision으로 사용하지 않는다.
 
-Users who already have `czkawka_cli` may optionally import its similar-image/video candidate groups. This remains a separate subprocess adapter and is not required by the core.
+이미 `czkawka_cli`를 가진 사용자는 similar-image/video candidate group을 optional하게 import할 수 있다. 이는 별도 subprocess adapter이며 core requirement가 아니다.
 
 ### 5. Confidence policy
 
-Recommended default policy:
+권장 default policy:
 
 | Confidence | Default action |
 | --- | --- |
-| High | Add the proposed folder and collection memberships to an immutable plan |
-| Medium | Ask for one event-level decision, not one decision per asset |
-| Low | Use a neutral date-event folder and retain ranked alternatives in SQLite |
-| Conflict | Stop that event and explain the conflicting evidence |
+| High | proposed folder와 collection membership을 immutable plan에 추가 |
+| Medium | asset별이 아니라 event-level decision 1회 요청 |
+| Low | neutral date-event folder를 사용하고 ranked alternative를 SQLite에 보존 |
+| Conflict | 해당 event만 중지하고 conflicting evidence 설명 |
 
-A user may choose a stricter preset in which all proposals require approval, but the default product direction is automatic-first.
+모든 proposal에 approval을 요구하는 stricter preset을 선택할 수 있지만 default product 방향은 automatic-first다.
 
-## Learning from corrections
+## Correction에서 학습
 
-A correction should improve future event decisions without creating a hidden global model:
+correction은 hidden global model을 만들지 않고 future event decision을 개선해야 한다.
 
 ```text
 proposal: 일상
 user correction: 가족
 ```
 
-PhotoArchiveKit records:
+PhotoArchiveKit은 다음을 기록한다.
 
-- the event and chosen primary collection;
-- the rejected candidate;
-- the classifier version;
-- the evidence categories used;
-- an optional user-visible note.
+- event와 선택된 primary collection
+- rejected candidate
+- classifier version
+- 사용된 evidence category
+- optional user-visible note
 
-It does not need to retain raw media-derived values in portable reports. The local feature cache can be rebuilt from archive files when necessary.
+portable report에 raw media-derived value를 보존할 필요는 없다. local feature cache는 필요할 때 archive file에서 rebuild할 수 있다.
 
-## Duplicate policy before classification
+## Classification 전 duplicate policy
 
-Exact copies are reconciled before event scoring. When choosing a preferred representation, PhotoArchiveKit may propose a ranking based on:
+exact copy는 event scoring 전에 reconcile한다. preferred representation을 고를 때 다음 순서의 ranking을 제안할 수 있다.
 
-1. complete logical asset over incomplete occurrence;
-2. validated camera-origin resources over transformed exports;
-3. greater metadata completeness;
-4. original dimensions and duration;
-5. trusted provenance;
-6. user override.
+1. incomplete occurrence보다 complete logical asset
+2. transformed export보다 validated camera-origin resource
+3. metadata completeness가 높은 representation
+4. original dimension/duration
+5. trusted provenance
+6. user override
 
-Larger byte size alone is not enough to declare a file superior. No proposal removes the non-preferred copy until the archive and an independent replica have been verified and the user has approved quarantine.
+byte size가 크다는 이유만으로 superior하다고 판단하지 않는다. archive와 independent replica가 verify되고 사용자가 quarantine을 승인하기 전까지 non-preferred copy를 제거하지 않는다.
 
-## Prior-art lessons adopted selectively
+## Prior-art에서 선택적으로 채택한 교훈
 
-PhotoArchiveKit is not a replacement implementation of another product, but mature systems demonstrate useful boundaries:
+PhotoArchiveKit은 다른 제품의 replacement implementation이 아니지만 mature system은 유용한 boundary를 보여준다.
 
-- **Mylio Photos** keeps a compact catalog while original-quality files can live on multiple Vault devices. PhotoArchiveKit similarly separates a small semantic catalog from ordinary original files and records where complete copies exist.
-- **Immich** separates duplicate detection from a review utility and can use XMP sidecars. PhotoArchiveKit likewise treats similarity as review evidence and plans a portable catalog export instead of modifying originals silently.
-- **PhotoPrism** groups related resources into stacks, including Live Photos. PhotoArchiveKit adopts the logical multi-resource asset concept but does not accept a shared basename as authoritative proof of Live Photo pairing.
+- **Mylio Photos**는 compact catalog를 유지하면서 original-quality file을 여러 Vault device에 둘 수 있다. PhotoArchiveKit도 작은 semantic catalog와 ordinary original file을 분리하고 complete copy 위치를 기록한다.
+- **Immich**는 duplicate detection과 review utility를 분리하고 XMP sidecar를 사용할 수 있다. PhotoArchiveKit도 similarity를 review evidence로 취급하고 original을 silent modification하지 않고 portable catalog export를 계획한다.
+- **PhotoPrism**은 Live Photo를 포함한 related resource를 stack으로 group한다. PhotoArchiveKit도 multi-resource logical asset concept을 사용하지만 shared basename을 Live Photo pairing authority로 인정하지 않는다.
 
 References:
 
@@ -167,11 +167,11 @@ References:
 - [Immich XMP sidecars](https://docs.immich.app/features/xmp-sidecars/)
 - [PhotoPrism stacks](https://docs.photoprism.app/user-guide/organize/stacks/)
 
-These products and projects are design references, not bundled dependencies or compatibility guarantees.
+이 제품과 project는 design reference일 뿐 bundled dependency나 compatibility guarantee가 아니다.
 
-## Planned commands
+## 계획된 command
 
-The intended lightweight command flow is:
+의도한 lightweight command flow:
 
 ```text
 photoarchive scan
@@ -183,18 +183,18 @@ photoarchive apply
 photoarchive verify
 ```
 
-Only `scan` exists today. `classify` and `plan` will remain read-only. `apply` will not be added until archive-root identity, preconditions, rollback records, Live Photo transaction boundaries, and copy verification are implemented.
+현재는 `scan`만 존재한다. `classify`와 `plan`은 read-only로 유지한다. archive-root identity, precondition, rollback record, Live Photo transaction boundary, copy verification이 구현되기 전에는 `apply`를 추가하지 않는다.
 
-## What automatic-first does not mean
+## Automatic-first가 의미하지 않는 것
 
-It does not mean:
+다음을 의미하지 않는다.
 
-- silently moving files on first scan;
-- automatically deleting perceptually similar assets;
-- uploading private media for classification;
-- forcing every archive into one predefined folder taxonomy;
-- classifying each resource independently when the resources form one logical asset;
-- treating provider-generated labels as permanent truth;
-- hiding uncertain decisions.
+- 첫 scan에서 파일을 조용히 move
+- perceptually similar asset을 자동 삭제
+- classification을 위해 private media upload
+- 모든 archive에 하나의 predefined folder taxonomy 강제
+- 하나의 logical asset을 이루는 resource를 독립적으로 classify
+- provider-generated label을 permanent truth로 취급
+- uncertain decision 숨김
 
-The system should be assertive when evidence is strong and conservative when a mistake would be costly.
+strong evidence에서는 적극적으로 동작하되, mistake cost가 큰 경우에는 보수적이어야 한다.
