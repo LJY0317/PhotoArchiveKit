@@ -1,27 +1,27 @@
-# PhotoArchiveKit Project Instructions
+# PhotoArchiveKit 프로젝트 지침
 
-## Product scope
-- Keep PhotoArchiveKit local-first, session-based, and lightweight. Do not add a background daemon or filesystem watcher unless a later milestone explicitly requires one.
-- The core must remain useful without third-party executables. Optional integrations may use tools already installed by the user.
-- Treat a Live Photo as one logical asset with multiple resources. Never plan or apply a one-sided move, rename, quarantine, or deletion of a validated pair.
+## 제품 범위
+- PhotoArchiveKit은 local-first, session 기반, 경량 도구로 유지한다. 이후 milestone에서 명시적으로 필요성이 확인되지 않는 한 background daemon이나 filesystem watcher를 추가하지 않는다.
+- core는 third-party executable 없이도 유용해야 한다. 선택적 integration은 사용자가 이미 설치한 도구를 사용할 수 있다.
+- Live Photo는 여러 resource를 가진 하나의 logical asset으로 취급한다. 검증된 pair의 한쪽만 move, rename, quarantine, delete하도록 계획하거나 실행하지 않는다.
 
-## Safety
-- Read-only inspection is the default. Separate `scan` and `plan` from future mutating `apply` operations.
-- Do not implement permanent deletion in the initial releases. Prefer copy, verify, catalog commit, and quarantine.
-- An unavailable source or archive root is not evidence that files were deleted. Require a verified root marker before reconciling missing files.
-- Preserve existing user changes and keep migrations reversible.
+## 안전
+- 기본 동작은 read-only 검사다. `scan`, `plan`과 미래의 변경 작업인 `apply`를 분리한다.
+- 초기 release에는 영구 삭제를 구현하지 않는다. copy, verify, catalog commit, quarantine을 우선한다.
+- source 또는 archive root를 사용할 수 없다는 사실은 파일이 삭제되었다는 증거가 아니다. missing file을 reconcile하기 전에 검증된 root marker를 요구한다.
+- 기존 사용자 변경을 보존하고 migration은 되돌릴 수 있게 유지한다.
 
-## Privacy
-- Never commit personal media, Takeout exports, sidecars, catalog databases, credentials, provider tokens, raw hashes, perceptual hashes, feature vectors, GPS coordinates, Live Photo content identifiers, or absolute personal paths.
-- Raw hashes and media-derived identifiers may be processed locally, but normal reports and agent-facing output must expose only booleans, confidence levels, and opaque group IDs.
-- Repository fixtures must be synthetic, generated, or explicitly approved for public release.
+## 개인정보 보호
+- 개인 media, Takeout export, sidecar, catalog database, credential, provider token, raw hash, perceptual hash, feature vector, GPS coordinate, Live Photo content identifier, 개인 absolute path를 절대 commit하지 않는다.
+- raw hash와 media-derived identifier는 로컬에서 처리할 수 있지만, 일반 report와 agent-facing output에는 boolean, confidence level, opaque group ID만 노출한다.
+- repository fixture는 synthetic/generated data이거나 공개를 명시적으로 승인받은 자료만 사용한다.
 
-## Dependencies and licensing
-- Prefer Apple system frameworks and Swift standard libraries in the required core.
-- Optional adapters may invoke user-installed tools through subprocesses. Do not vendor or redistribute third-party binaries without a separate licensing review.
-- Name upstream tools accurately in documentation when describing optional interoperability; do not imply sponsorship or affiliation.
+## 의존성과 라이선스
+- 필수 core에서는 Apple system framework와 Swift standard library를 우선한다.
+- 선택적 adapter는 사용자가 설치한 도구를 subprocess로 호출할 수 있다. 별도 license review 없이 third-party binary를 vendor하거나 재배포하지 않는다.
+- 선택적 interoperability를 문서화할 때 upstream 도구 이름을 정확하게 사용하고, sponsorship 또는 affiliation을 암시하지 않는다.
 
-## Documentation and project state
-- `README.md` is the primary English overview. Keep `README.ko.md` as the Korean counterpart and update both for user-visible behavior changes.
-- Read `STATE.md` before resuming work. Update it only when the current state or next concrete step changes.
-- Record expensive, reusable validation results in `MILESTONES.md` without personal paths, identifiers, hashes, or media details.
+## 문서와 프로젝트 상태
+- `README.md`는 기본 영어 overview로 유지한다. `README.ko.md`는 한국어 counterpart로 유지하고 사용자에게 보이는 동작이 바뀌면 둘 다 갱신한다.
+- 작업을 재개하기 전에 `STATE.md`를 읽는다. 현재 상태 또는 다음 concrete step이 바뀔 때만 갱신한다.
+- 비용이 큰 재사용 가능한 validation 결과는 개인 경로, identifier, hash, media detail 없이 `MILESTONES.md`에 기록한다.
