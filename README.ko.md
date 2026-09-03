@@ -169,7 +169,15 @@ PhotoArchiveKit은 단순히 Finder 작업을 안전하게 만드는 데서 그�
 4. **선택적 on-device visual analysis:** Apple Vision/Core ML로 similarity와 대략적인 content label을 로컬에서만 계산. feature vector는 agent report에 포함하지 않음
 5. **confidence policy:** 신뢰도가 높은 제안은 자동 적용하고, 중간 수준만 작은 review queue로 보내며, 낮은 경우 날짜 event folder로 안전하게 fallback
 
-이 방식은 한 사용자의 folder 이름을 code에 하드코딩하지 않으면서도 archive를 사용할수록 자동 분류가 개선되도록 합니다.
+이 방식은 한 사용자의 folder 이름을 code에 하드코딩하지 않으면서도 archive를 사용할수록 자동 분류가 개선되도록 합니다. 자세한 정책은 [자동 분류 전략](docs/AUTOMATION.md)에 정리했습니다.
+
+## Provider 기능 경계
+
+Apple PhotoKit은 사용자 승인을 받은 로컬 macOS client가 Photos asset과 album을 읽고, `.photo`와 `.pairedVideo` resource로 Live Photo를 만들며, 수정 가능한 album membership을 변경할 수 있으므로 향후 Live Photo와 album projection에 더 적합합니다.
+
+현재 Google Photos Library API는 지원되는 일반 media를 album 지정 없이 library에 올릴 수 있으므로, album 자동 동기화가 불가능하더라도 평면 업로드 기능 자체는 유용합니다. 반면 기존 library 읽기와 album 작업은 대부분 app-created content로 제한되며, public upload model에는 still과 paired video를 하나의 composite Live Photo로 만드는 문서화된 operation이 없습니다. 따라서 향후 Google adapter는 가능한 일반 media의 평면 업로드를 지원하되, 검증된 Live Photo를 두 개의 독립 항목으로 나누어 올리고 보존에 성공했다고 표시하지 않습니다.
+
+날짜가 명시된 기능 matrix와 공식 문서 링크는 [Provider 기능](docs/PROVIDER_CAPABILITIES.md)에 있습니다.
 
 ## Live Photo 안전 모델
 
@@ -210,6 +218,8 @@ core는 아래 프로젝트를 포함하거나 요구하지 않지만, 향후 ad
 ## 문서
 
 - [Architecture](docs/ARCHITECTURE.md)
+- [자동 분류 전략](docs/AUTOMATION.md)
+- [Provider 기능](docs/PROVIDER_CAPABILITIES.md)
 - [Privacy model](docs/PRIVACY.md)
 - [Ingest 안내와 fixture 결과](docs/INGEST.md)
 - [Agent interface](docs/AGENT_INTERFACE.md)

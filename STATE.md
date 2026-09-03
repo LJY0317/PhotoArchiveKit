@@ -28,7 +28,10 @@ The repository contains an initial local-first Swift package with:
 - timezone-aware capture-time model;
 - time-gap event folder suggestions;
 - human-readable and sanitized JSON output;
-- optional tool detection without required third-party binaries.
+- optional tool detection without required third-party binaries;
+- English and Korean project overviews;
+- dated Google Photos and Apple PhotoKit capability documentation;
+- an automatic-first, event-level organization policy informed by existing archive folders.
 
 Current commands:
 
@@ -40,12 +43,24 @@ swift run photoarchive-selftest
 
 The scanner is read-only with respect to media. It writes only the explicitly selected SQLite catalog.
 
+## Product decisions
+
+- The portable filesystem archive stores media truth.
+- SQLite stores semantic truth and provider-neutral desired organization.
+- Manual work should scale with ambiguous event groups, not individual photos.
+- Existing archive folders become training examples for future local classification.
+- Google Photos flat upload of eligible ordinary media is a useful future capability even without album projection.
+- A validated Live Photo must not be uploaded as unrelated still/video items and reported as preserved.
+- Apple PhotoKit is the preferred future projection path for Live Photo creation and editable album membership.
+- Optional rclone, Czkawka CLI, ExifTool, and ffprobe adapters remain separate from the required core.
+
 ## Validation
 
 Completed locally:
 
 - `swift build` passes.
 - `swift run photoarchive-selftest` passes.
+- `scripts/check-public-tree.sh` passes.
 - The self-test scans two synthetic exact copies twice and verifies:
   - one opaque duplicate group;
   - one logical standalone asset;
@@ -59,22 +74,24 @@ Completed locally:
   - 7 exact duplicate resource groups;
   - 3 still-only warnings for ordinary AirDrop;
   - no media modifications.
+- The fixture was re-scanned after correcting the Google web comparison path. Every tested Google Photos web resource was byte-identical to its Image Capture counterpart, even when a motion resource used an `.MP4` filename instead of `.MOV`.
 
 The private fixture and temporary catalog are not part of the repository.
 
 ## Known limitations
 
-- No archive copy, rename, move, quarantine, or deletion command.
+- No archive copy, rename, move, quarantine, deletion, or cloud upload command.
 - No strict parsing of Live Photo timed `still-image-time` metadata yet.
 - Still-side identifier extraction is isolated but currently follows the observed ImageIO MakerApple entry used by current iPhone files; additional format fixtures are needed.
 - No versioned JSONL catalog export/restore yet.
 - No incremental metadata/hash cache optimization beyond SQLite persistence.
-- Event grouping is time-based only; semantic folder prediction is planned.
+- Event grouping is time-based only; archive-guided semantic folder prediction is planned.
 - Repeated copies of one Live Photo identifier inside the same source root are currently summarized as one ambiguous occurrence; occurrence partitioning for duplicated export folders is pending.
 - Standalone exact copies collapse to one logical asset only when exact-duplicate hashing is enabled; stable identity across scan modes is pending.
 - No PhotoKit, Google Photos, Takeout, rclone, Czkawka, ExifTool, or ffprobe execution adapter yet.
 - Google Photos public API cannot be treated as a full existing-library reconciliation interface.
-- `swift test` is not used in the current local environment because neither XCTest nor the Swift Testing module is available to the command-line toolchain. The repository uses `photoarchive-selftest` and CI runs that executable.
+- Google Photos public upload documentation does not currently provide a verified composite Live Photo creation route for the project.
+- The dependency-free `photoarchive-selftest` is the required local regression check; broader public media fixtures are still needed for normal unit/integration CI coverage.
 
 ## Safety state
 
@@ -88,11 +105,12 @@ The private fixture and temporary catalog are not part of the repository.
 ## Next concrete work
 
 1. Add strict Live Photo timed-metadata validation.
-2. Add versioned sanitized JSONL export and restore.
+2. Add versioned sanitized JSONL catalog export and restore.
 3. Define canonical capture-time and reversible rename-plan rules.
 4. Add event-level archive-folder learning using existing folders as examples.
 5. Add an immutable, read-only `plan` command before any apply implementation.
 6. Validate a small Google Takeout fixture before writing a Takeout parser.
+7. Design the Google flat-upload adapter around immutable queues, partial-success recovery, and explicit Live Photo blocking.
 
 ## Resume point
 

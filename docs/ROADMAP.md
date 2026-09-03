@@ -17,6 +17,8 @@ Status: initial implementation complete.
 - [x] Human and sanitized JSON reports
 - [x] Dependency-free synthetic self-test
 - [x] Five-path disposable ingest fixture validation
+- [x] Dated provider capability matrix based on official Google and Apple documentation
+- [x] Automatic-first event organization policy and prior-art boundaries
 - [ ] Strict validation of Live Photo still-image-time timed metadata
 - [ ] Versioned sanitized JSONL catalog export and restore test
 - [ ] Incremental scan optimization using stable file facts before re-probing

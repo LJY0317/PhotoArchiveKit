@@ -169,7 +169,15 @@ The planned classifier is layered:
 4. **Optional on-device visual analysis:** use Apple Vision/Core ML locally for similarity and coarse content labels; feature vectors must remain local and must not appear in agent reports.
 5. **Confidence policy:** apply high-confidence proposals automatically, place medium-confidence groups in a small review queue, and fall back to date-event folders when confidence is low.
 
-This avoids hard-coding one person's folder names while allowing an archive to become easier to organize over time.
+This avoids hard-coding one person's folder names while allowing an archive to become easier to organize over time. See [Automatic Organization Strategy](docs/AUTOMATION.md).
+
+## Provider capability boundary
+
+Apple PhotoKit is the stronger future projection target for Live Photos and user albums because an authorized local macOS client can read Photos assets and collections, create a Live Photo from `.photo` plus `.pairedVideo` resources, and modify editable album membership.
+
+The current Google Photos Library API can upload compatible ordinary media without assigning an album, which is useful even when album synchronization is unavailable. Existing-library reads and album operations are generally limited to app-created content, and the public upload model does not document a composite Live Photo creation operation. The planned Google adapter will therefore support flat upload for eligible ordinary media while blocking any workflow that would split a validated Live Photo and misreport it as preserved.
+
+See [Provider Capabilities](docs/PROVIDER_CAPABILITIES.md) for the dated capability matrix and official references.
 
 ## Live Photo safety model
 
@@ -210,6 +218,8 @@ Naming an interoperable tool is normal and preferable to hiding the dependency. 
 ## Documentation
 
 - [Architecture](docs/ARCHITECTURE.md)
+- [Automatic organization strategy](docs/AUTOMATION.md)
+- [Provider capabilities](docs/PROVIDER_CAPABILITIES.md)
 - [Privacy model](docs/PRIVACY.md)
 - [Ingest guidance and fixture findings](docs/INGEST.md)
 - [Agent interface](docs/AGENT_INTERFACE.md)
