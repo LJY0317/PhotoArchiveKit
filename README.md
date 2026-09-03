@@ -2,6 +2,9 @@
 
 [한국어](README.ko.md)
 
+[![CI](https://github.com/LJY0317/PhotoArchiveKit/actions/workflows/ci.yml/badge.svg)](https://github.com/LJY0317/PhotoArchiveKit/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 PhotoArchiveKit is a local-first, session-based toolkit for preserving and organizing iPhone photos, videos, and Live Photos without making a photo-cloud provider the permanent source of truth.
 
 The project is intentionally small. It does not run a background daemon, host a gallery server, or move media behind an opaque storage format. Media remains in ordinary filesystem folders; a local SQLite catalog records relationships and decisions that folders cannot express.
@@ -220,12 +223,17 @@ Naming an interoperable tool is normal and preferable to hiding the dependency. 
 - [Architecture](docs/ARCHITECTURE.md)
 - [Automatic organization strategy](docs/AUTOMATION.md)
 - [Provider capabilities](docs/PROVIDER_CAPABILITIES.md)
+- [Optional integrations](docs/INTEGRATIONS.md)
 - [Privacy model](docs/PRIVACY.md)
-- [Ingest guidance and fixture findings](docs/INGEST.md)
+- [Ingest guidance](docs/INGEST.md)
+- [Validation notes](docs/VALIDATION.md)
 - [Agent interface](docs/AGENT_INTERFACE.md)
 - [Roadmap](docs/ROADMAP.md)
 - [Current development state](STATE.md)
 - [Validated milestones](MILESTONES.md)
+- [Changelog](CHANGELOG.md)
+- [Security policy](SECURITY.md)
+- [Contributing](CONTRIBUTING.md)
 
 ## License
 

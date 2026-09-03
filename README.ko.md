@@ -2,6 +2,9 @@
 
 [English](README.md)
 
+[![CI](https://github.com/LJY0317/PhotoArchiveKit/actions/workflows/ci.yml/badge.svg)](https://github.com/LJY0317/PhotoArchiveKit/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 PhotoArchiveKit은 iPhone 사진·동영상·Live Photo를 특정 사진 클라우드 공급자에 영구 종속시키지 않고 보존하고 정리하기 위한 **로컬 우선·세션 기반 도구**입니다.
 
 프로젝트는 의도적으로 가볍게 유지합니다. 백그라운드 daemon을 실행하거나 별도 gallery server를 운영하지 않으며, 미디어를 불투명한 전용 저장 형식 안으로 옮기지 않습니다. 사진과 동영상은 일반 파일시스템 폴더에 남고, 폴더만으로 표현할 수 없는 관계와 결정만 로컬 SQLite catalog에 기록합니다.
@@ -220,12 +223,17 @@ core는 아래 프로젝트를 포함하거나 요구하지 않지만, 향후 ad
 - [Architecture](docs/ARCHITECTURE.md)
 - [자동 분류 전략](docs/AUTOMATION.md)
 - [Provider 기능](docs/PROVIDER_CAPABILITIES.md)
+- [선택적 연동](docs/INTEGRATIONS.md)
 - [Privacy model](docs/PRIVACY.md)
-- [Ingest 안내와 fixture 결과](docs/INGEST.md)
+- [Ingest 안내](docs/INGEST.md)
+- [검증 기록](docs/VALIDATION.md)
 - [Agent interface](docs/AGENT_INTERFACE.md)
 - [Roadmap](docs/ROADMAP.md)
 - [현재 개발 상태](STATE.md)
 - [검증된 milestone](MILESTONES.md)
+- [변경 기록](CHANGELOG.md)
+- [보안 정책](SECURITY.md)
+- [기여 안내](CONTRIBUTING.md)
 
 ## License
 

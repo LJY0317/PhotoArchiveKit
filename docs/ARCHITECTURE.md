@@ -114,9 +114,9 @@ The data model permits multiple roots even though a simple UI may begin with one
 - `import_source`: Takeout or another provider export;
 - `reference`: read-only comparison fixture or old collection.
 
-Paths are configuration, not identity. The database assigns an opaque root ID and stores relative paths.
+The intended model treats paths as configuration rather than identity: an opaque root ID owns relative paths while the configured Inbox or mount location may change.
 
-The read-only scanner currently requires every supplied root to exist. Future mutating commands will additionally require a root marker such as `.photoarchive-root` and verify its expected ID. An unavailable root must never be interpreted as mass deletion.
+The current read-only prototype still resolves an existing root by its canonical path, so moving a configured root currently creates a new root record. Stable user-supplied root IDs and a marker such as `.photoarchive-root` are the next root-identity milestone. Future mutating commands must verify that marker before interpreting absence or applying a plan. An unavailable root must never be interpreted as mass deletion.
 
 ## Session model
 

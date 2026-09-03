@@ -1,0 +1,42 @@
+name: Feature request
+description: Propose a focused archive, privacy, or provider capability improvement
+title: "[Feature]: "
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: Which archive workflow is difficult or unsafe today?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+      description: Describe the smallest useful behavior and its non-destructive default.
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Core asset/catalog model
+        - Ingest or archive planning
+        - Live Photo validation
+        - Automatic classification
+        - Apple Photos / PhotoKit
+        - Google Photos / Takeout
+        - Optional tool adapter
+        - Documentation or privacy
+        - Other
+    validations:
+      required: true
+  - type: textarea
+    id: safety
+    attributes:
+      label: Safety and privacy considerations
+      description: Explain possible data loss, provider limitations, and whether media-derived data remains local.
+    validations:
+      required: true

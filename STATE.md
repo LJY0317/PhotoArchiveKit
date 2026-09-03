@@ -31,6 +31,8 @@ The repository contains an initial local-first Swift package with:
 - optional tool detection without required third-party binaries;
 - English and Korean project overviews;
 - dated Google Photos and Apple PhotoKit capability documentation;
+- validation and optional-integration documentation;
+- issue forms, pull-request template, CI, and public-tree privacy safeguards;
 - an automatic-first, event-level organization policy informed by existing archive folders.
 
 Current commands:
@@ -83,6 +85,7 @@ The private fixture and temporary catalog are not part of the repository.
 - No archive copy, rename, move, quarantine, deletion, or cloud upload command.
 - No strict parsing of Live Photo timed `still-image-time` metadata yet.
 - Still-side identifier extraction is isolated but currently follows the observed ImageIO MakerApple entry used by current iPhone files; additional format fixtures are needed.
+- Source-root identity currently follows the canonical path; moving an Inbox or archive root creates a new root record until stable movable IDs and root markers are implemented.
 - No versioned JSONL catalog export/restore yet.
 - No incremental metadata/hash cache optimization beyond SQLite persistence.
 - Event grouping is time-based only; archive-guided semantic folder prediction is planned.
@@ -99,18 +102,20 @@ The private fixture and temporary catalog are not part of the repository.
 - No background process exists.
 - No network request exists in the core.
 - Reports do not include raw hashes or raw Live Photo identifiers.
+- Raw Live Photo identifiers are cleared from in-memory probe records immediately after a catalog-local keyed fingerprint is created.
 - Private media extensions and runtime databases are ignored by Git.
 - Future mutating commands must add and verify archive-root markers before interpreting missing paths.
 
 ## Next concrete work
 
-1. Add strict Live Photo timed-metadata validation.
-2. Add versioned sanitized JSONL catalog export and restore.
-3. Define canonical capture-time and reversible rename-plan rules.
-4. Add event-level archive-folder learning using existing folders as examples.
-5. Add an immutable, read-only `plan` command before any apply implementation.
-6. Validate a small Google Takeout fixture before writing a Takeout parser.
-7. Design the Google flat-upload adapter around immutable queues, partial-success recovery, and explicit Live Photo blocking.
+1. Add stable movable root IDs and archive-root markers without changing media.
+2. Add strict Live Photo timed-metadata validation.
+3. Add versioned sanitized JSONL catalog export and restore.
+4. Define canonical capture-time and reversible rename-plan rules.
+5. Add event-level archive-folder learning using existing folders as examples.
+6. Add an immutable, read-only `plan` command before any apply implementation.
+7. Validate a small Google Takeout fixture before writing a Takeout parser.
+8. Design the Google flat-upload adapter around immutable queues, partial-success recovery, and explicit Live Photo blocking.
 
 ## Resume point
 

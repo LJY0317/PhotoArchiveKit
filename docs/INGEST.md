@@ -49,15 +49,15 @@ Ordinary AirDrop is therefore unsafe as a default archival ingest path. PhotoArc
 The tested Google Photos web download contained:
 
 ```text
-IMG_8735.HEIC
-IMG_8735.MP4
+IMG_TEST.HEIC
+IMG_TEST.MP4
 ```
 
 while the Image Capture reference contained:
 
 ```text
-IMG_8735.HEIC
-IMG_8735.MOV
+IMG_TEST.HEIC
+IMG_TEST.MOV
 ```
 
 For all three tested Live Photos and the normal video, local byte comparison showed equality with the Image Capture resource. The different `.MP4` extension did not imply different bytes. The embedded Live Photo linkage metadata remained valid.

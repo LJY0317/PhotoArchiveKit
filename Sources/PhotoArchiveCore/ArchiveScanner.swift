@@ -57,6 +57,7 @@ public final class ArchiveScanner {
                         identifier,
                         key: privacyKey
                     )
+                    resources[index].rawLivePhotoIdentifier = nil
                 }
             }
 

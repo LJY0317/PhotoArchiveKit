@@ -137,6 +137,23 @@ struct PhotoArchiveCLI {
             print("")
         }
 
+        if !report.exactDuplicateGroups.isEmpty {
+            print("Exact duplicate resource groups:")
+            for group in report.exactDuplicateGroups.prefix(20) {
+                print("  \(group.groupID)  \(group.byteSize) bytes  (\(group.members.count) copies)")
+                for member in group.members.prefix(12) {
+                    print("    \(member.rootLabel)/\(member.relativePath) [\(member.role.rawValue)]")
+                }
+                if group.members.count > 12 {
+                    print("    ... \(group.members.count - 12) more copies")
+                }
+            }
+            if report.exactDuplicateGroups.count > 20 {
+                print("  ... \(report.exactDuplicateGroups.count - 20) more groups; use --json for the full report")
+            }
+            print("")
+        }
+
         if !report.eventSuggestions.isEmpty {
             print("Suggested event folders:")
             for event in report.eventSuggestions.prefix(20) {

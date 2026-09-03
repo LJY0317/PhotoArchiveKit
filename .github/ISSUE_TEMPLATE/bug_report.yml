@@ -1,0 +1,43 @@
+name: Bug report
+description: Report a reproducible problem using synthetic or sanitized data
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Do not attach personal media, Takeout exports, catalog databases, raw hashes, raw Live Photo identifiers, GPS, credentials, or private absolute paths.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What happened?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Prefer synthetic files or sanitized command output.
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      placeholder: macOS version, Swift version, PhotoArchiveKit commit
+    validations:
+      required: true
+  - type: checkboxes
+    id: privacy
+    attributes:
+      label: Privacy check
+      options:
+        - label: I removed personal media, raw fingerprints, credentials, catalogs, and private paths.
+          required: true

@@ -19,7 +19,12 @@ DerivedData/
 *.pem
 *.key
 *.p12
+*.pfx
 *.mobileprovision
+*client_secret*.json
+*credentials*.json
+*oauth*.json
+*tokens*.json
 secrets/
 credentials/
 tokens/
@@ -36,6 +41,8 @@ tokens/
 *.db-wal
 *.jsonl
 *.log
+*.bak
+*.cache
 .local/
 state/private/
 test-output/
@@ -59,11 +66,23 @@ private-fixtures/
 *.tif
 *.tiff
 *.dng
+*.arw
+*.cr2
+*.cr3
+*.nef
+*.raf
 *.mov
 *.mp4
 *.m4v
+*.3gp
+*.3g2
 *.aae
 *.xmp
+*.zip
+*.tar
+*.tgz
+*.tar.gz
+*.7z
 
 # Editor files
 .vscode/

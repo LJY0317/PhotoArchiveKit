@@ -58,8 +58,8 @@ The current process is:
 1. Read the identifier from each resource in local process memory.
 2. Normalize only surrounding whitespace.
 3. Calculate HMAC-SHA-256 using a random key created for that catalog.
-4. Store the keyed fingerprint in SQLite.
-5. Discard the raw identifier after the probe object leaves memory.
+4. Clear the raw identifier from the in-memory probe object immediately after fingerprinting.
+5. Store only the keyed fingerprint in SQLite.
 6. Expose only logical asset IDs and match/completeness status in reports.
 
 Because the HMAC key is catalog-local, fingerprints from separate catalogs are not intended to be comparable. This reduces accidental cross-dataset correlation.
