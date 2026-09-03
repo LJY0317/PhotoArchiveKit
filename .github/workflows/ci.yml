@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  build-and-self-test:
+    runs-on: macos-15
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Show Swift version
+        run: swift --version
+
+      - name: Check public tree
+        run: bash scripts/check-public-tree.sh
+
+      - name: Build
+        run: swift build
+
+      - name: Run synthetic self-test
+        run: swift run photoarchive-selftest
+
+      - name: Check CLI startup
+        run: swift run photoarchive doctor

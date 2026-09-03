@@ -1,0 +1,105 @@
+# Current State
+
+Last updated: 2026-09-04
+
+## Repository
+
+- GitHub repository: `LJY0317/PhotoArchiveKit`
+- Primary local checkout: `~/LJY Projects/PhotoArchiveKit`
+- License: MIT
+- Primary documentation language: English
+- Korean counterpart: `README.ko.md`
+
+## Implemented
+
+The repository contains an initial local-first Swift package with:
+
+- `PhotoArchiveCore` library;
+- `photoarchive` CLI;
+- `photoarchive-selftest` synthetic validation executable;
+- local SQLite catalog;
+- multiple configurable scan roots;
+- ImageIO still-image metadata probe;
+- AVFoundation QuickTime metadata probe;
+- Live Photo grouping from embedded identifiers;
+- catalog-local HMAC protection for Live Photo identifiers;
+- per-root Live Photo completeness reporting;
+- local exact duplicate grouping with opaque report IDs;
+- timezone-aware capture-time model;
+- time-gap event folder suggestions;
+- human-readable and sanitized JSON output;
+- optional tool detection without required third-party binaries.
+
+Current commands:
+
+```bash
+swift run photoarchive doctor
+swift run photoarchive scan [options] ROOT...
+swift run photoarchive-selftest
+```
+
+The scanner is read-only with respect to media. It writes only the explicitly selected SQLite catalog.
+
+## Validation
+
+Completed locally:
+
+- `swift build` passes.
+- `swift run photoarchive-selftest` passes.
+- The self-test scans two synthetic exact copies twice and verifies:
+  - one opaque duplicate group;
+  - one logical standalone asset;
+  - stable opaque group ID across scans;
+  - unchanged input bytes;
+  - no raw known hash in serialized report.
+- A disposable five-source iPhone/Google fixture scan produced the expected:
+  - 29 media resources;
+  - 8 logical assets;
+  - 3 logical Live Photos;
+  - 7 exact duplicate resource groups;
+  - 3 still-only warnings for ordinary AirDrop;
+  - no media modifications.
+
+The private fixture and temporary catalog are not part of the repository.
+
+## Known limitations
+
+- No archive copy, rename, move, quarantine, or deletion command.
+- No strict parsing of Live Photo timed `still-image-time` metadata yet.
+- Still-side identifier extraction is isolated but currently follows the observed ImageIO MakerApple entry used by current iPhone files; additional format fixtures are needed.
+- No versioned JSONL catalog export/restore yet.
+- No incremental metadata/hash cache optimization beyond SQLite persistence.
+- Event grouping is time-based only; semantic folder prediction is planned.
+- No PhotoKit, Google Photos, Takeout, rclone, Czkawka, ExifTool, or ffprobe execution adapter yet.
+- Google Photos public API cannot be treated as a full existing-library reconciliation interface.
+- `swift test` is not used in the current local environment because neither XCTest nor the Swift Testing module is available to the command-line toolchain. The repository uses `photoarchive-selftest` and CI runs that executable.
+
+## Safety state
+
+- No permanent deletion exists.
+- No background process exists.
+- No network request exists in the core.
+- Reports do not include raw hashes or raw Live Photo identifiers.
+- Private media extensions and runtime databases are ignored by Git.
+- Future mutating commands must add and verify archive-root markers before interpreting missing paths.
+
+## Next concrete work
+
+1. Add strict Live Photo timed-metadata validation.
+2. Add versioned sanitized JSONL export and restore.
+3. Define canonical capture-time and reversible rename-plan rules.
+4. Add event-level archive-folder learning using existing folders as examples.
+5. Add an immutable, read-only `plan` command before any apply implementation.
+6. Validate a small Google Takeout fixture before writing a Takeout parser.
+
+## Resume point
+
+Before changing behavior:
+
+```bash
+git status --short --branch
+swift build
+swift run photoarchive-selftest
+```
+
+Then inspect this file and `MILESTONES.md` to avoid repeating the private ingest validation.

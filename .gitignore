@@ -1,0 +1,75 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Swift Package Manager and Xcode
+.build/
+.swiftpm/
+DerivedData/
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+*.xcuserstate
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.mobileprovision
+secrets/
+credentials/
+tokens/
+
+# PhotoArchiveKit runtime state
+*.sqlite
+*.sqlite3
+*.sqlite-shm
+*.sqlite-wal
+*.sqlite3-shm
+*.sqlite3-wal
+*.db
+*.db-shm
+*.db-wal
+*.jsonl
+*.log
+.local/
+state/private/
+test-output/
+
+# Never commit personal media or provider exports
+Photo Inbox/
+Photo Archive/
+Takeout/
+Google Takeout/
+*.photoslibrary/
+fixtures/private/
+private-fixtures/
+
+# Common media formats: public fixtures must be explicitly force-added only
+*.heic
+*.heif
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.tif
+*.tiff
+*.dng
+*.mov
+*.mp4
+*.m4v
+*.aae
+*.xmp
+
+# Local test source kept only for toolchain diagnostics
+Tests/PhotoArchiveCoreTests/PhotoArchiveCoreTests.swift
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*~
