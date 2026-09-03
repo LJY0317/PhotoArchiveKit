@@ -98,14 +98,17 @@ Run a read-only scan of one folder:
 swift run photoarchive scan --inbox "~/Photo Inbox"
 ```
 
-Scan several sources together so exact copies and cross-source Live Photo relationships can be reconciled:
+Scan several sources together so exact copies, provenance, and cross-source Live Photo relationships can be reconciled without flattening the folders first:
 
 ```bash
 swift run photoarchive scan \
-  --inbox "~/Photo Inbox" \
-  --import "~/Downloads/Google Takeout" \
+  --local "~/Pictures" \
+  --takeout "~/Pictures/Takeout" \
+  --takeout "~/Pictures/Takeout-2" \
   --archive "/Volumes/Photo Archive/Photos"
 ```
+
+Registered nested roots belong to the most specific root, so the Takeout directories above are not scanned a second time through `~/Pictures`. This preserves source provenance even when byte-identical copies cannot be distinguished from file content alone.
 
 Print the full sanitized report:
 
@@ -141,7 +144,11 @@ Treat the catalog as private local application state. It may contain paths and l
 
 Root options are repeatable:
 
-- `--inbox PATH`
+- `--inbox PATH` — Inbox with unknown provenance.
+- `--local PATH` — mixed local/iPhone-derived library.
+- `--apple PATH` — direct Apple/iPhone import.
+- `--takeout PATH` — Google Photos Takeout export.
+- `--google-web PATH` — Google Photos web download.
 - `--archive PATH`
 - `--import PATH`
 - `--reference PATH`
@@ -159,6 +166,8 @@ Other options:
 ### `photoarchive doctor`
 
 Reports required system support and whether optional executables are already available in `PATH`.
+
+For registered Google Takeout roots, the scanner reads only the sidecar `title` and `photoTakenTime` fields when embedded media metadata cannot provide a reliable capture instant. GPS, descriptions, and unrelated Takeout metadata are not imported by this path.
 
 ## Automatic organization strategy
 
@@ -220,6 +229,7 @@ Naming an interoperable tool is normal and preferable to hiding the dependency. 
 
 ## Documentation
 
+- [Project North Star and scope gate](docs/PROJECT_NORTH_STAR.md)
 - [Architecture](docs/ARCHITECTURE.md)
 - [Automatic organization strategy](docs/AUTOMATION.md)
 - [Provider capabilities](docs/PROVIDER_CAPABILITIES.md)
