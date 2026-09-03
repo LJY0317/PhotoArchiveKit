@@ -1,62 +1,62 @@
-# Optional Third-Party Interoperability
+# 선택적 Third-Party 연동
 
-PhotoArchiveKit's required core does not contain, link, vendor, download, or redistribute the tools below. The CLI may detect user-installed executables, and future adapters may invoke them as separate processes after an explicit user command.
+PhotoArchiveKit의 required core는 아래 도구를 포함, link, vendor, download, redistribute하지 않는다. CLI는 사용자가 설치한 executable을 감지할 수 있고, future adapter는 명시적 user command 이후 별도 process로 호출할 수 있다.
 
-Mentioning an interoperable project by name is normal open-source practice. It is clearer than hiding an external dependency. Documentation and UI must not imply sponsorship, endorsement, or affiliation.
+연동 가능한 project를 이름으로 언급하는 것은 일반적인 open-source practice다. external dependency를 숨기는 것보다 명확하다. 문서와 UI는 sponsorship, endorsement, affiliation을 암시해서는 안 된다.
 
 ## rclone
 
-- Purpose: optional off-site archive copy and verification.
-- Integration model: invoke a user-installed `rclone` executable.
+- 목적: optional off-site archive copy 및 verification
+- integration model: user-installed `rclone` executable 호출
 - Upstream: <https://rclone.org/>
-- Upstream license: MIT.
-- Bundled by PhotoArchiveKit: no.
+- Upstream license: MIT
+- PhotoArchiveKit에 bundle: 아니오
 
-The initial adapter should generate or execute conservative `copy` and `check` operations. It must not choose destructive `sync` behavior as a default.
+초기 adapter는 보수적인 `copy`와 `check` operation을 생성하거나 실행해야 한다. destructive `sync`를 default로 선택하지 않는다.
 
 ## Czkawka CLI
 
-- Purpose: optional additional exact-duplicate and perceptual-similarity candidate generation.
-- Integration model: invoke a user-installed `czkawka_cli` executable and import a sanitized result.
+- 목적: optional additional exact-duplicate 및 perceptual-similarity candidate 생성
+- integration model: user-installed `czkawka_cli` executable 호출 후 sanitized result import
 - Upstream: <https://github.com/qarmin/czkawka>
-- Applicable upstream license for `czkawka_core` and `czkawka_cli`: MIT.
-- Bundled by PhotoArchiveKit: no.
+- `czkawka_core`, `czkawka_cli`에 해당하는 upstream license: MIT
+- PhotoArchiveKit에 bundle: 아니오
 
-Similarity output is a review signal. PhotoArchiveKit must never translate it directly into deletion.
+similarity output은 review signal이다. PhotoArchiveKit이 이를 직접 deletion으로 바꾸어서는 안 된다.
 
 ## Krokiet
 
-- Purpose: a user may independently use its GUI to inspect duplicate and similarity candidates.
-- Integration model: no planned required integration; PhotoArchiveKit can interoperate through files or user decisions.
+- 목적: 사용자가 GUI를 독립적으로 사용해 duplicate/similarity candidate를 검토할 수 있음
+- integration model: required integration 계획 없음. file 또는 user decision을 통해 간접 interoperability 가능
 - Upstream: <https://github.com/qarmin/czkawka>
-- Finished application license: GPL-3.0-only due to its GUI framework licensing, according to the upstream project.
-- Bundled by PhotoArchiveKit: no.
+- finished application license: upstream 설명에 따르면 GUI framework licensing 때문에 GPL-3.0-only
+- PhotoArchiveKit에 bundle: 아니오
 
-PhotoArchiveKit should prefer the separately licensed Czkawka CLI for an automated optional subprocess adapter. It should not redistribute Krokiet inside an MIT release without a new packaging and license review.
+자동 optional subprocess adapter에는 별도 license의 Czkawka CLI를 우선한다. 새로운 packaging/license review 없이 MIT release 안에 Krokiet을 redistribute하지 않는다.
 
 ## ExifTool
 
-- Purpose: optional broad metadata diagnostics, migration investigations, and comparison with PhotoArchiveKit's native probes.
-- Integration model: invoke a user-installed `exiftool` process.
+- 목적: optional broad metadata diagnostic, migration investigation, PhotoArchiveKit native probe와 비교
+- integration model: user-installed `exiftool` process 호출
 - Upstream: <https://exiftool.org/>
-- Upstream license: the same terms as Perl itself, as stated by upstream.
-- Bundled by PhotoArchiveKit: no.
+- Upstream license: upstream 설명에 따르면 Perl과 동일한 조건
+- PhotoArchiveKit에 bundle: 아니오
 
-The initial design treats ExifTool as read-only. Rewriting Live Photo identifiers or source metadata is outside the first releases.
+초기 설계에서는 ExifTool을 read-only로 취급한다. Live Photo identifier 또는 source metadata rewrite는 초기 release 범위 밖이다.
 
 ## FFmpeg / ffprobe
 
-- Purpose: optional video stream and container diagnostics.
-- Integration model: invoke a user-installed `ffprobe` process.
+- 목적: optional video stream/container diagnostic
+- integration model: user-installed `ffprobe` process 호출
 - Upstream: <https://ffmpeg.org/>
-- Upstream license: generally LGPL 2.1 or later, but a build can become GPL depending on enabled components.
-- Bundled by PhotoArchiveKit: no.
+- Upstream license: 일반적으로 LGPL 2.1 이상이지만 enabled component에 따라 build가 GPL이 될 수 있음
+- PhotoArchiveKit에 bundle: 아니오
 
-Because the license can depend on how a binary was built, PhotoArchiveKit does not redistribute a generic ffprobe binary in the initial project.
+license가 binary build 방식에 따라 달라질 수 있으므로 초기 project에서는 generic ffprobe binary를 redistribute하지 않는다.
 
-## Apple system frameworks
+## Apple system framework
 
-The Swift package links system-provided frameworks and libraries available on macOS:
+Swift package는 macOS에서 제공하는 다음 system framework/library를 link한다.
 
 - Foundation
 - ImageIO
@@ -64,18 +64,18 @@ The Swift package links system-provided frameworks and libraries available on ma
 - CryptoKit
 - SQLite3
 
-These are platform requirements rather than vendored project dependencies.
+이들은 vendored project dependency가 아니라 platform requirement다.
 
-## If bundling is considered later
+## 미래에 bundling을 고려한다면
 
-Before adding any third-party binary or source distribution:
+third-party binary 또는 source distribution을 추가하기 전에:
 
-1. Identify the exact component and version.
-2. Confirm its license and the license of the actual build configuration.
-3. Add required copyright and notice files.
-4. Document source availability and modification status where required.
-5. Review trademark use and naming.
-6. Keep the optional integration separable from the MIT core where practical.
-7. Do not download or execute a binary silently.
+1. 정확한 component와 version을 식별한다.
+2. license와 실제 build configuration의 license를 확인한다.
+3. 필요한 copyright/notice file을 추가한다.
+4. 필요한 경우 source availability와 modification status를 문서화한다.
+5. trademark 사용과 naming을 검토한다.
+6. 가능하면 optional integration을 MIT core와 분리한다.
+7. binary를 조용히 download하거나 실행하지 않는다.
 
-This file is a project policy summary, not legal advice.
+이 파일은 project policy summary이며 legal advice가 아니다.
