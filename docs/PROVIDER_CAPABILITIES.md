@@ -1,39 +1,39 @@
-# Provider Capabilities
+# Provider Capability
 
-Last reviewed against official documentation: **2026-09-04**.
+공식 documentation 기준 마지막 review: **2026-09-04**.
 
-Provider APIs are adapters around the portable archive. They do not define PhotoArchiveKit asset identity, Live Photo relationships, or collection truth.
+Provider API는 portable archive 주변의 adapter다. PhotoArchiveKit asset identity, Live Photo relationship, collection truth를 정의하지 않는다.
 
-## Capability states
+## Capability state
 
-PhotoArchiveKit uses explicit capability states instead of pretending that every provider can perform the same operation:
+모든 provider가 같은 operation을 할 수 있다고 가정하지 않고 explicit capability state를 사용한다.
 
-- `supported` — documented and suitable for automatic use.
-- `supported_app_created_only` — available only for media or albums created by the PhotoArchiveKit integration.
-- `user_selected_only` — available only after an explicit provider picker flow.
-- `manual_only` — PhotoArchiveKit can report desired work but cannot apply it safely through the official API.
-- `unverified` — technically plausible, but not yet proven by official documentation and a controlled fixture.
-- `unsupported` — unavailable or known to lose required information.
+- `supported` — documented이며 automatic use에 적합
+- `supported_app_created_only` — PhotoArchiveKit integration이 만든 media/album에만 가능
+- `user_selected_only` — explicit provider picker flow 후에만 가능
+- `manual_only` — desired work는 report할 수 있지만 official API로 안전하게 apply할 수 없음
+- `unverified` — 기술적으로 가능해 보이지만 official documentation과 controlled fixture로 아직 검증되지 않음
+- `unsupported` — 사용할 수 없거나 required information을 잃는 것으로 알려짐
 
-## Current comparison
+## 현재 비교
 
-| Operation | Google Photos official APIs | Apple PhotoKit on macOS |
+| Operation | Google Photos official API | Apple PhotoKit on macOS |
 | --- | --- | --- |
-| Enumerate an existing whole user library | `unsupported`; only the app-created subset is listable | `supported` after user authorization |
-| Access selected existing items | `user_selected_only` through Picker API | `supported` after user authorization |
-| Enumerate existing user albums | `unsupported`; only app-created albums are listable | `supported` |
-| Create an album | `supported` | `supported` |
-| Add arbitrary existing user media to an album | `manual_only` | `supported` for editable user albums |
-| Remove arbitrary existing user media from an album | `manual_only` | `supported` for editable user albums |
-| Upload a new ordinary photo or video | `supported` | `supported` |
-| Upload without assigning an album | `supported` | `supported` |
-| Create one Live Photo from still + paired video | `unverified` / no documented public composite request | `supported` using `.photo` and `.pairedVideo` resources |
-| Observe an iCloud Photos-backed library | Not applicable | `supported` through the authorized local Photos library |
-| Headless cloud account administration | Limited server API | Not a general iCloud Photos REST API; requires a local authorized Photos client |
+| 기존 전체 user library enumerate | `unsupported`; app-created subset만 list 가능 | user authorization 후 `supported` |
+| 선택한 기존 item 접근 | Picker API를 통한 `user_selected_only` | user authorization 후 `supported` |
+| 기존 user album enumerate | `unsupported`; app-created album만 list 가능 | `supported` |
+| album 생성 | `supported` | `supported` |
+| arbitrary existing user media를 album에 추가 | `manual_only` | editable user album에 대해 `supported` |
+| arbitrary existing user media를 album에서 제거 | `manual_only` | editable user album에 대해 `supported` |
+| 새 ordinary photo/video upload | `supported` | `supported` |
+| album assignment 없이 upload | `supported` | `supported` |
+| still + paired video에서 하나의 Live Photo 생성 | `unverified` / documented public composite request 없음 | `.photo` + `.pairedVideo` resource로 `supported` |
+| iCloud Photos-backed library observe | 해당 없음 | authorized local Photos library를 통해 `supported` |
+| headless cloud account administration | 제한된 server API | general iCloud Photos REST API가 아니며 local authorized Photos client 필요 |
 
 ## Google Photos
 
-Google applied its announced Photos API changes on 2025-04-01. Current Library API list, search, album, and album-membership methods are centered on content created by the calling application. The Picker API is the official route for accessing existing items that a user explicitly selects.
+Google은 announced Photos API change를 2025-04-01에 적용했다. 현재 Library API의 list, search, album, album-membership method는 calling application이 생성한 content 중심이다. Picker API가 user가 명시적으로 선택한 existing item에 접근하는 공식 경로다.
 
 Official references:
 
@@ -44,27 +44,27 @@ Official references:
 - [`albums.batchAddMediaItems`](https://developers.google.com/photos/library/reference/rest/v1/albums/batchAddMediaItems)
 - [Google Photos Picker API](https://developers.google.com/photos/picker/reference/rest)
 
-### Flat upload is a useful supported target
+### Flat upload은 유용한 supported target
 
-The Library API accepts ordinary HEIC images and MOV/MP4 videos. Uploading is a two-step operation: upload the bytes, then create each item through `mediaItems.batchCreate`. Omitting `albumId` adds the new item to the user's library without assigning it to an album.
+Library API는 ordinary HEIC image와 MOV/MP4 video upload를 지원한다. upload는 byte upload 후 `mediaItems.batchCreate`로 item을 생성하는 2단계 operation이다. `albumId`를 생략하면 album assignment 없이 user library에 새 item이 추가된다.
 
 Official reference:
 
 - [Upload media](https://developers.google.com/photos/library/guides/upload-media)
 
-PhotoArchiveKit therefore plans to support a **flat Google Photos upload queue** for compatible ordinary media. Album projection is optional and limited to content and albums the integration is permitted to manage.
+따라서 PhotoArchiveKit은 compatible ordinary media를 위한 **flat Google Photos upload queue**를 지원할 계획이다. album projection은 optional이며 integration이 manage할 수 있는 content/album으로 제한한다.
 
-### Live Photo upload remains blocked by project safety policy
+### Live Photo upload는 project safety policy상 차단
 
-The documented Google request model creates `simpleMediaItem` objects from individual upload tokens. The current public documentation does not expose an operation equivalent to PhotoKit's `.photo + .pairedVideo` composite asset creation.
+documented Google request model은 individual upload token에서 `simpleMediaItem`을 생성한다. 현재 public documentation에는 PhotoKit의 `.photo + .pairedVideo` composite asset creation과 같은 operation이 없다.
 
-Until Google documents such a mechanism or a controlled end-to-end fixture proves a durable official route, PhotoArchiveKit must not:
+Google이 그런 mechanism을 document하거나 controlled end-to-end fixture가 durable official route를 검증하기 전까지 PhotoArchiveKit은 다음을 해서는 안 된다.
 
-- upload the HEIC and MOV/MP4 as unrelated items and call that a preserved Live Photo;
-- discard the paired video after uploading only the still image;
-- report a Live Photo upload as successful merely because both files reached Google Photos.
+- HEIC와 MOV/MP4를 unrelated item으로 upload하고 preserved Live Photo라고 부르기
+- still image만 upload하고 paired video discard
+- 두 file이 Google Photos에 도착했다는 이유만으로 Live Photo upload 성공 보고
 
-A future Google adapter should classify each queued logical asset as:
+future Google adapter는 queued logical asset을 다음처럼 classify해야 한다.
 
 ```text
 ordinary_photo_or_video  -> eligible for flat upload
@@ -72,11 +72,11 @@ validated_live_photo     -> blocked_live_photo_route_unavailable
 unknown_or_incomplete    -> blocked_requires_review
 ```
 
-The local archive remains complete even when a provider projection cannot represent an asset.
+provider projection이 asset을 표현하지 못해도 local archive는 complete하게 유지한다.
 
-## Apple Photos and iCloud Photos
+## Apple Photos 및 iCloud Photos
 
-PhotoKit represents images, videos, Live Photos, albums, and album folders in the user's authorized Photos library. When iCloud Photos is enabled, PhotoKit reflects content available through that library across the user's devices.
+PhotoKit은 authorized Photos library에서 image, video, Live Photo, album, album folder를 표현한다. iCloud Photos가 enabled이면 PhotoKit은 해당 library를 통해 user device 전반에서 available한 content를 반영한다.
 
 Official references:
 
@@ -86,29 +86,29 @@ Official references:
 - [`PHAssetResourceType`](https://developer.apple.com/documentation/photos/phassetresourcetype)
 - [`PHAssetCreationRequest.addResource`](https://developer.apple.com/documentation/photos/phassetcreationrequest/addresource%28with%3Afileurl%3Aoptions%3A%29)
 
-PhotoKit exposes original Live Photo resources as `.photo` and `.pairedVideo`. It also distinguishes edited/current resources such as `.fullSizePhoto`, `.fullSizePairedVideo`, and adjustment data. This makes Apple Photos the stronger automatic projection target for validated Live Photo assets and user album membership.
+PhotoKit은 original Live Photo resource를 `.photo`, `.pairedVideo`로 노출한다. `.fullSizePhoto`, `.fullSizePairedVideo`, adjustment data 같은 edited/current resource도 구분한다. 따라서 Apple Photos가 validated Live Photo asset과 user album membership의 더 강한 automatic projection target이다.
 
-PhotoKit is not treated as a general remote iCloud REST service. The adapter will be a small local macOS component that requests explicit Photos authorization and runs only during a user-started session.
+PhotoKit을 general remote iCloud REST service로 취급하지 않는다. adapter는 explicit Photos authorization을 요청하고 user-started session 동안만 실행되는 small local macOS component다.
 
 ## Direct provider-to-provider transfer
 
-Apple's current support documentation says that direct Google Photos to iCloud Photos transfer does not transfer Motion Photos or Live Photos as those compound formats. Apple's iCloud Photos to Google Photos transfer documentation likewise excludes Live Photos and notes that only the most recent edit is transferred, with videos transferred separately from albums.
+Apple의 current support documentation에 따르면 Google Photos -> iCloud Photos direct transfer는 Motion Photo/Live Photo를 compound format으로 transfer하지 않는다. iCloud Photos -> Google Photos transfer도 Live Photo를 제외하고, most recent edit만 transfer되며 video는 album과 별도로 transfer된다고 명시한다.
 
 Official references:
 
 - [Transfer a copy from Google Photos to iCloud Photos](https://support.apple.com/120924)
 - [Transfer a copy of iCloud Photos to another service](https://support.apple.com/118257)
 
-These direct transfer services are convenience copies, not PhotoArchiveKit's Live Photo migration path. A migration that promises Live Photo preservation must use validated filesystem resources and a provider-specific importer.
+이 direct transfer service는 convenience copy이지 PhotoArchiveKit의 Live Photo migration path가 아니다. Live Photo preservation을 약속하는 migration은 validated filesystem resource와 provider-specific importer를 사용해야 한다.
 
-## Adapter rules
+## Adapter rule
 
-Every provider adapter must:
+모든 provider adapter는:
 
-1. Declare capabilities at runtime or from a versioned compatibility table.
-2. Preserve provider-neutral desired state even when an operation is unsupported.
-3. Record provenance separately from media identity.
-4. Produce an immutable plan before network writes.
-5. Treat partial upload success as a recoverable session state.
-6. Avoid provider deletion in the initial implementation.
-7. Never expose OAuth tokens, raw hashes, Live Photo identifiers, thumbnails, or media-derived feature vectors in normal reports.
+1. runtime 또는 versioned compatibility table에서 capability를 선언한다.
+2. operation이 unsupported여도 provider-neutral desired state를 보존한다.
+3. provenance와 media identity를 분리해 기록한다.
+4. network write 전에 immutable plan을 생성한다.
+5. partial upload success를 recoverable session state로 취급한다.
+6. initial implementation에서는 provider deletion을 피한다.
+7. normal report에 OAuth token, raw hash, Live Photo identifier, thumbnail, media-derived feature vector를 노출하지 않는다.
