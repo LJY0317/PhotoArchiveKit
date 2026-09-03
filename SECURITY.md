@@ -2,11 +2,28 @@
 
 PhotoArchiveKit is an early prototype. Fixes are currently made on the latest `main` branch.
 
-## Private reports
+## Reporting a vulnerability
 
-Use GitHub private vulnerability reporting for issues that could expose personal media, local integrity values, metadata, provider credentials, or unintended filesystem changes. Do not post a real catalog database, media file, Takeout sidecar, access token, or raw metadata dump in a public issue.
+When GitHub private vulnerability reporting is enabled for this repository, use the **Report a vulnerability** button on the repository's Security page.
+
+If that button is not available, open a minimal public issue that contains no sensitive details and ask the maintainer to establish a private channel. Do not include a real catalog database, media file, Takeout sidecar, access token, raw hash, Live Photo identifier, GPS coordinate, personal absolute path, or raw metadata dump in a public issue.
 
 A useful private report includes the affected commit, a sanitized command, expected and actual behavior, and a synthetic reproduction when possible.
+
+## High-priority report classes
+
+Reports are especially important when they involve:
+
+- path traversal outside a configured source or archive root;
+- following symbolic links into unintended locations;
+- an unavailable root being interpreted as deletion;
+- a Live Photo operation affecting only one required resource;
+- a plan applying after source files changed;
+- corruption or partial commit during interruption;
+- media, path, hash, GPS, identifier, or credential leakage;
+- command injection through an optional subprocess adapter;
+- malicious Takeout or sidecar filenames;
+- upload or deletion against the wrong provider account.
 
 ## Current boundaries
 
