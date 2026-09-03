@@ -49,6 +49,7 @@ public final class ArchiveScanner {
                 pendingFiles: pending,
                 maxConcurrency: options.maxConcurrentProbes
             )
+            TakeoutSidecarImporter.applyCaptureTimes(to: &resources)
 
             let privacyKey = try catalog.liveIdentifierPrivacyKey()
             for index in resources.indices {
@@ -72,6 +73,7 @@ public final class ArchiveScanner {
             warnings.append(contentsOf: AssetAssembler.unverifiedBasenamePairWarnings(
                 resources: resources
             ))
+            warnings.append(contentsOf: filenameCollisionWarnings(resources))
 
             var finalReport: ScanReport?
             try catalog.withTransaction {
@@ -166,6 +168,7 @@ public final class ArchiveScanner {
     ) throws -> (files: [PendingFile], warnings: [ScanWarning]) {
         let keys: Set<URLResourceKey> = [
             .isRegularFileKey,
+            .isDirectoryKey,
             .isSymbolicLinkKey,
             .fileSizeKey,
             .contentModificationDateKey,
@@ -175,6 +178,12 @@ public final class ArchiveScanner {
         var warnings: [ScanWarning] = []
 
         for root in roots {
+            let nestedRootPaths = Set(
+                roots
+                    .filter { $0.id != root.id && isDescendant($0.url, of: root.url) }
+                    .map { $0.url.standardizedFileURL.path }
+            )
+
             guard let enumerator = FileManager.default.enumerator(
                 at: root.url,
                 includingPropertiesForKeys: Array(keys),
@@ -195,6 +204,11 @@ public final class ArchiveScanner {
             for case let url as URL in enumerator {
                 do {
                     let values = try url.resourceValues(forKeys: keys)
+                    if values.isDirectory == true,
+                       nestedRootPaths.contains(url.standardizedFileURL.path) {
+                        enumerator.skipDescendants()
+                        continue
+                    }
                     guard values.isRegularFile == true,
                           values.isSymbolicLink != true,
                           let type = SupportedFileTypes.classify(url: url)
@@ -451,6 +465,7 @@ public final class ArchiveScanner {
                 rootID: root.id,
                 label: root.label,
                 kind: root.kind,
+                provenance: root.provenance,
                 canonicalPath: root.url.path,
                 mediaFileCount: rootResources.count {
                     $0.mediaKind == .image || $0.mediaKind == .video
@@ -541,6 +556,34 @@ public final class ArchiveScanner {
         }
     }
 
+    private func filenameCollisionWarnings(_ resources: [ProbedResource]) -> [ScanWarning] {
+        let media = resources.filter { $0.mediaKind == .image || $0.mediaKind == .video }
+        let groups = Dictionary(grouping: media) { $0.fileName.lowercased() }
+
+        return groups.values.compactMap { group in
+            guard group.count > 1 else { return nil }
+
+            let sizes = Set(group.map(\.byteSize))
+            let knownHashes = Set(group.compactMap(\.exactHash))
+            let differs = sizes.count > 1 || knownHashes.count > 1
+            guard differs else { return nil }
+
+            let representative = group.sorted {
+                ($0.root.label, $0.relativePath) < ($1.root.label, $1.relativePath)
+            }.first!
+            return ScanWarning(
+                code: "filename_collision",
+                message: "The same filename is used by different media content. Filename equality was not treated as asset identity.",
+                rootID: representative.root.id,
+                relativePath: representative.relativePath
+            )
+        }
+        .sorted {
+            ($0.rootID ?? "", $0.relativePath ?? "")
+                < ($1.rootID ?? "", $1.relativePath ?? "")
+        }
+    }
+
     private func metadataWarnings(_ resources: [ProbedResource]) -> [ScanWarning] {
         resources.compactMap { resource in
             guard resource.metadataProbeFailed else { return nil }
@@ -568,6 +611,13 @@ public final class ArchiveScanner {
         case .multipleVariants:
             return "Multiple still and video resources share one Live Photo identifier in this source root."
         }
+    }
+
+    private func isDescendant(_ child: URL, of parent: URL) -> Bool {
+        let parentPath = parent.standardizedFileURL.path
+        let childPath = child.standardizedFileURL.path
+        guard childPath != parentPath else { return false }
+        return childPath.hasPrefix(parentPath.hasSuffix("/") ? parentPath : parentPath + "/")
     }
 
     private func relativePath(of url: URL, under root: URL) -> String {

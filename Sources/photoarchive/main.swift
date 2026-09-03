@@ -66,6 +66,34 @@ struct PhotoArchiveCLI {
             case "--inbox":
                 let path = try value(after: argument, at: &index, in: arguments)
                 roots.append(ScanRoot(url: fileURL(path), kind: .inbox))
+            case "--local":
+                let path = try value(after: argument, at: &index, in: arguments)
+                roots.append(ScanRoot(
+                    url: fileURL(path),
+                    kind: .inbox,
+                    provenance: .localLibrary
+                ))
+            case "--apple":
+                let path = try value(after: argument, at: &index, in: arguments)
+                roots.append(ScanRoot(
+                    url: fileURL(path),
+                    kind: .importSource,
+                    provenance: .appleDirect
+                ))
+            case "--takeout":
+                let path = try value(after: argument, at: &index, in: arguments)
+                roots.append(ScanRoot(
+                    url: fileURL(path),
+                    kind: .importSource,
+                    provenance: .googleTakeout
+                ))
+            case "--google-web":
+                let path = try value(after: argument, at: &index, in: arguments)
+                roots.append(ScanRoot(
+                    url: fileURL(path),
+                    kind: .importSource,
+                    provenance: .googleWeb
+                ))
             case "--archive":
                 let path = try value(after: argument, at: &index, in: arguments)
                 roots.append(ScanRoot(url: fileURL(path), kind: .archive))
@@ -128,6 +156,7 @@ struct PhotoArchiveCLI {
         for root in report.roots {
             print("[\(root.label)]")
             print("  kind: \(root.kind.rawValue)")
+            print("  provenance: \(root.provenance.rawValue)")
             print("  media files: \(root.mediaFileCount)")
             print("  complete Live Photos: \(root.completeLivePhotos)")
             print("  unpaired Live still resources: \(root.stillOnlyLiveResources)")
@@ -257,10 +286,18 @@ struct PhotoArchiveCLI {
               photoarchive scan [options] ROOT...
 
             Root options (repeatable):
-              --inbox PATH       Register an Inbox root
+              --inbox PATH       Register an Inbox root with unknown provenance
+              --local PATH       Register a mixed local/iPhone-derived library root
+              --apple PATH       Register a direct Apple/iPhone import root
+              --takeout PATH     Register a Google Photos Takeout root
+              --google-web PATH  Register a Google Photos web-download root
               --archive PATH     Register an archive root
               --import PATH      Register an import/export staging root
               --reference PATH   Register a read-only comparison root
+
+            Nested roots are assigned to the most specific registered root. For example,
+            --local ~/Pictures plus --takeout ~/Pictures/Takeout scans Takeout only once
+            and preserves its Google Takeout provenance.
 
             Bare ROOT arguments are treated as Inbox roots.
 

@@ -58,6 +58,7 @@ struct RootDescriptor: Sendable {
     let id: String
     let label: String
     let kind: SourceRootKind
+    let provenance: SourceProvenance
     let url: URL
 }
 
@@ -80,7 +81,7 @@ struct ProbedResource: Sendable {
     let mediaKind: MediaKind
     let byteSize: Int64
     let modifiedAt: Date?
-    let captureTime: CaptureTime?
+    var captureTime: CaptureTime?
     var rawLivePhotoIdentifier: String?
     let metadataProbeFailed: Bool
     var exactHash: Data?

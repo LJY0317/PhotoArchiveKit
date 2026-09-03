@@ -15,6 +15,11 @@ PhotoArchiveKit의 중요한 변경 사항을 여기에 기록한다.
 - stable opaque report ID를 사용하는 local SHA-256 exact-resource duplicate grouping
 - provider-neutral logical asset과 time-gap event-folder suggestion
 - root, resource, asset, collection, provider mapping, duplicate group, event, session을 위한 SQLite catalog
+- `local_library`, `apple_direct`, `google_takeout`, `google_web` 등 explicit source provenance
+- 상위 local root 안의 별도 Takeout root를 중복 scan하지 않는 nested-root ownership
+- 같은 filename을 사용하지만 byte content가 다른 media를 별도 경고하는 `filename_collision`
+- embedded timestamp가 충분하지 않을 때 Google Takeout sidecar의 `title`과 `photoTakenTime`만 사용하는 최소 capture-time import
+- 프로젝트 최초 목적을 개발 우선순위의 gate로 고정하는 `docs/PROJECT_NORTH_STAR.md`
 - 영어/한국어 문서, CI, repository privacy check, optional-tool licensing guidance
 
 ### 보안

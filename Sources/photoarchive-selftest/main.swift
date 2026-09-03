@@ -56,6 +56,56 @@ struct PhotoArchiveSelfTest {
         let json = String(decoding: try encoder.encode(first), as: UTF8.self)
         let rawHash = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
         try require(!json.contains(rawHash), "sanitized report exposed a raw content hash")
+
+        let parentRoot = temporary.appendingPathComponent("Pictures", isDirectory: true)
+        let takeoutRoot = parentRoot.appendingPathComponent("Takeout", isDirectory: true)
+        try fileManager.createDirectory(at: takeoutRoot, withIntermediateDirectories: true)
+        try Data("preferred-local-file".utf8).write(
+            to: parentRoot.appendingPathComponent("same-name.jpg")
+        )
+        try Data("different-takeout-file-with-same-name".utf8).write(
+            to: takeoutRoot.appendingPathComponent("same-name.jpg")
+        )
+        try Data(
+            "{\"title\":\"same-name.jpg\",\"photoTakenTime\":{\"timestamp\":\"1785510000\"}}".utf8
+        ).write(to: takeoutRoot.appendingPathComponent("metadata.json"))
+
+        let nestedScanner = try ArchiveScanner(
+            catalogURL: temporary.appendingPathComponent("nested-catalog.sqlite3")
+        )
+        let nestedReport = try await nestedScanner.scan(roots: [
+            ScanRoot(
+                url: parentRoot,
+                kind: .inbox,
+                provenance: .localLibrary
+            ),
+            ScanRoot(
+                url: takeoutRoot,
+                kind: .importSource,
+                provenance: .googleTakeout
+            )
+        ])
+
+        try require(
+            nestedReport.summary.resourceCount == 3,
+            "a nested registered root must not be scanned again through its parent"
+        )
+        try require(
+            nestedReport.roots.first { $0.provenance == .localLibrary }?.mediaFileCount == 1,
+            "the parent local root should own only its direct media"
+        )
+        try require(
+            nestedReport.roots.first { $0.provenance == .googleTakeout }?.mediaFileCount == 1,
+            "the nested Takeout root should preserve its own provenance"
+        )
+        try require(
+            nestedReport.warnings.contains { $0.code == "filename_collision" },
+            "same filenames with different content must be reported as a collision"
+        )
+        try require(
+            nestedReport.summary.eventSuggestionCount == 1,
+            "a Google Takeout photoTakenTime sidecar should provide event-time evidence"
+        )
     }
 
     private static func require(_ condition: @autoclosure () throws -> Bool, _ message: String) throws {

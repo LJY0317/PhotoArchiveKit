@@ -7,15 +7,31 @@ public enum SourceRootKind: String, Codable, CaseIterable, Sendable {
     case reference
 }
 
+public enum SourceProvenance: String, Codable, CaseIterable, Sendable {
+    case unknown
+    case localLibrary = "local_library"
+    case appleDirect = "apple_direct"
+    case googleTakeout = "google_takeout"
+    case googleWeb = "google_web"
+    case googleIOSShare = "google_ios_share"
+}
+
 public struct ScanRoot: Sendable {
     public let url: URL
     public let label: String
     public let kind: SourceRootKind
+    public let provenance: SourceProvenance
 
-    public init(url: URL, label: String? = nil, kind: SourceRootKind = .inbox) {
+    public init(
+        url: URL,
+        label: String? = nil,
+        kind: SourceRootKind = .inbox,
+        provenance: SourceProvenance = .unknown
+    ) {
         self.url = url.standardizedFileURL
         self.label = label ?? url.lastPathComponent
         self.kind = kind
+        self.provenance = provenance
     }
 }
 
@@ -61,12 +77,14 @@ public enum LivePhotoOccurrenceStatus: String, Codable, Sendable {
 public enum CaptureTimeSource: String, Codable, Sendable {
     case exifDateTimeOriginal = "exif_datetime_original"
     case quickTimeCreationDate = "quicktime_creation_date"
+    case googleTakeoutPhotoTakenTime = "google_takeout_photo_taken_time"
     case fileCreationDate = "file_creation_date"
     case unknown
 }
 
 public enum CaptureTimeConfidence: String, Codable, Sendable {
     case trusted
+    case providerSidecar = "provider_sidecar"
     case incompleteTimezone = "incomplete_timezone"
     case fallback
     case unknown
@@ -201,6 +219,7 @@ public struct RootScanReport: Codable, Sendable, Equatable {
     public let rootID: String
     public let label: String
     public let kind: SourceRootKind
+    public let provenance: SourceProvenance
     public let canonicalPath: String
     public let mediaFileCount: Int
     public let completeLivePhotos: Int
@@ -215,6 +234,7 @@ public struct RootScanReport: Codable, Sendable, Equatable {
         rootID: String,
         label: String,
         kind: SourceRootKind,
+        provenance: SourceProvenance,
         canonicalPath: String,
         mediaFileCount: Int,
         completeLivePhotos: Int,
@@ -228,6 +248,7 @@ public struct RootScanReport: Codable, Sendable, Equatable {
         self.rootID = rootID
         self.label = label
         self.kind = kind
+        self.provenance = provenance
         self.canonicalPath = canonicalPath
         self.mediaFileCount = mediaFileCount
         self.completeLivePhotos = completeLivePhotos

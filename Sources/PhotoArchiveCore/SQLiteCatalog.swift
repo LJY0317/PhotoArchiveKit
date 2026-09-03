@@ -106,7 +106,14 @@ final class SQLiteCatalog {
                 "UPDATE source_roots SET label = ?, kind = ? WHERE id = ?",
                 bindings: [.text(input.label), .text(input.kind.rawValue), .text(existingID)]
             )
-            return RootDescriptor(id: existingID, label: input.label, kind: input.kind, url: canonicalURL)
+            try upsertRootMetadata(rootID: existingID, provenance: input.provenance)
+            return RootDescriptor(
+                id: existingID,
+                label: input.label,
+                kind: input.kind,
+                provenance: input.provenance,
+                url: canonicalURL
+            )
         }
 
         let id = opaqueID(prefix: "R")
@@ -120,7 +127,25 @@ final class SQLiteCatalog {
                 .double(Date().timeIntervalSince1970)
             ]
         )
-        return RootDescriptor(id: id, label: input.label, kind: input.kind, url: canonicalURL)
+        try upsertRootMetadata(rootID: id, provenance: input.provenance)
+        return RootDescriptor(
+            id: id,
+            label: input.label,
+            kind: input.kind,
+            provenance: input.provenance,
+            url: canonicalURL
+        )
+    }
+
+    private func upsertRootMetadata(rootID: String, provenance: SourceProvenance) throws {
+        try run(
+            """
+            INSERT INTO source_root_metadata (root_id, provenance)
+            VALUES (?, ?)
+            ON CONFLICT(root_id) DO UPDATE SET provenance = excluded.provenance
+            """,
+            bindings: [.text(rootID), .text(provenance.rawValue)]
+        )
     }
 
     func beginScan(startedAt: Date, rootCount: Int) throws -> String {
@@ -557,6 +582,11 @@ final class SQLiteCatalog {
                 kind TEXT NOT NULL,
                 canonical_path TEXT NOT NULL UNIQUE,
                 created_at REAL NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS source_root_metadata (
+                root_id TEXT PRIMARY KEY REFERENCES source_roots(id) ON DELETE CASCADE,
+                provenance TEXT NOT NULL DEFAULT 'unknown'
             );
 
             CREATE TABLE IF NOT EXISTS scan_sessions (
