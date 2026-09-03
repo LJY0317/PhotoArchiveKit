@@ -1,24 +1,24 @@
 # Architecture
 
-## Design goals
+## 설계 목표
 
-PhotoArchiveKit is designed for a Mac-first workflow in which an iPhone is the main camera, cloud backup may run continuously, and deliberate archive sessions happen only when the user chooses to connect storage and start a command.
+PhotoArchiveKit은 iPhone을 주 카메라로 사용하고 cloud backup은 상시 동작할 수 있지만, archive 작업은 사용자가 storage를 연결하고 명시적으로 command를 시작할 때만 수행하는 Mac-first workflow를 위해 설계한다.
 
-The core priorities are:
+핵심 우선순위:
 
-1. Preserve original media resources and Live Photo relationships.
-2. Keep media usable as ordinary files without PhotoArchiveKit.
-3. Preserve organization independently of Google Photos, Apple Photos, or another provider.
-4. Minimize manual classification through deterministic and local machine-learning stages.
-5. Keep media-derived secrets local.
-6. Make every future mutation reviewable, resumable, and reversible.
-7. Avoid background CPU, battery, and filesystem cost.
+1. original media resource와 Live Photo relationship을 보존한다.
+2. PhotoArchiveKit 없이도 media가 ordinary file로 사용 가능하게 유지한다.
+3. Google Photos, Apple Photos 등 provider와 독립적으로 organization을 보존한다.
+4. deterministic 및 local machine-learning stage로 manual classification을 최소화한다.
+5. media-derived secret은 로컬에 유지한다.
+6. future mutation은 모두 reviewable, resumable, reversible하게 만든다.
+7. background CPU, battery, filesystem cost를 피한다.
 
-## Three layers of truth
+## 세 가지 truth layer
 
 ### Media truth
 
-The canonical bytes live in normal filesystem roots:
+canonical byte는 일반 filesystem root에 둔다.
 
 ```text
 Photo Archive/
@@ -28,29 +28,29 @@ Photo Archive/
 └── .photoarchive/
 ```
 
-The archive is not content-addressed in the initial design because human-readable folders are an explicit product requirement. Exact hashes are integrity evidence, not filenames or public IDs.
+human-readable folder가 명시적 product requirement이므로 initial design은 user-facing storage를 content-addressed 방식으로 만들지 않는다. exact hash는 integrity evidence이지 filename이나 public ID가 아니다.
 
 ### Semantic truth
 
-SQLite records information that folders cannot safely express:
+SQLite는 folder만으로 안전하게 표현하기 어려운 다음 상태를 기록한다.
 
-- one logical asset to multiple physical resources;
-- Live Photo still/paired-video roles;
-- copies and provider-derived variants;
-- primary folder and additional many-to-many collections;
-- source/provenance observations;
-- rename and operation history;
-- duplicate decisions;
-- provider object and album mappings;
-- scan and archive sessions.
+- 하나의 logical asset과 여러 physical resource 관계
+- Live Photo still/paired-video role
+- copy와 provider-derived variant
+- primary folder와 추가 many-to-many collection
+- source/provenance observation
+- rename 및 operation history
+- duplicate decision
+- provider object/album mapping
+- scan/archive session
 
-SQLite is the working database. A future versioned JSONL export will be the portable interchange and disaster-recovery representation. CSV is suitable only for reports, not as the canonical relational model.
+SQLite가 working database다. future versioned JSONL export는 portable interchange 및 disaster-recovery representation으로 사용한다. CSV는 report 용도에는 적합하지만 canonical relational model로 사용하지 않는다.
 
-### Provider projections
+### Provider projection
 
-Apple Photos, Google Photos, and optional gallery software are views or delivery targets. Their identifiers are stored as mappings, never used as the permanent identity of a logical asset.
+Apple Photos, Google Photos, optional gallery software는 view 또는 delivery target이다. provider identifier는 mapping으로 저장하며 logical asset의 permanent identity로 사용하지 않는다.
 
-A provider adapter declares capabilities rather than pretending every operation is available:
+provider adapter는 모든 operation이 가능하다고 가정하지 않고 capability를 선언한다.
 
 ```text
 observe_library
@@ -61,11 +61,11 @@ add_existing_asset_to_album
 remove_asset_from_album
 ```
 
-A capability can be `supported`, `manual_only`, `unobservable`, `unverified`, or `unsupported`.
+capability state는 `supported`, `manual_only`, `unobservable`, `unverified`, `unsupported` 등이 될 수 있다.
 
-As of the current Google Photos Library API, library and album management is centered on media and albums created by the calling app. PhotoArchiveKit must therefore keep desired album state locally even when it cannot observe or apply that state in Google Photos.
+현재 Google Photos Library API에서는 library/album management가 calling app이 생성한 media와 album 중심이므로, Google Photos에서 해당 상태를 observe/apply하지 못하더라도 desired album state는 로컬에 유지해야 한다.
 
-## Resource and asset model
+## Resource와 asset model
 
 ```text
 LogicalAsset
@@ -75,52 +75,52 @@ LogicalAsset
 └── Resource(role: provider_derivative)  future
 ```
 
-A Live Photo is paired using embedded identifiers, not filenames. Current Apple-origin files expose:
+Live Photo는 filename이 아니라 embedded identifier로 pair한다. 현재 Apple-origin file에서 관찰되는 근거:
 
-- a still-side identifier in the image Exif MakerNote;
-- a QuickTime content identifier in the motion resource.
+- image Exif MakerNote의 still-side identifier
+- motion resource의 QuickTime content identifier
 
-PhotoArchiveKit compares the raw values locally, converts them to an HMAC-SHA-256 fingerprint using a catalog-local random key, and discards the raw values after probing. The keyed fingerprint supports local grouping without making the original identifier available in reports.
+PhotoArchiveKit은 raw value를 로컬에서 비교하고 catalog-local random key를 사용한 HMAC-SHA-256 fingerprint로 변환한 뒤 raw value를 probe 후 제거한다. keyed fingerprint는 original identifier를 report에 노출하지 않고 local grouping을 가능하게 한다.
 
-Pairing is evaluated at two levels:
+pairing은 두 level에서 평가한다.
 
-- **Logical asset:** all known copies with the same protected identifier.
-- **Occurrence:** completeness within one source root.
+- **Logical asset:** 같은 protected identifier를 가진 모든 known copy
+- **Occurrence:** 한 source root 안에서의 completeness
 
-This distinction is essential. A complete copy in an Image Capture root must not hide the fact that an ordinary AirDrop root contains only the still image.
+이 구분이 중요하다. Image Capture root에 complete copy가 있어도 ordinary AirDrop root가 still image만 가진 사실을 숨겨서는 안 된다.
 
-A shared basename without matching linkage metadata is only a warning candidate and is never paired automatically.
+matching linkage metadata 없이 basename만 같으면 warning candidate일 뿐 자동 pair하지 않는다.
 
 ## Identity
 
-Logical assets use opaque local IDs. Identity evidence can include:
+logical asset은 opaque local ID를 사용한다. identity evidence에는 다음이 포함될 수 있다.
 
-- protected Live Photo identifier;
-- exact resource hashes;
-- provenance and observed source;
-- capture metadata;
-- future user-confirmed or provider-derived relations.
+- protected Live Photo identifier
+- exact resource hash
+- provenance 및 observed source
+- capture metadata
+- future user-confirmed/provider-derived relation
 
-A filename, provider ID, capture timestamp, or perceptual feature alone is not sufficient permanent identity.
+filename, provider ID, capture timestamp, perceptual feature 하나만으로 permanent identity를 정하지 않는다.
 
-Standalone byte-identical resources may map to one logical asset. Different encodings of the same scene remain distinct assets until a derivation or equivalence relation is established.
+byte-identical standalone resource는 하나의 logical asset에 mapping될 수 있다. 같은 scene의 다른 encoding은 derivation/equivalence relation이 확립되기 전까지 distinct asset으로 유지한다.
 
-## Source roots
+## Source root
 
-The data model permits multiple roots even though a simple UI may begin with one default Inbox:
+data model은 simple UI가 default Inbox 하나로 시작하더라도 여러 root를 허용한다.
 
-- `inbox`: unclassified incoming media;
-- `archive`: canonical long-term files;
-- `import_source`: Takeout or another provider export;
-- `reference`: read-only comparison fixture or old collection.
+- `inbox`: unclassified incoming media
+- `archive`: canonical long-term file
+- `import_source`: Takeout 또는 다른 provider export
+- `reference`: read-only comparison fixture 또는 old collection
 
-The intended model treats paths as configuration rather than identity: an opaque root ID owns relative paths while the configured Inbox or mount location may change.
+의도한 model에서는 path를 identity가 아니라 configuration으로 취급한다. opaque root ID가 relative path를 소유하고 configured Inbox 또는 mount location은 바뀔 수 있다.
 
-The current read-only prototype still resolves an existing root by its canonical path, so moving a configured root currently creates a new root record. Stable user-supplied root IDs and a marker such as `.photoarchive-root` are the next root-identity milestone. Future mutating commands must verify that marker before interpreting absence or applying a plan. An unavailable root must never be interpreted as mass deletion.
+현재 read-only prototype은 canonical path로 existing root를 resolve하므로 configured root를 이동하면 새 root record가 생성된다. stable user-supplied root ID와 `.photoarchive-root` 같은 marker가 다음 root-identity milestone이다. future mutating command는 absence를 해석하거나 plan을 적용하기 전에 marker를 verify해야 한다. unavailable root를 mass deletion으로 해석해서는 안 된다.
 
 ## Session model
 
-There is no watcher or sync daemon. Work happens in explicit sessions:
+watcher나 sync daemon은 없다. 작업은 explicit session으로 진행한다.
 
 ```text
 scan
@@ -136,41 +136,41 @@ scan
   -> close session
 ```
 
-The current implementation stops after `scan`, `analyze`, `propose`, and catalog persistence. It does not modify media.
+현재 구현은 `scan`, `analyze`, `propose`, catalog persistence까지이며 media를 수정하지 않는다.
 
-Future plans will be immutable documents containing:
+future plan은 immutable document이며 다음을 포함한다.
 
-- operation ID and session ID;
-- source and destination resource sets;
-- expected size and integrity preconditions;
-- Live Photo atomicity constraints;
-- reason and confidence;
-- reversible rename information.
+- operation ID/session ID
+- source/destination resource set
+- expected size 및 integrity precondition
+- Live Photo atomicity constraint
+- reason/confidence
+- reversible rename information
 
-Interrupted sessions must resume from verified checkpoints instead of repeating completed operations.
+interrupted session은 완료된 operation을 반복하지 않고 verified checkpoint에서 resume해야 한다.
 
-## Automatic classification
+## 자동 분류
 
-Manual drag-and-drop should be the fallback, not the normal path.
+manual drag-and-drop은 fallback이어야 하며 normal path가 되어서는 안 된다.
 
 ### Stage 1: deterministic grouping
 
-Current and near-term signals:
+현재 및 근시일 signal:
 
-- trusted capture instant and local date;
-- timezone confidence;
-- Live Photo relationship;
-- burst and same-second sequence;
-- source session;
-- file provenance.
+- trusted capture instant/local date
+- timezone confidence
+- Live Photo relationship
+- burst/same-second sequence
+- source session
+- file provenance
 
 ### Stage 2: event segmentation
 
-Implemented now. Assets are ordered by trusted capture time and separated into event candidates when the gap exceeds a configurable threshold. The first folder proposal is deliberately conservative and date-based.
+현재 구현됨. trusted capture time으로 asset을 정렬하고 configurable threshold보다 gap이 길면 event candidate를 분리한다. 첫 folder proposal은 보수적으로 date-based다.
 
 ### Stage 3: archive-guided classification
 
-Planned. Existing archive folders become labeled examples:
+계획 단계. 기존 archive folder를 labeled example로 사용한다.
 
 ```text
 known folder examples
@@ -179,65 +179,65 @@ new event cluster
        -> nearest collection candidates
 ```
 
-The classifier should score an event as a group rather than classify every frame independently. One confident trip event can assign hundreds of assets at once.
+classifier는 각 frame이 아니라 event group 전체를 score해야 한다. 하나의 confident trip event가 수백 asset을 함께 assign할 수 있다.
 
-### Stage 4: local visual features
+### Stage 4: local visual feature
 
-Planned and optional. Apple Vision can generate image feature prints and image classifications locally. For a Live Photo, the still resource is analyzed once and the result applies to the entire logical asset; the paired video does not need frame extraction for ordinary classification.
+계획 단계이며 optional이다. Apple Vision으로 image feature print와 image classification을 로컬에서 생성할 수 있다. Live Photo는 still resource를 한 번 분석하고 결과를 logical asset 전체에 적용한다. 일반 classification을 위해 paired video frame extraction은 필요하지 않다.
 
-Feature vectors, face geometry, and inferred labels are media-derived private data. They remain local and are never part of normal agent output. Feature-print revisions must be recorded because distances are not assumed stable across algorithm revisions.
+feature vector, face geometry, inferred label은 media-derived private data다. 로컬에만 두고 normal agent output에 포함하지 않는다. feature-print distance는 algorithm revision 간 stable하다고 가정하지 않으므로 revision을 기록한다.
 
 ### Stage 5: confidence policy
 
-Suggested defaults:
+권장 default:
 
-- high confidence: apply to an automatically generated plan;
-- medium confidence: show one event-level review decision;
-- low confidence: use a date-event folder and preserve alternatives in the catalog.
+- high confidence: automatically generated plan에 포함
+- medium confidence: event-level review 1회
+- low confidence: date-event folder 사용, alternative는 catalog에 보존
 
-No classifier result authorizes deletion.
+classifier result는 deletion을 authorize하지 않는다.
 
-## Exact and perceptual duplicates
+## Exact duplicate와 perceptual duplicate
 
 ### Exact resource duplicate
 
-Candidate files are first grouped by size. SHA-256 is calculated only inside the local process for groups with matching sizes. Reports receive stable IDs such as `D000017`, not the digest.
+candidate file은 먼저 size로 group한다. matching size group에 한해 local process에서 SHA-256을 계산한다. report에는 digest 대신 `D000017` 같은 stable ID를 노출한다.
 
 ### Exact logical Live Photo duplicate
 
-Both resource roles must be represented. An identical still with a missing or different paired video is not an exact duplicate Live Photo occurrence.
+두 resource role이 모두 있어야 한다. identical still이 있어도 paired video가 missing/different하면 exact duplicate Live Photo occurrence가 아니다.
 
-### Similar or derived copy
+### Similar/derived copy
 
-Perceptual similarity, matching capture time, or provider provenance can generate a review candidate, but must not collapse assets or authorize deletion automatically.
+perceptual similarity, matching capture time, provider provenance는 review candidate를 만들 수 있지만 asset collapse나 automatic deletion 권한이 아니다.
 
 ## Optional interoperability
 
-The required core uses only Apple system frameworks and SQLite. Optional subprocess adapters can reuse mature tools already installed by a user without copying their code or binaries into PhotoArchiveKit:
+required core는 Apple system framework와 SQLite만 사용한다. optional subprocess adapter는 user-installed mature tool을 재사용할 수 있다.
 
-- rclone for remote file replication and verification;
-- Czkawka CLI for additional duplicate/similarity candidates;
-- ExifTool for broad metadata diagnostics;
-- ffprobe for optional video diagnostics.
+- rclone: remote file replication/verification
+- Czkawka CLI: additional duplicate/similarity candidate
+- ExifTool: broad metadata diagnostic
+- ffprobe: optional video diagnostic
 
-This keeps installation small while allowing advanced users to extend a session.
+이 방식은 설치를 작게 유지하면서 advanced user가 session을 확장할 수 있게 한다.
 
-## Design influences
+## 설계 참고점
 
-Mature photo systems reinforce several boundaries used here:
+mature photo system에서 얻은 boundary:
 
-- External-library gallery systems can index files without owning the originals, but metadata stored only in their database may be lost when a path changes. PhotoArchiveKit therefore keeps portable semantic state and stable logical IDs outside any gallery database.
-- Read-only mounts are a useful safety boundary. PhotoArchiveKit adopts the same principle at the command level: scanning is read-only and future mutation requires a separate explicit plan/apply boundary.
-- Job queues are useful for heavy indexing, but a personal archive that is connected periodically does not need a resident server. PhotoArchiveKit uses resumable foreground sessions instead.
+- external-library gallery는 original을 소유하지 않고 index할 수 있지만 metadata가 gallery DB에만 있으면 path 변경 시 유실될 수 있다. 따라서 portable semantic state와 stable logical ID를 gallery DB 밖에 유지한다.
+- read-only mount는 유용한 safety boundary다. PhotoArchiveKit은 command level에서도 scan은 read-only, mutation은 별도 explicit plan/apply boundary로 분리한다.
+- heavy indexing에는 job queue가 유용하지만 주기적으로 연결되는 personal archive에는 resident server가 필요하지 않다. resumable foreground session을 사용한다.
 
-## Deliberate exclusions
+## 의도적으로 제외하는 것
 
-The initial architecture excludes:
+initial architecture에서는 다음을 제외한다.
 
-- a server database;
-- content-addressed user-facing storage;
-- continuous filesystem observation;
-- browser UI automation;
-- permanent deletion;
-- implicit metadata rewriting;
-- one database row per cloud item as the primary identity model.
+- server database
+- content-addressed user-facing storage
+- continuous filesystem observation
+- browser UI automation
+- permanent deletion
+- implicit metadata rewriting
+- cloud item별 DB row를 primary identity model로 사용하는 방식
