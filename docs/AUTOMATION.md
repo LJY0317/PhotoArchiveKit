@@ -65,6 +65,10 @@ Google Photos에서 culling을 끝낸 뒤 Mac ingest를 하는 현재 사용자 
 
 Mac에서 Krokiet/Czkawka가 residual near-duplicate 후보를 좁힌 뒤 Google Photos의 Top pick UI를 한 번 더 활용하는 것은 **선택적 human curation loop**로 허용할 수 있다. 다만 Google Photos는 임의의 사용자 후보 set에 대해 Top pick을 강제로 실행하는 general-purpose ranking API가 아니다. Photo Stacks는 Google이 backed-up photos 중 같은 subject를 짧은 시간에 찍은 nearly-identical 사진이라고 자동 판단한 경우에 생성되므로, 후보를 다시 upload했다고 해서 반드시 새 stack이 생기거나 ranking이 다시 실행된다고 가정하지 않는다.
 
+현재 Google Photos API는 stack membership이나 `Top pick` 상태를 반환하는 documented field/method를 제공하지 않는다. 2025-03-31 이후 Library API의 list/get/search는 app-created content 중심으로 제한되며, 사용자의 전체 library에서 임의 item을 자동 조회하는 대체 경로가 아니다. 전체 library에서 사용자가 특정 항목을 앱과 공유하려면 Picker API를 사용해 **사용자가 직접 선택**해야 한다. Picker는 선택된 media item의 persistent ID와 content access를 제공하지만, 그 항목이 Google Photos에서 Top pick인지 여부를 알려 주지는 않는다.
+
+따라서 second-pass의 자동화 가능 경계는 `Google이 Top pick을 계산 -> API가 그 결과를 읽음`이 아니라 `사용자가 Google Photos UI에서 Top pick을 확인/승인 -> 필요하면 Picker 등으로 그 survivor를 명시적으로 선택 -> PhotoArchiveKit local process가 해당 선택을 local candidate에 매핑`이다. Top-pick 판정 자체는 human-visible Google Photos UI 안에 남는다.
+
 권장 방식은 Google을 **data transport가 아니라 decision UI**로 사용하는 것이다.
 
 ```text
