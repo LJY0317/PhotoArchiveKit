@@ -11,7 +11,7 @@
 - real library에서 duplicate reconciliation, Live Photo 보존, preferred representation 선택, folder archive plan, verified copy, portable semantic state의 완료 기준을 충족하기 전에는 주변 기능을 우선하지 않는다.
 - PhotoArchiveKit은 local-first, session 기반, 경량 도구로 유지한다. 이후 milestone에서 명시적으로 필요성이 확인되지 않는 한 background daemon이나 filesystem watcher를 추가하지 않는다.
 - core는 third-party executable 없이도 유용해야 한다. 선택적 integration은 성숙한 duplicate/replication/metadata 기능을 다시 구현하기보다 사용자가 이미 설치한 도구를 활용할 수 있다.
-- Live Photo는 여러 resource를 가진 하나의 logical asset으로 취급한다. 검증된 pair의 한쪽만 move, rename, quarantine, delete하도록 계획하거나 실행하지 않는다.
+- **Live Photo atomicity는 최상위 safety invariant다.** Live Photo는 여러 resource를 가진 하나의 logical asset으로 취급한다. copy, move, rename, quarantine, delete, archive, provider projection 중 하나라도 Live Photo resource를 건드리면 operation을 해당 logical asset/occurrence의 완전한 resource set으로 확장하거나 실패해야 한다. provenance preference, exact-duplicate 판단, 성능 최적화보다 이 규칙이 우선하며 검증된 pair의 한쪽만 독립적으로 처리하지 않는다.
 
 ## 안전
 - 기본 동작은 read-only 검사다. `scan`, `plan`과 미래의 변경 작업인 `apply`를 분리한다.

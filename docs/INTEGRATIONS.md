@@ -50,9 +50,11 @@ PhotoArchiveKit은 ExifTool이나 osxphotos가 없어도 핵심 archive scanner�
 
 계획된 용도:
 
-- completed archive와 catalog snapshot을 file cloud로 copy
-- remote copy verify
+- completed archive와 catalog snapshot을 file cloud 또는 다른 volume으로 copy
+- remote/cross-volume copy verify
 - sanitized session result 반환
+
+로컬 same-volume quarantine/move의 primary executor로 rclone을 사용하지 않는다. rclone은 local filesystem도 다룰 수 있고 `move`도 제공하지만 operation semantics는 file 단위이며 필요하면 copy 후 source delete로 동작할 수 있다. PhotoArchiveKit의 Live Photo atomicity, same-session rollback, manifest, provenance precondition을 rclone이 대신 소유하지 않도록 한다. 같은 Mac filesystem 안의 quarantine은 native `FileManager` move를 PhotoArchiveKit transaction 안에서 사용하고, 외장 HDD/cloud replica처럼 transfer/verification 전문성이 필요한 경로에서 rclone을 adapter로 활용한다.
 
 Safety default:
 

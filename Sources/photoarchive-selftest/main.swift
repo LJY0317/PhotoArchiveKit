@@ -148,6 +148,95 @@ struct PhotoArchiveSelfTest {
             "canonical coverage reason should be recorded in the plan"
         )
 
+        let liveLocalRoot = temporary.appendingPathComponent("LiveLocal", isDirectory: true)
+        let liveTakeoutRoot = temporary.appendingPathComponent("LiveTakeout", isDirectory: true)
+        let liveQuarantineRoot = temporary.appendingPathComponent("LiveQuarantine", isDirectory: true)
+        for directory in [
+            liveLocalRoot.appendingPathComponent("local", isDirectory: true),
+            liveTakeoutRoot.appendingPathComponent("year", isDirectory: true),
+            liveTakeoutRoot.appendingPathComponent("album", isDirectory: true),
+            liveQuarantineRoot
+        ] {
+            try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        }
+        let livePhotoBytes = Data(repeating: 0x2A, count: 100)
+        let liveVideoBytes = Data(repeating: 0x7B, count: 200)
+        for relativePath in ["local/IMG_0001.HEIC"] {
+            try livePhotoBytes.write(to: liveLocalRoot.appendingPathComponent(relativePath))
+        }
+        for relativePath in ["local/IMG_0001.MOV"] {
+            try liveVideoBytes.write(to: liveLocalRoot.appendingPathComponent(relativePath))
+        }
+        for relativePath in ["year/IMG_0001.HEIC", "album/IMG_0001.HEIC"] {
+            try livePhotoBytes.write(to: liveTakeoutRoot.appendingPathComponent(relativePath))
+        }
+        for relativePath in ["year/IMG_0001.MOV", "album/IMG_0001.MOV"] {
+            try liveVideoBytes.write(to: liveTakeoutRoot.appendingPathComponent(relativePath))
+        }
+
+        let liveCoverageReport = syntheticCanonicalCoverageReport(
+            localPath: liveLocalRoot.path,
+            takeoutPath: liveTakeoutRoot.path
+        )
+        let liveCoveragePlan = ReconciliationPlanner.makePlan(from: liveCoverageReport)
+        let livePreflight = try QuarantineExecutor.preflight(
+            report: liveCoverageReport,
+            plan: liveCoveragePlan,
+            targetURL: liveQuarantineRoot
+        )
+        try require(livePreflight.resourceCount == 4, "Live Photo quarantine must include every covered resource")
+
+        var tamperedObject = try JSONSerialization.jsonObject(
+            with: encoder.encode(liveCoveragePlan)
+        ) as! [String: Any]
+        var tamperedItems = tamperedObject["items"] as! [[String: Any]]
+        let liveItemIndex = try requireIndex(
+            in: tamperedItems,
+            where: { ($0["kind"] as? String) == "live_photo_asset" },
+            message: "expected a Live Photo plan item"
+        )
+        var tamperedItem = tamperedItems[liveItemIndex]
+        var tamperedCandidates = tamperedItem["candidateResources"] as! [[String: Any]]
+        tamperedCandidates.removeLast()
+        tamperedItem["candidateResources"] = tamperedCandidates
+        tamperedItems[liveItemIndex] = tamperedItem
+        tamperedObject["items"] = tamperedItems
+        let tamperedPlanData = try JSONSerialization.data(withJSONObject: tamperedObject)
+        let tamperedPlan = try JSONDecoder().decode(ReconciliationPlan.self, from: tamperedPlanData)
+        do {
+            _ = try QuarantineExecutor.preflight(
+                report: liveCoverageReport,
+                plan: tamperedPlan,
+                targetURL: liveQuarantineRoot
+            )
+            throw SelfTestFailure("partial Live Photo mutation should be rejected")
+        } catch QuarantineError.livePhotoAtomicityViolation {
+            // Expected: no partial Live Photo resource set may cross a mutation boundary.
+        }
+
+        let liveApplied = try QuarantineExecutor.apply(
+            report: liveCoverageReport,
+            plan: liveCoveragePlan,
+            targetURL: liveQuarantineRoot
+        )
+        try require(liveApplied.resourceCount == 4, "Live Photo quarantine should move the entire covered resource set")
+        try require(
+            fileManager.fileExists(atPath: liveLocalRoot.appendingPathComponent("local/IMG_0001.HEIC").path)
+                && fileManager.fileExists(atPath: liveLocalRoot.appendingPathComponent("local/IMG_0001.MOV").path),
+            "preferred Live Photo still and paired video must remain together"
+        )
+        for relativePath in [
+            "year/IMG_0001.HEIC",
+            "year/IMG_0001.MOV",
+            "album/IMG_0001.HEIC",
+            "album/IMG_0001.MOV"
+        ] {
+            try require(
+                !fileManager.fileExists(atPath: liveTakeoutRoot.appendingPathComponent(relativePath).path),
+                "redundant Live Photo resources must move as one complete set"
+            )
+        }
+
         let parentRoot = temporary.appendingPathComponent("Pictures", isDirectory: true)
         let takeoutRoot = parentRoot.appendingPathComponent("Takeout", isDirectory: true)
         try fileManager.createDirectory(at: takeoutRoot, withIntermediateDirectories: true)
@@ -217,6 +306,17 @@ struct PhotoArchiveSelfTest {
             throw SelfTestFailure(message)
         }
     }
+
+    private static func requireIndex<T>(
+        in values: [T],
+        where predicate: (T) -> Bool,
+        message: String
+    ) throws -> Int {
+        guard let index = values.firstIndex(where: predicate) else {
+            throw SelfTestFailure(message)
+        }
+        return index
+    }
 }
 
 private func executableExists(_ name: String) -> Bool {
@@ -227,7 +327,10 @@ private func executableExists(_ name: String) -> Bool {
     }
 }
 
-private func syntheticCanonicalCoverageReport() -> ScanReport {
+private func syntheticCanonicalCoverageReport(
+    localPath: String = "/synthetic/local",
+    takeoutPath: String = "/synthetic/takeout"
+) -> ScanReport {
     let localRootID = "RLOCAL"
     let takeoutRootID = "RTAKEOUT"
     let localPhoto = ResourceReference(
@@ -279,7 +382,7 @@ private func syntheticCanonicalCoverageReport() -> ScanReport {
             label: "Local",
             kind: .inbox,
             provenance: .localLibrary,
-            canonicalPath: "/synthetic/local",
+            canonicalPath: localPath,
             mediaFileCount: 2,
             completeLivePhotos: 1,
             stillOnlyLiveResources: 0,
@@ -294,7 +397,7 @@ private func syntheticCanonicalCoverageReport() -> ScanReport {
             label: "Takeout",
             kind: .importSource,
             provenance: .googleTakeout,
-            canonicalPath: "/synthetic/takeout",
+            canonicalPath: takeoutPath,
             mediaFileCount: 4,
             completeLivePhotos: 0,
             stillOnlyLiveResources: 2,

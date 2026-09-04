@@ -60,6 +60,7 @@ swift run photoarchive-selftest
 
 ## 제품 결정
 
+- **Live Photo atomicity는 최상위 safety invariant다.** still/paired-video 중 하나를 건드리는 copy/move/rename/quarantine/delete/archive/projection operation은 완전한 logical asset/occurrence resource set으로 확장하거나 실패한다. provenance preference, exact dedupe, 성능 최적화보다 이 규칙이 우선한다.
 - `docs/PROJECT_NORTH_STAR.md`가 scope gate다. real library에서 duplicate reconciliation, Live Photo 보존, preferred representation 선택, folder archive plan, verified copy, portable semantic state가 안정적으로 동작하기 전에는 주변 기능으로 확장하지 않는다.
 - portable filesystem archive가 media truth를 저장한다.
 - SQLite가 semantic truth와 provider-neutral desired organization을 저장한다.
@@ -105,6 +106,8 @@ swift run photoarchive-selftest
 - 구현된 `photoarchive plan`의 canonical coverage를 real library에 적용한 최종 기준값은 mixed exact Takeout resource 4,466개 = `automatic 4,195 + review 271`이다. automatic은 standalone 739개 + Live Photo canonical-coverage resource 3,456개이며, review는 complete preferred Live Photo가 없는 exact resource 270개 + uncovered exact variant 1개다. 이전 수동 SQL의 약 4,245/221은 근사치였으므로 이 planner 결과로 대체한다.
 - 같은 real library에서 `--exact-engine czkawka`와 `--exact-engine native`가 동일한 reconciliation plan을 생성했다.
 - wall-clock benchmark는 `Czkawka candidate discovery + native verification` 약 37.66초, native-only 약 36.21초였다. 현재 hybrid는 이중 작업 때문에 더 빠르지 않으므로 `automatic`은 native를 유지한다.
+- quarantine executor가 Live Photo plan을 독립적으로 atomicity 재검증하도록 강화했다. synthetic test에서 4-resource covered Live Photo 중 1개 resource를 제거한 tampered plan은 mutation 전에 `livePhotoAtomicityViolation`으로 거부되고, 정상 plan은 preferred still+paired-video를 함께 보존하면서 redundant resource set 전체를 함께 quarantine한다.
+- Apple PhotoKit은 local still + paired-video file을 하나의 Photos Live Photo asset으로 생성하는 documented composite route를 제공한다. Google Photos public upload API는 여전히 개별 `simpleMediaItem`만 문서화하며 composite Live Photo creation route는 없다. Google Photos iPhone/iPad app은 Photos library의 Live Photo backup을 지원하므로 filesystem/Drive 복원은 `pair validation -> PhotoKit composite import -> iOS Photos -> Google Photos app backup`이 현재 권장 경로다.
 - Takeout-only exact group 4,189개에는 redundant media occurrence 4,193개가 있으며 약 35.19 GiB다. album/collection semantics를 catalog로 옮기기 전에는 자동 제거하지 않는다.
 - 첫 real-library quarantine dry-run을 `~/Pictures` + Takeout 3개 root와 별도 연습용 quarantine target에 대해 수행했다. 강화된 regular-file/size/symlink-boundary + fresh SHA-256 preflight에서 `2,262` AUTO item / `4,195` resource가 통과했고 `filesModified=false`였다. target entry count도 0으로 확인해 실제 media 이동은 없었다.
 - synthetic self-test에서 standalone non-Takeout preferred copy를 유지하면서 exact Takeout copy만 quarantine으로 이동하고, 이동된 byte가 동일하며 restore manifest가 생성되고 agent-safe quarantine report에 path/filename이 노출되지 않음을 확인했다.

@@ -15,6 +15,7 @@ public enum QuarantineError: LocalizedError {
     case destinationAlreadyExists(String)
     case moveFailed(String)
     case rollbackFailed(String)
+    case livePhotoAtomicityViolation(String)
 
     public var errorDescription: String? {
         switch self {
@@ -46,6 +47,8 @@ public enum QuarantineError: LocalizedError {
             return "Could not move a planned resource into quarantine: \(path)"
         case let .rollbackFailed(path):
             return "Quarantine rollback could not restore a resource: \(path)"
+        case let .livePhotoAtomicityViolation(assetID):
+            return "A Live Photo mutation must include the complete planned resource set: \(assetID)"
         }
     }
 }
@@ -273,6 +276,10 @@ public enum QuarantineExecutor {
         verifiedItems.reserveCapacity(automatic.count)
 
         for item in automatic {
+            if item.kind == .livePhotoAsset {
+                try validateLivePhotoAtomicity(item: item, report: report)
+            }
+
             var moves: [VerifiedMove] = []
             moves.reserveCapacity(item.candidateResources.count)
 
@@ -376,6 +383,32 @@ public enum QuarantineExecutor {
         }
 
         return (targetURL, verifiedItems)
+    }
+
+    private static func validateLivePhotoAtomicity(
+        item: ReconciliationPlanItem,
+        report: ScanReport
+    ) throws {
+        guard let asset = report.livePhotos.first(where: { $0.assetID == item.subjectID }) else {
+            throw QuarantineError.livePhotoAtomicityViolation(item.subjectID)
+        }
+
+        let candidateRootIDs = Set(item.candidateResources.map(\.rootID))
+        let expected = Set(
+            asset.occurrences
+                .filter { candidateRootIDs.contains($0.rootID) }
+                .flatMap(\.resources)
+                .map { ResourceKey(rootID: $0.rootID, relativePath: $0.relativePath) }
+        )
+        let planned = Set(
+            item.candidateResources.map {
+                ResourceKey(rootID: $0.rootID, relativePath: $0.relativePath)
+            }
+        )
+
+        guard !candidateRootIDs.isEmpty, planned == expected else {
+            throw QuarantineError.livePhotoAtomicityViolation(item.subjectID)
+        }
     }
 
     private static func duplicateGroupIndex(

@@ -88,7 +88,32 @@ Official references:
 
 PhotoKit은 original Live Photo resource를 `.photo`, `.pairedVideo`로 노출한다. `.fullSizePhoto`, `.fullSizePairedVideo`, adjustment data 같은 edited/current resource도 구분한다. 따라서 Apple Photos가 validated Live Photo asset과 user album membership의 더 강한 automatic projection target이다.
 
-PhotoKit을 general remote iCloud REST service로 취급하지 않는다. adapter는 explicit Photos authorization을 요청하고 user-started session 동안만 실행되는 small local macOS component다.
+PhotoKit을 general remote iCloud REST service로 취급하지 않는다. adapter는 explicit Photos authorization을 요청하고 user-started session 동안만 실행되는 small local macOS/iOS component다.
+
+### 분리된 Live Photo resource의 복원 경로
+
+Apple은 `PHAssetCreationRequest`에 `.photo`와 `.pairedVideo` resource를 함께 추가해 하나의 Photos asset을 생성하는 공식 경로를 문서화한다. 따라서 Finder, 외장 disk, Google Drive 같은 file store에서 HEIC/HEIF/JPEG still과 MOV paired-video를 다시 확보한 경우, PhotoArchiveKit local helper가 pair를 검증한 뒤 두 resource를 **한 change request의 하나의 asset**으로 Apple Photos에 import하는 경로가 현재 가장 강한 복원 primitive다.
+
+built-in Finder/AirDrop 또는 Files/Google Drive share sheet가 분리된 두 파일을 자동으로 하나의 Live Photo asset으로 합친다고 공식적으로 보장된 문서는 현재 project review에서 확인하지 못했다. 그런 UI transfer는 `unverified`로 두고 controlled fixture로 별도 검증한다. 반면 PhotoKit composite creation은 `supported`다.
+
+Google Photos는 iPhone/iPad Google Photos app을 사용한 Live Photo backup을 공식 help에서 지원 대상으로 명시한다. 따라서 분리된 resource를 Google Photos에 복원해야 할 때의 권장 경로는 다음과 같다.
+
+```text
+filesystem / Google Drive still + paired video
+  -> local pair validation
+  -> Apple PhotoKit으로 하나의 Live Photo asset 생성
+  -> iPhone/iPad Photos library
+  -> Google Photos iOS/iPadOS app backup
+```
+
+Google Photos public Library API는 HEIC와 MOV를 각각 `simpleMediaItem`으로 upload할 수 있지만 두 upload token을 하나의 composite Live Photo로 결합하는 documented request가 없다. 따라서 `Drive/Finder -> Google Photos API`로 분리된 두 파일을 바로 1장의 Live Photo로 합치는 route는 현재 `unsupported/unverified`로 취급하고 성공을 주장하지 않는다.
+
+Official references:
+
+- [Apple — Capturing and saving Live Photos](https://developer.apple.com/documentation/avfoundation/capturing-and-saving-live-photos)
+- [`PHAssetCreationRequest.addResource`](https://developer.apple.com/documentation/photos/phassetcreationrequest/addresource%28with%3Afileurl%3Aoptions%3A%29)
+- [Google Photos — Back up photos & videos on iPhone/iPad](https://support.google.com/photos/answer/6193313?co=GENIE.Platform%3DiOS&hl=en)
+- [Google Photos API — Upload media](https://developers.google.com/photos/library/guides/upload-media)
 
 ## Direct provider-to-provider transfer
 
