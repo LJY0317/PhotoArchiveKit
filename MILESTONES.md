@@ -437,6 +437,34 @@ archive media file count                                                        
 
 Smoke 직후 기존 working catalog를 path 없이 점검한 결과 source root는 `local_library 1 + google_takeout 3`이었고 stable marker binding은 local library 1개에만 있었다. Takeout 3개는 marker가 없으므로 현재 정책에서 직접 AUTO copy authority가 되지 않으며, 전체 archive-plan에서는 canonical local source와 reconciliation evidence로만 사용되는 상태를 우선 확인해야 한다.
 
+## 2026-09-05 — Real-library 전체 archive preflight와 10-item bounded batch
+
+기존 working catalog의 실제 `local_library 1 + google_takeout 3` root 전체를 대상으로 외장 HDD test archive destination에 `archive-plan --agent-json`을 실행했다. 이 단계는 media를 복사하지 않았고, full plan은 local-private operations directory에만 저장했다. 결과는 총 logical asset `8,178`개에 대해 `AUTO 3,319 item / 4,947 resource`, `REVIEW 4,859 item / 5,727 resource`였다.
+
+REVIEW 원인은 path/file detail 없이 집계했을 때 다음과 같았다.
+
+```text
+source_root_marker_missing                 3,964 item
+incomplete_live_photo                        892 item
+conflicting_complete_live_photo_variants       3 item
+```
+
+이어 같은 immutable full plan을 `archive-copy --agent-json` dry-run으로 독립 재검증했고, AUTO `4,947` resource 전부가 current catalog evidence와 source byte precondition을 통과해 `copyRequiredResourceCount=4,947`, `filesModified=false`를 보고했다. 따라서 전체 apply를 바로 수행하지 않고 bounded first batch로 제한했다.
+
+첫 real-library batch는 full plan에서 **logical item 단위**로 앞의 AUTO 10개만 local-private batch plan으로 파생했다. resource 단위 절단은 하지 않아 Live Photo atomicity를 유지했으며, batch 구성은 `standalone 5 + Live Photo 5 = 10 item / 15 resource`였다. 이 batch plan slicing은 현재 제품 CLI 기능이 아니라 이번 실전 검증을 위한 local-private 보조 절차다.
+
+```text
+bounded batch dry-run: 10 item / 15 resource, copy-required 15              PASS
+bounded batch apply filesModified=true                                       PASS
+verified final resource count                                                  15
+destination catalog commit                                                   PASS
+portable snapshot written                                                    PASS
+immediate replay filesModified=false                                         PASS
+Git worktree remained clean                                                  PASS
+```
+
+이로써 synthetic -> 실제 외장 HDD 1-resource smoke -> 실제 working catalog 전체 preflight -> real-library 10-item/15-resource bounded apply의 단계적 검증을 완료했다. 전체 `4,947` AUTO resource apply는 아직 수행하지 않는다. 다음 판단은 Takeout 3개 root에 stable marker를 부여해 현재 `source_root_marker_missing` 3,964 item을 자동 권한 대상으로 재평가할지, 현재 marker 상태를 유지한 채 local-authoritative AUTO만 batch로 확장할지 결정하는 것이다.
+
 ## 2026-09-04 — Product North Star 고정
 
 최초 제품 목적을 `docs/PROJECT_NORTH_STAR.md`와 `AGENTS.md`의 explicit scope gate로 고정했다.
