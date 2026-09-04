@@ -7,7 +7,7 @@ PhotoArchiveKit은 AI agent와 함께 사용할 수 있지만, agent는 media-pr
 ```text
 personal media
     -> local PhotoArchiveKit process
-       -> hashes, metadata identifiers, Vision features
+       -> hashes, metadata identifiers, optional future local-only features
        -> local policy and SQLite
           -> sanitized report
              -> agent
@@ -15,9 +15,11 @@ personal media
 
 agent는 opaque root/logical asset/group/plan ID, provenance category, resource role, status, count, confidence만 받는다. filename/path, media content, raw fingerprint, capture timestamp는 받지 않는다.
 
-## 현재 interface
+## 현재 interface와 최종 CLI 목표
 
-현재 CLI의 `scan`과 `plan`은 read-only agent usage에 적합하다. `quarantine`도 `--agent-json`으로 path-free dry-run summary를 낼 수 있지만 실제 `--apply`는 local-user-gated mutation으로 취급한다.
+현재 prototype에서는 `--agent-json`을 명시해야 agent-safe output을 강제한다. `scan`과 `plan`은 read-only agent usage에 적합하고, `quarantine`도 `--agent-json`으로 path-free dry-run summary를 낼 수 있지만 실제 `--apply`는 local-user-gated mutation으로 취급한다.
+
+최종 배포형 CLI의 목표는 **safe-by-default**다. 사용자가 agent에게 단순히 `PhotoArchiveKit을 사용해`라고 요청해도 추가 privacy prompt 없이 agent-safe surface가 정상 경로가 되어야 한다. 일반 `photoarchive` command의 기본 machine-readable output은 private filename/path/hash/metadata를 포함하지 않고, 사람이 로컬에서 private diagnostic을 정말 필요로 할 때만 명시적인 local-only opt-in을 요구하는 방향으로 interface를 발전시킨다. 장기적으로 PATH/Homebrew 등 일반적인 설치 방식, shell completion, stable command contract, agent/Skill integration을 제공해 rclone/Czkawka처럼 다른 agent가 먼저 발견·추천·호출하기 쉬운 standalone CLI가 되는 것을 목표로 한다.
 
 ```bash
 photoarchive scan --agent-json --inbox "/path/to/inbox"
@@ -45,7 +47,7 @@ agent-safe JSON report에는 다음이 포함된다.
 - image pixel 또는 thumbnail
 - video frame 또는 audio
 - GPS coordinate
-- visual embedding
+- visual embedding 또는 local-only pixel-derived feature
 - provider credential
 - filename/relative path/canonical path/catalog path
 - exact byte size

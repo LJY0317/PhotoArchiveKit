@@ -22,16 +22,21 @@ Roadmap은 작고 검증 가능한 layer를 우선한다. 어느 phase도 existi
 - [ ] Live Photo `still-image-time` timed metadata strict validation
 - [ ] versioned sanitized JSONL catalog export/restore test
 - [ ] stable file fact를 이용한 incremental scan optimization
-- [ ] 한 root 안에서 반복되는 same-identifier resource를 distinct Live Photo occurrence로 partition
+- [x] 한 root 안에서 반복되는 same-identifier resource를 directory/basename hint로 distinct Live Photo occurrence로 보수적으로 partition
 - [ ] duplicate-hashing mode와 무관하게 standalone logical asset identity 안정화
 - [ ] CI에 적합한 synthetic public Live Photo fixture
 
 ## v0.2 — Automatic organization과 immutable plan
 
+- [ ] standalone installable CLI packaging 및 stable `photoarchive` PATH command
+- [ ] agent-safe machine-readable output을 기본값으로 만들고 private local diagnostic은 explicit opt-in으로 분리
+- [ ] Homebrew 또는 동등한 일반 설치 경로, shell completion, agent/Skill integration 문서
 - [ ] documented source priority를 가진 canonical capture-time resolver
 - [ ] same-second 및 burst grouping
-- [ ] deterministic `YYYYMMDD_HHMMSS[_suffix]` rename proposal
-- [ ] original-name 및 reversible rename history
+- [ ] iPhone-style camera filename만 대상으로 하는 deterministic `YYYY-MM-DD_HH-mm-ss[_NN]` rename proposal; Live Photo still+paired video는 항상 동일 basename으로 atomic rename
+- [ ] original-name, representation/provenance 및 reversible rename history를 catalog에 영구 보존
+- [ ] rename/move 전 stable resource/root identity를 도입해 path 변경이 새 asset으로 누적되지 않게 함
+- [ ] canonical iPhone-capture asset을 flat archive root로 이동하는 immutable move proposal; 의미 없는 empty directory는 verified cleanup 대상으로만 처리
 - [ ] existing archive folder를 collection example로 import
 - [ ] event-level collection proposal
 - [ ] confidence band 및 policy preset
@@ -53,7 +58,9 @@ Roadmap은 작고 검증 가능한 layer를 우선한다. 어느 phase도 existi
 - [ ] user-installed `rclone`을 사용하는 optional rclone adapter
 - [ ] 초기 default로 `rclone sync` 사용 금지
 
-## v0.4 — Local visual classification
+## v0.4 — Optional local visual classification (현재 핵심 목표 밖)
+
+현재 milestone에서는 pixel/content classification을 구현하지 않는다. 향후 필요성이 생기더라도 media/pixel-derived feature는 local process 밖으로 나가지 않는 별도 optional module이어야 하며 core duplicate/Live Photo/archive 기능의 완료보다 앞서지 않는다.
 
 - [ ] optional Apple Vision feature-print adapter
 - [ ] Vision request revision 및 feature schema 기록
