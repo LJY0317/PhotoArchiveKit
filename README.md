@@ -7,16 +7,20 @@
 
 PhotoArchiveKit is a local-first, session-based toolkit for preserving and organizing iPhone photos, videos, and Live Photos without making a photo-cloud provider the permanent source of truth.
 
+### Core promises
+
+1. **AI agents do not need your personal photo details.** In the normal agent workflow, the local PhotoArchiveKit process reads the files and computes hashes/metadata locally, while the AI agent receives only opaque IDs and minimal semantic state. `--agent-json` deliberately excludes media bytes, thumbnails/frames/audio, filenames, paths, raw hashes, Live Photo identifiers, GPS, MakerNote data, exact byte sizes, capture timestamps, and other file-level private details. This is designed so an AI agent can orchestrate cleanup without those identifying details being sent to the AI service. A general-purpose shell or an explicitly requested local diagnostic can bypass this boundary, so agents should use only the privacy-minimized CLI/API surface.
+2. **A Live Photo is one atomic asset.** Its still image and paired video are never treated as unrelated files for copy, move, rename, quarantine, archive, delete, or provider projection. If the complete resource graph cannot be preserved, the operation must expand to the whole asset or stop.
+3. **The archive stays human-readable and restorable.** Media remains as ordinary HEIC/JPEG/MOV/MP4 files on HDD/file replicas, while SQLite keeps the provider-neutral relationships, provenance, collections, and decisions needed to reconstruct a Live Photo or project the archive into Apple/Google services later.
+4. **Exact duplicates and similar photos are different problems.** Byte-identical redundancy may be automated after local verification; perceptually similar/best-shot candidates remain human-reviewed.
+
 The project is intentionally small. It does not run a background daemon, host a gallery server, or move media behind an opaque storage format. Media remains in ordinary filesystem folders; a local SQLite catalog records relationships and decisions that folders cannot express.
 
 > **Project status:** early safety-first prototype. `scan` and `plan` are read-only. A narrowly scoped `quarantine` command can move only freshly re-verified automatic exact-duplicate candidates into a user-supplied local quarantine directory; permanent deletion, archive rename/copy, and cloud upload are not implemented yet.
 
 ## Why this exists
 
-PhotoArchiveKit now treats two product values as highest priority:
-
-1. **Agent-private orchestration.** A local AI-agent workflow should not need to send media bytes, raw hashes, Live Photo identifiers, GPS, MakerNote data, filenames/paths, exact byte sizes, or capture timestamps to an AI service. `--agent-json` exposes only opaque IDs plus minimal status/provenance/count information.
-2. **Restorable Live Photo archiving.** A Live Photo is preserved as a still + paired-video resource graph so ordinary HDD/file-cloud replicas remain human-readable while retaining enough relationship state for later restoration or provider projection.
+The first product value is **agent-private orchestration**; the second is **atomic, restorable Live Photo preservation**. Duplicate reconciliation, preferred representation selection, human-readable folder organization, verified replicas, and provider-neutral migration state build on those two invariants.
 
 A durable photo archive has at least three different kinds of state:
 
@@ -45,7 +49,7 @@ The initial CLI can:
 
 - recursively scan one or more Inbox, archive, import, or reference roots;
 - identify Live Photo still and video resources from embedded Apple linkage metadata;
-- group copies found in different roots into one logical Live Photo asset;
+- group copies found in different roots into one logical Live Photo asset and partition repeated same-identifier exports into physical occurrences using directory/basename only as boundary hints after embedded identifier identity is established;
 - report completeness separately for every root, so a complete copy elsewhere does not hide a broken local copy;
 - find exact duplicate files using local SHA-256 comparisons only when file sizes match;
 - expose duplicate groups as stable opaque IDs instead of raw hashes;
@@ -55,6 +59,7 @@ The initial CLI can:
 - produce a human-readable report or sanitized JSON;
 - detect optional user-installed interoperability tools without requiring or bundling them;
 - dry-run or apply a local quarantine of only `automatic_redundant` exact candidates after fresh SHA-256 verification against a preferred copy; Live Photo candidate sets are verified before any resource in the item moves;
+- preserve Google Takeout source-folder/album-like memberships in local SQLite before collapsing Takeout-only exact standalone copies, without exposing collection names or paths to agent-safe output;
 - write a local restore manifest for applied quarantine sessions and roll back the whole session if a move fails;
 - perform all current analysis without contacting a network service.
 

@@ -299,6 +299,47 @@ struct PhotoArchiveSelfTest {
             !nestedAgentJSON.contains(takeoutRoot.path),
             "agent-safe report exposed a nested source path"
         )
+
+        let takeoutSemanticsRoot = temporary.appendingPathComponent("TakeoutSemantics", isDirectory: true)
+        let yearFolder = takeoutSemanticsRoot.appendingPathComponent("YearBucket", isDirectory: true)
+        let albumFolder = takeoutSemanticsRoot.appendingPathComponent("AlbumBucket", isDirectory: true)
+        try fileManager.createDirectory(at: yearFolder, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: albumFolder, withIntermediateDirectories: true)
+        let repeatedBytes = Data("synthetic-takeout-folder-membership-copy".utf8)
+        try repeatedBytes.write(to: yearFolder.appendingPathComponent("copy-a.jpg"))
+        try repeatedBytes.write(to: albumFolder.appendingPathComponent("copy-b.jpg"))
+
+        let semanticsScanner = try ArchiveScanner(
+            catalogURL: temporary.appendingPathComponent("semantics-catalog.sqlite3")
+        )
+        let semanticsReport = try await semanticsScanner.scan(roots: [
+            ScanRoot(
+                url: takeoutSemanticsRoot,
+                kind: .importSource,
+                provenance: .googleTakeout
+            )
+        ])
+        try require(
+            semanticsReport.roots.first?.sourceFolderSemanticsCaptured == true,
+            "Takeout source-folder semantics should be captured locally before physical collapse"
+        )
+        let semanticsPlan = ReconciliationPlanner.makePlan(from: semanticsReport)
+        try require(
+            semanticsPlan.summary.automaticRedundantResourceCount == 1,
+            "captured Takeout source-folder memberships should allow one exact standalone copy to remain physical"
+        )
+        try require(
+            semanticsPlan.items.contains { $0.reason == .takeoutSourceFolderSemanticsCaptured },
+            "the planner should record source-folder semantic capture as the reason for Takeout-only collapse"
+        )
+        let semanticsAgentJSON = String(
+            decoding: try encoder.encode(AgentSafeScanReport(report: semanticsReport)),
+            as: UTF8.self
+        )
+        try require(
+            !semanticsAgentJSON.contains("YearBucket") && !semanticsAgentJSON.contains("AlbumBucket"),
+            "agent-safe report exposed Takeout collection names"
+        )
     }
 
     private static func require(_ condition: @autoclosure () throws -> Bool, _ message: String) throws {

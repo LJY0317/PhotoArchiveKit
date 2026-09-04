@@ -315,6 +315,74 @@ final class SQLiteCatalog {
         return liveAssetIDs
     }
 
+    func persistTakeoutSourceCollections(resources: [ProbedResource]) throws -> Set<String> {
+        var capturedRootIDs = Set<String>()
+
+        for resource in resources {
+            guard resource.root.provenance == .googleTakeout,
+                  resource.mediaKind == .image || resource.mediaKind == .video,
+                  let assetID = resource.persistentAssetID
+            else {
+                continue
+            }
+
+            capturedRootIDs.insert(resource.root.id)
+            let directory = (resource.relativePath as NSString).deletingLastPathComponent
+            guard !directory.isEmpty else { continue }
+
+            var parentCollectionID: String?
+            var relativeDirectory = ""
+            for component in directory.split(separator: "/").map(String.init) where !component.isEmpty {
+                relativeDirectory = relativeDirectory.isEmpty
+                    ? component
+                    : relativeDirectory + "/" + component
+                let sourceKey = resource.root.id + ":" + relativeDirectory
+
+                let collectionID: String
+                if let existing = try queryText(
+                    "SELECT collection_id FROM source_collection_keys WHERE source_key = ?",
+                    bindings: [.text(sourceKey)]
+                ) {
+                    collectionID = existing
+                } else {
+                    collectionID = opaqueID(prefix: "C")
+                    try run(
+                        """
+                        INSERT INTO collections (id, name, parent_id, collection_type, created_at)
+                        VALUES (?, ?, ?, 'google_takeout_source_folder', ?)
+                        """,
+                        bindings: [
+                            .text(collectionID),
+                            .text(component),
+                            parentCollectionID.map(SQLiteBinding.text) ?? .null,
+                            .double(Date().timeIntervalSince1970)
+                        ]
+                    )
+                    try run(
+                        "INSERT INTO source_collection_keys (source_key, collection_id) VALUES (?, ?)",
+                        bindings: [.text(sourceKey), .text(collectionID)]
+                    )
+                }
+
+                parentCollectionID = collectionID
+            }
+
+            if let collectionID = parentCollectionID {
+                try run(
+                    """
+                    INSERT INTO memberships (asset_id, collection_id, membership_origin)
+                    VALUES (?, ?, 'google_takeout_source_folder')
+                    ON CONFLICT(asset_id, collection_id) DO UPDATE SET
+                        membership_origin = excluded.membership_origin
+                    """,
+                    bindings: [.text(assetID), .text(collectionID)]
+                )
+            }
+        }
+
+        return capturedRootIDs
+    }
+
     func persistDuplicateGroups(
         sessionID: String,
         resources: [ProbedResource],
@@ -651,6 +719,11 @@ final class SQLiteCatalog {
                 collection_id TEXT NOT NULL REFERENCES collections(id) ON DELETE CASCADE,
                 membership_origin TEXT NOT NULL,
                 PRIMARY KEY(asset_id, collection_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS source_collection_keys (
+                source_key TEXT PRIMARY KEY,
+                collection_id TEXT NOT NULL UNIQUE REFERENCES collections(id) ON DELETE CASCADE
             );
 
             CREATE TABLE IF NOT EXISTS provider_objects (

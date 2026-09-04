@@ -29,6 +29,48 @@ enum AssetAssembler {
             .sorted(by: resourceSort)
     }
 
+    static func partitionOccurrences(_ resources: [ProbedResource]) -> [[ProbedResource]] {
+        struct DirectoryKey: Hashable {
+            let directory: String
+        }
+
+        let byDirectory = Dictionary(grouping: resources) { resource in
+            DirectoryKey(directory: (resource.relativePath as NSString).deletingLastPathComponent)
+        }
+
+        var occurrences: [[ProbedResource]] = []
+
+        for directoryGroup in byDirectory.values {
+            let byStem = Dictionary(grouping: directoryGroup) { resource in
+                ((resource.relativePath as NSString).lastPathComponent as NSString)
+                    .deletingPathExtension
+                    .lowercased()
+            }
+            var consumed = Set<String>()
+
+            for stemGroup in byStem.values {
+                let stills = stemGroup.filter { $0.mediaKind == .image }
+                let videos = stemGroup.filter { $0.mediaKind == .video }
+                guard stills.count == 1, videos.count == 1 else { continue }
+
+                let pair = [stills[0], videos[0]].sorted(by: resourceSort)
+                occurrences.append(pair)
+                consumed.formUnion(pair.map(\.relativePath))
+            }
+
+            let remainder = directoryGroup
+                .filter { !consumed.contains($0.relativePath) }
+                .sorted(by: resourceSort)
+            if !remainder.isEmpty {
+                occurrences.append(remainder)
+            }
+        }
+
+        return occurrences.sorted { lhs, rhs in
+            firstPath(in: lhs) < firstPath(in: rhs)
+        }
+    }
+
     static func occurrenceStatus(stillCount: Int, videoCount: Int) -> LivePhotoOccurrenceStatus {
         switch (stillCount, videoCount) {
         case (1, 1):

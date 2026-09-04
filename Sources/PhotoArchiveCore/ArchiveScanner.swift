@@ -81,6 +81,9 @@ public final class ArchiveScanner {
             try catalog.withTransaction {
                 try catalog.persistResources(sessionID: sessionID, resources: &resources)
                 _ = try catalog.persistAssets(sessionID: sessionID, resources: &resources)
+                let sourceFolderSemanticsCapturedRootIDs = try catalog.persistTakeoutSourceCollections(
+                    resources: resources
+                )
 
                 let internalDuplicateGroups = duplicateGroups(from: resources)
                 let duplicateGroupIDs = try catalog.persistDuplicateGroups(
@@ -95,7 +98,8 @@ public final class ArchiveScanner {
                     duplicateGroups: internalDuplicateGroups,
                     duplicateGroupIDs: duplicateGroupIDs,
                     initialWarnings: warnings,
-                    eventGap: options.eventGap
+                    eventGap: options.eventGap,
+                    sourceFolderSemanticsCapturedRootIDs: sourceFolderSemanticsCapturedRootIDs
                 )
                 try catalog.persistEvents(
                     sessionID: sessionID,
@@ -470,7 +474,8 @@ public final class ArchiveScanner {
         duplicateGroups: [InternalDuplicateGroup],
         duplicateGroupIDs: [Data: String],
         initialWarnings: [ScanWarning],
-        eventGap: TimeInterval
+        eventGap: TimeInterval,
+        sourceFolderSemanticsCapturedRootIDs: Set<String>
     ) -> ReportParts {
         let assemblies = AssetAssembler.livePhotoAssemblies(from: resources)
         var warnings = initialWarnings
@@ -482,37 +487,42 @@ public final class ArchiveScanner {
             }
 
             let rootGroups = Dictionary(grouping: assembly.resources, by: { $0.root.id })
-            let occurrences = rootGroups.values.map { group -> LivePhotoOccurrenceReport in
-                let stills = group.filter { $0.mediaKind == .image }
-                let videos = group.filter { $0.mediaKind == .video }
-                let status = AssetAssembler.occurrenceStatus(
-                    stillCount: stills.count,
-                    videoCount: videos.count
-                )
-                let representative = group[0]
-                let report = LivePhotoOccurrenceReport(
-                    rootID: representative.root.id,
-                    rootLabel: representative.root.label,
-                    status: status,
-                    stillCount: stills.count,
-                    videoCount: videos.count,
-                    resources: group.map(AssetAssembler.resourceReference).sorted {
-                        $0.relativePath < $1.relativePath
-                    }
-                )
-
-                if status != .complete {
-                    warnings.append(ScanWarning(
-                        code: "live_photo_occurrence_\(status.rawValue)",
-                        message: livePhotoWarningMessage(status),
+            let occurrences = rootGroups.values
+                .flatMap { AssetAssembler.partitionOccurrences($0) }
+                .map { group -> LivePhotoOccurrenceReport in
+                    let stills = group.filter { $0.mediaKind == .image }
+                    let videos = group.filter { $0.mediaKind == .video }
+                    let status = AssetAssembler.occurrenceStatus(
+                        stillCount: stills.count,
+                        videoCount: videos.count
+                    )
+                    let representative = group[0]
+                    let report = LivePhotoOccurrenceReport(
                         rootID: representative.root.id,
-                        relativePath: group.map(\.relativePath).sorted().first
-                    ))
+                        rootLabel: representative.root.label,
+                        status: status,
+                        stillCount: stills.count,
+                        videoCount: videos.count,
+                        resources: group.map(AssetAssembler.resourceReference).sorted {
+                            $0.relativePath < $1.relativePath
+                        }
+                    )
+
+                    if status != .complete {
+                        warnings.append(ScanWarning(
+                            code: "live_photo_occurrence_\(status.rawValue)",
+                            message: livePhotoWarningMessage(status),
+                            rootID: representative.root.id,
+                            relativePath: group.map(\.relativePath).sorted().first
+                        ))
+                    }
+                    occurrencesByRoot[representative.root.id, default: []].append(report)
+                    return report
                 }
-                occurrencesByRoot[representative.root.id, default: []].append(report)
-                return report
-            }
-            .sorted { ($0.rootLabel, $0.rootID) < ($1.rootLabel, $1.rootID) }
+                .sorted {
+                    ($0.rootLabel, $0.rootID, $0.resources.first?.relativePath ?? "")
+                        < ($1.rootLabel, $1.rootID, $1.resources.first?.relativePath ?? "")
+                }
 
             return LivePhotoAssetReport(
                 assetID: assetID,
@@ -554,7 +564,8 @@ public final class ArchiveScanner {
                     $0.mediaKind == .video && $0.identifierFingerprint == nil
                 },
                 sidecars: rootResources.count { $0.mediaKind == .sidecar },
-                metadataProbeFailures: rootResources.filter(\.metadataProbeFailed).count
+                metadataProbeFailures: rootResources.filter(\.metadataProbeFailed).count,
+                sourceFolderSemanticsCaptured: sourceFolderSemanticsCapturedRootIDs.contains(root.id)
             )
         }
         .sorted { ($0.label, $0.rootID) < ($1.label, $1.rootID) }

@@ -32,7 +32,7 @@
 - time-gap 기반 event folder suggestion
 - 사람이 읽는 output과 local diagnostic `--json`
 - filename/path, byte size, capture timestamp, catalog path 등을 제거하는 AI agent용 `--agent-json` privacy-minimized output
-- read-only `photoarchive plan` preferred-representation reconciliation: non-Takeout exact copy 우선, Live Photo canonical coverage, unresolved exact variant review
+- read-only `photoarchive plan` preferred-representation reconciliation: non-Takeout exact copy 우선, Live Photo canonical coverage, repeated same-identifier occurrence partitioning, Takeout source-folder semantics 보존 후 standalone Takeout-only exact collapse, unresolved Live Photo variant review
 - `photoarchive quarantine`: 기본 dry-run, `--apply`에서만 `automatic_redundant` exact 후보를 사용자 지정 local quarantine으로 이동. apply 직전 source/preferred의 regular-file·size·symlink boundary와 fresh SHA-256을 재검증하고, Live Photo item은 전체 resource가 검증된 뒤 이동하며, session 실패 시 이미 이동한 resource를 전체 rollback. 완료 session에는 local restore manifest를 남김
 - 선택적 `--exact-engine czkawka`: Czkawka cache/prehash candidate discovery 후 native SHA-256 재검증; 기본 `automatic`은 현재 native exact path
 - 필수 third-party binary 없이 optional tool 감지
@@ -108,9 +108,11 @@ swift run photoarchive-selftest
 - wall-clock benchmark는 `Czkawka candidate discovery + native verification` 약 37.66초, native-only 약 36.21초였다. 현재 hybrid는 이중 작업 때문에 더 빠르지 않으므로 `automatic`은 native를 유지한다.
 - quarantine executor가 Live Photo plan을 독립적으로 atomicity 재검증하도록 강화했다. synthetic test에서 4-resource covered Live Photo 중 1개 resource를 제거한 tampered plan은 mutation 전에 `livePhotoAtomicityViolation`으로 거부되고, 정상 plan은 preferred still+paired-video를 함께 보존하면서 redundant resource set 전체를 함께 quarantine한다.
 - Apple PhotoKit은 local still + paired-video file을 하나의 Photos Live Photo asset으로 생성하는 documented composite route를 제공한다. Google Photos public upload API는 여전히 개별 `simpleMediaItem`만 문서화하며 composite Live Photo creation route는 없다. Google Photos iPhone/iPad app은 Photos library의 Live Photo backup을 지원하므로 filesystem/Drive 복원은 `pair validation -> PhotoKit composite import -> iOS Photos -> Google Photos app backup`이 현재 권장 경로다.
-- Takeout-only exact group 4,189개에는 redundant media occurrence 4,193개가 있으며 약 35.19 GiB다. album/collection semantics를 catalog로 옮기기 전에는 자동 제거하지 않는다.
+- 첫 quarantine 이후 남은 Takeout-only standalone exact group에 대해 source-folder hierarchy와 logical-asset membership을 local SQLite `collections`/`memberships`에 보존하도록 구현했다. collection 이름/path는 agent-safe output에 노출하지 않는다. 이 semantic capture 뒤 real-library planner는 3,765 group에서 physical excess 3,769 resource를 AUTO redundant로 승격했다.
 - 첫 real-library quarantine dry-run을 `~/Pictures` + Takeout 3개 root와 별도 연습용 quarantine target에 대해 수행했다. 강화된 regular-file/size/symlink-boundary + fresh SHA-256 preflight에서 `2,262` AUTO item / `4,195` resource가 통과했다.
-- 이어 같은 AUTO 집합을 실제 quarantine에 적용했다. manifest는 `state=complete`, `4,195` move를 기록했고 postcondition 전수검사에서 source 잔존 0, destination 누락 0, destination size mismatch 0이었다. 재scan 결과 resource는 `30,240 -> 26,045`로 정확히 4,195 감소했지만 logical asset `8,178`, logical Live Photo `2,710`, local-library complete Live Photo `1,604`는 모두 그대로였다. 재plan에서 `automaticRedundantResourceCount=0`이 되어 이번 safe-auto 집합을 정확히 소진했다. 남은 `7,805` review resource는 그대로 보존했다.
+- 이어 같은 AUTO 집합을 실제 quarantine에 적용했다. manifest는 `state=complete`, `4,195` move를 기록했고 postcondition 전수검사에서 source 잔존 0, destination 누락 0, destination size mismatch 0이었다. 재scan 결과 resource는 `30,240 -> 26,045`로 정확히 4,195 감소했지만 logical asset `8,178`, logical Live Photo `2,710`, local-library complete Live Photo `1,604`는 모두 그대로였다.
+- 이후 same-identifier occurrence를 directory/basename boundary hint로 partition하되 embedded identifier를 identity authority로 유지하도록 개선했다. real-library에서 추가 22 Live Photo item / 44 resource가 canonical coverage AUTO로 승격했다.
+- Takeout source-folder semantics capture까지 적용한 최신 real-library plan은 `3,787` AUTO item / `3,813` resource와 `190` REVIEW item / `227` resource다. AUTO = source-folder semantics가 보존된 Takeout-only standalone exact excess `3,769` + 새로 partition된 Live Photo canonical coverage `44`. REVIEW = complete preferred Live Photo가 없는 `220` resource + uncovered Live Photo variant `7`. 이 3,813개는 fresh SHA-256 quarantine dry-run을 통과했고 `filesModified=false`였다.
 - synthetic self-test에서 standalone non-Takeout preferred copy를 유지하면서 exact Takeout copy만 quarantine으로 이동하고, 이동된 byte가 동일하며 restore manifest가 생성되고 agent-safe quarantine report에 path/filename이 노출되지 않음을 확인했다.
 
 private fixture와 temporary catalog는 repository에 포함하지 않는다.
@@ -124,7 +126,7 @@ private fixture와 temporary catalog는 repository에 포함하지 않는다.
 - versioned JSONL catalog export/restore가 없다.
 - SQLite persistence 외 incremental metadata/hash cache optimization이 없다.
 - event grouping은 time-based만 구현되어 있으며 archive-guided semantic folder prediction은 계획 단계다.
-- 같은 source root 안에서 동일 Live Photo identifier의 반복 copy는 현재 하나의 ambiguous occurrence로 요약된다. duplicated export folder를 위한 occurrence partitioning이 필요하다. 다만 canonical coverage가 성립하는 current Takeout cleanup에서는 occurrence partitioning 없이도 반복 exact copy 상당수를 안전하게 처리할 수 있다.
+- same-identifier occurrence partitioning은 현재 same embedded identifier 안에서 directory와 basename을 boundary hint로 사용하는 보수적 1차 구현이다. 같은 directory/stem 안에 여러 still/video가 겹치거나 complete pair가 어디에도 없는 경우는 review에 남긴다.
 - standalone exact copy는 exact-duplicate hashing이 켜진 경우에만 하나의 logical asset으로 합쳐진다. scan mode 간 stable identity가 필요하다.
 - PhotoKit, Google Photos, Takeout, rclone, Czkawka, ExifTool, ffprobe 실행 adapter가 아직 없다.
 - Google Photos public API는 full existing-library reconciliation interface로 취급할 수 없다.
@@ -144,11 +146,11 @@ private fixture와 temporary catalog는 repository에 포함하지 않는다.
 
 ## 다음 구체 작업
 
-1. 연습용 real quarantine을 실제 적용한 뒤 manifest/rollback/재-scan 결과를 검증하고, 필요하면 `restore-quarantine`과 resumable recovery를 추가한다. 현재 Chat/DevSpace terminal surface는 실제 사용자 파일 move 실행을 허용하지 않아 real-library 검증은 dry-run까지 완료된 상태다.
-2. canonical coverage로 풀리지 않는 271 mixed-exact Takeout resource를 위해 same-identifier occurrence partitioning을 구현한다. embedded identifier는 pairing authority로 유지하고 directory/co-location, basename, source export structure, exact equivalence는 partition hint로만 사용한다.
-3. Czkawka image/video similarity adapter를 추가해 byte가 다른 probable duplicate만 opaque review group으로 agent에 제공한다. raw pHash/frame/cache/path는 local adapter 안에 둔다.
-4. native incremental hash cache를 설계해 unchanged file의 full SHA-256 재계산을 줄인다. Czkawka exact accelerator는 이중 hashing을 피할 수 있을 때만 benchmark 후 `automatic` 후보로 재평가한다.
-5. Takeout-only exact duplicate를 한 physical representation으로 collapse하기 전에 album/collection membership 등 필요한 Takeout semantics를 catalog로 import한다.
+1. 최신 dry-run에서 fresh verification을 통과한 `3,813` AUTO resource의 두 번째 연습용 quarantine을 사용자 승인 후 적용하고, manifest/postcondition/재-scan을 검증한다.
+2. 남은 `227` mixed-exact Live Photo review는 complete paired-video evidence가 없는 still-only asset이 대부분이므로 자동 제거하지 않는다. additional source/backup에서 paired video를 찾거나 strict restore evidence가 생길 때만 재평가한다.
+3. `restore-quarantine`과 resumable recovery를 추가해 reversible mutation lifecycle을 완성한다.
+4. Czkawka image/video similarity adapter를 추가해 byte가 다른 probable duplicate만 opaque review group으로 agent에 제공한다. raw pHash/frame/cache/path는 local adapter 안에 둔다.
+5. native incremental hash cache를 설계해 unchanged file의 full SHA-256 재계산을 줄인다. Czkawka exact accelerator는 이중 hashing을 피할 수 있을 때만 benchmark 후 `automatic` 후보로 재평가한다.
 6. preferred-representation plan을 immutable persisted plan으로 발전시키고 direct byte verification 옵션과 stable replay precondition을 추가한다.
 7. persisted mutation 전에 stable movable root ID와 archive-root marker 추가
 8. strict Live Photo timed-metadata validation 추가

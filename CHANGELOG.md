@@ -26,6 +26,8 @@ PhotoArchiveKit의 중요한 변경 사항을 여기에 기록한다.
 - non-Takeout exact copy 우선과 Live Photo canonical coverage를 적용하는 read-only `photoarchive plan` 및 agent-safe reconciliation plan
 - 선택적 `--exact-engine czkawka` candidate discovery + native SHA-256 verification cross-check; real-library benchmark 결과 기본 `automatic` exact path는 현재 native 유지
 - same-session `photoarchive quarantine`: 기본 dry-run, 명시적 `--apply`에서만 `automatic_redundant` exact candidate를 local quarantine으로 move. apply 직전 regular-file/size/symlink boundary와 fresh SHA-256을 다시 검증하고, Live Photo item 전체 검증 후 이동하며, session failure 시 전체 rollback과 local restore manifest를 제공
+- repeated same-identifier Live Photo export를 directory/basename boundary hint로 occurrence partitioning하되 embedded identifier를 identity authority로 유지
+- Google Takeout source-folder hierarchy와 asset membership을 local SQLite에 보존한 뒤 Takeout-only exact standalone duplicate를 한 physical copy로 collapse할 수 있는 reconciliation policy
 - Live Photo mutation은 touched occurrence/root의 complete resource set이 plan에 없으면 실행 전 거부하는 독립 atomicity guard; partial still/video plan을 허용하지 않음
 
 ### 보안

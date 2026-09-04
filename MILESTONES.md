@@ -206,6 +206,25 @@ remaining review resources           7805
 
 따라서 첫 실제 mutation은 계획한 4,195개 resource만 reversible quarantine으로 이동했고, local canonical Live Photo completeness와 logical asset graph는 변하지 않았다. restore manifest는 local quarantine에만 보존하며 repository에는 포함하지 않는다.
 
+## 2026-09-04 — Post-quarantine semantic collapse 개선
+
+첫 real-library quarantine 뒤 남은 review를 두 종류로 분해했다. same-identifier Live Photo occurrence를 root당 한 덩어리로 보던 scanner를 개선해 embedded identifier를 identity authority로 유지하면서 directory/basename을 boundary hint로 occurrence를 partition했다. 이 변경만으로 22 Live Photo item / 44 resource가 추가 canonical-coverage AUTO로 승격했다.
+
+Takeout-only standalone exact copy는 물리 파일을 줄이기 전에 원래 Takeout source-folder hierarchy와 logical asset membership을 local SQLite `collections`/`memberships`에 보존하도록 구현했다. collection 이름/path는 agent-safe output에 노출하지 않는다. 실제 library에서 source semantics capture 후 3,765 exact group의 physical excess 3,769 resource가 AUTO로 전환됐다.
+
+최신 agent-safe plan:
+
+```text
+automatic items/resources        3787 / 3813
+  Takeout source-folder captured 3765 / 3769
+  Live Photo canonical coverage    22 /   44
+review items/resources            190 /  227
+  no complete preferred Live      186 /  220
+  uncovered Live variant            4 /    7
+```
+
+3,813 AUTO resource는 fresh SHA-256 quarantine dry-run을 통과했고 `filesModified=false`였다. 남은 227 resource는 대부분 local과 Takeout 모두 paired video가 확인되지 않는 still-only Live Photo resource이므로 Live Photo atomicity 원칙상 자동 제거하지 않는다.
+
 ## 2026-09-04 — Product North Star 고정
 
 최초 제품 목적을 `docs/PROJECT_NORTH_STAR.md`와 `AGENTS.md`의 explicit scope gate로 고정했다.

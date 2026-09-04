@@ -7,16 +7,20 @@
 
 PhotoArchiveKit은 iPhone 사진·동영상·Live Photo를 특정 사진 클라우드 공급자에 영구 종속시키지 않고 보존하고 정리하기 위한 **로컬 우선·세션 기반 도구**입니다.
 
+### 최우선 핵심 약속
+
+1. **AI agent가 개인 사진의 식별 가능한 세부정보를 읽을 필요가 없습니다.** 정상 agent workflow에서는 PhotoArchiveKit의 로컬 프로세스가 파일을 읽고 hash·metadata를 Mac 안에서 계산하며, AI agent에는 opaque ID와 최소 semantic state만 전달합니다. `--agent-json`은 media byte, thumbnail/frame/audio, filename, path, raw hash, Live Photo identifier, GPS, MakerNote, exact byte size, capture timestamp 등 file-level private detail을 의도적으로 제외합니다. 따라서 AI agent가 정리를 지휘하더라도 이런 개인 식별 정보를 AI service로 보내지 않는 구조를 기본값으로 합니다. 단, general-purpose shell이나 사용자가 명시적으로 요청한 local diagnostic은 이 경계를 우회할 수 있으므로 agent는 privacy-minimized CLI/API surface만 사용해야 합니다.
+2. **Live Photo는 무조건 하나의 atomic asset입니다.** still image와 paired video를 copy, move, rename, quarantine, archive, delete, provider projection에서 서로 독립 파일처럼 처리하지 않습니다. 전체 resource graph를 보존할 수 없으면 operation을 전체 asset으로 확장하거나 중단합니다.
+3. **Archive는 사람이 읽을 수 있고 다시 복원 가능해야 합니다.** media는 HDD/file replica에 평범한 HEIC/JPEG/MOV/MP4 파일로 남기고, SQLite에는 Live Photo 관계, provenance, collection, decision 같은 provider-neutral semantic state를 보존합니다.
+4. **완전 동일 중복과 유사 사진은 다른 문제입니다.** byte-identical redundancy는 local verification 후 자동화할 수 있지만, perceptual similarity와 best-shot 선택은 사람이 검토하는 영역으로 남깁니다.
+
 프로젝트는 의도적으로 가볍게 유지합니다. 백그라운드 daemon을 실행하거나 별도 gallery server를 운영하지 않으며, 미디어를 불투명한 전용 저장 형식 안으로 옮기지 않습니다. 사진과 동영상은 일반 파일시스템 폴더에 남고, 폴더만으로 표현할 수 없는 관계와 결정만 로컬 SQLite catalog에 기록합니다.
 
 > **현재 상태:** 초기 safety-first prototype입니다. `scan`과 `plan`은 읽기 전용입니다. 제한된 `quarantine` 명령은 fresh verification을 다시 통과한 automatic exact-duplicate 후보만 사용자가 지정한 local quarantine 폴더로 이동할 수 있습니다. 영구 삭제, archive rename/copy, cloud upload는 아직 구현하지 않았습니다.
 
 ## 왜 필요한가
 
-PhotoArchiveKit은 이제 두 가지 가치를 가장 높은 우선순위로 둡니다.
-
-1. **Agent-private orchestration:** AI agent가 local CLI를 이용해 정리하더라도 media byte, raw hash, Live Photo identifier, GPS, MakerNote, filename/path, exact byte size, capture timestamp 같은 개인 media/file detail을 AI service에 보낼 필요가 없어야 합니다. `--agent-json`은 opaque ID와 최소 status/provenance/count 정보만 제공합니다.
-2. **복원 가능한 Live Photo archive:** Live Photo를 still + paired-video resource graph로 보존해 일반 HDD/file-cloud replica가 사람이 읽을 수 있는 파일 형태를 유지하면서도 미래에 Live Photo 복원 또는 provider projection에 필요한 관계를 잃지 않게 합니다.
+첫 번째 핵심 가치는 **agent-private orchestration**, 두 번째는 **atomic하고 복원 가능한 Live Photo 보존**입니다. duplicate reconciliation, preferred representation, 사람이 읽을 수 있는 folder organization, verified replica, provider-neutral migration state는 이 두 invariant 위에 쌓입니다.
 
 장기 사진 archive에는 최소 세 종류의 상태가 있습니다.
 
@@ -45,7 +49,7 @@ byte 보존 복제본          provenance와 이력
 
 - Inbox, archive, import, reference root를 하나 이상 재귀적으로 scan
 - 내부 Apple linkage metadata로 Live Photo의 still/video resource 식별
-- 서로 다른 root에서 발견된 사본을 하나의 논리 Live Photo asset으로 통합
+- 서로 다른 root에서 발견된 사본을 하나의 논리 Live Photo asset으로 통합하고, embedded identifier로 identity를 먼저 확정한 뒤 directory/basename은 경계 힌트로만 사용해 반복 export occurrence를 분할
 - 다른 root에 완전한 사본이 있어도 현재 root의 누락을 숨기지 않도록 root별 completeness 보고
 - 크기가 같은 후보에 한해 로컬 SHA-256으로 exact duplicate 탐색
 - 실제 hash 대신 재사용 가능한 opaque duplicate group ID 출력
@@ -55,6 +59,7 @@ byte 보존 복제본          provenance와 이력
 - 사람이 읽는 report와 privacy-safe JSON report 제공
 - 선택적 외부 도구의 설치 여부만 감지하며 필수 의존성으로 만들지 않음
 - `automatic_redundant` exact 후보만 fresh SHA-256으로 preferred copy와 다시 검증한 뒤 local quarantine dry-run/apply 가능; Live Photo candidate set은 해당 item의 모든 resource 검증이 끝난 뒤에만 이동
+- Google Takeout의 source-folder/album-like membership을 local SQLite에 먼저 보존한 뒤 Takeout-only exact standalone copy를 물리적으로 collapse할 수 있으며, collection 이름/path는 agent-safe output에 노출하지 않음
 - 적용된 quarantine session에 local restore manifest를 남기고, 이동 중 오류가 발생하면 그 session에서 이미 이동한 resource 전체를 rollback
 - 현재 모든 분석 단계는 network에 접속하지 않음
 

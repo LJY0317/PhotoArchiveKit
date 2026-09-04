@@ -238,6 +238,7 @@ public struct RootScanReport: Codable, Sendable, Equatable {
     public let standaloneVideos: Int
     public let sidecars: Int
     public let metadataProbeFailures: Int
+    public let sourceFolderSemanticsCaptured: Bool
 
     public init(
         rootID: String,
@@ -252,7 +253,8 @@ public struct RootScanReport: Codable, Sendable, Equatable {
         standaloneImages: Int,
         standaloneVideos: Int,
         sidecars: Int,
-        metadataProbeFailures: Int
+        metadataProbeFailures: Int,
+        sourceFolderSemanticsCaptured: Bool = false
     ) {
         self.rootID = rootID
         self.label = label
@@ -267,6 +269,7 @@ public struct RootScanReport: Codable, Sendable, Equatable {
         self.standaloneVideos = standaloneVideos
         self.sidecars = sidecars
         self.metadataProbeFailures = metadataProbeFailures
+        self.sourceFolderSemanticsCaptured = sourceFolderSemanticsCaptured
     }
 }
 
@@ -324,6 +327,7 @@ public struct AgentSafeRootReport: Codable, Sendable, Equatable {
     public let standaloneVideos: Int
     public let sidecars: Int
     public let metadataProbeFailures: Int
+    public let sourceFolderSemanticsCaptured: Bool
 }
 
 public struct AgentSafeLivePhotoOccurrenceReport: Codable, Sendable, Equatable {
@@ -387,7 +391,8 @@ public struct AgentSafeScanReport: Codable, Sendable, Equatable {
                 standaloneImages: root.standaloneImages,
                 standaloneVideos: root.standaloneVideos,
                 sidecars: root.sidecars,
-                metadataProbeFailures: root.metadataProbeFailures
+                metadataProbeFailures: root.metadataProbeFailures,
+                sourceFolderSemanticsCaptured: root.sourceFolderSemanticsCaptured
             )
         }
         livePhotos = report.livePhotos.map { asset in

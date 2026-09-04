@@ -17,6 +17,7 @@ public enum ReconciliationReason: String, Codable, Sendable {
     case noCompletePreferredLivePhoto = "no_complete_preferred_live_photo"
     case uncoveredLivePhotoVariant = "uncovered_live_photo_variant"
     case takeoutCollectionSemanticsPending = "takeout_collection_semantics_pending"
+    case takeoutSourceFolderSemanticsCaptured = "takeout_source_folder_semantics_captured"
 }
 
 public struct ReconciliationPlanItem: Codable, Sendable, Equatable {
@@ -153,7 +154,7 @@ public enum ReconciliationPlanner {
         let reviewItems = items.filter { $0.decision == .review }
         return ReconciliationPlan(
             schemaVersion: 1,
-            policy: "prefer_non_takeout_exact_v1",
+            policy: "prefer_non_takeout_exact_v2",
             sessionID: report.sessionID,
             summary: ReconciliationPlanSummary(
                 automaticItemCount: automaticItems.count,
@@ -191,6 +192,22 @@ public enum ReconciliationPlanner {
                 )
             }
 
+            let sortedTakeout = takeout.sorted(by: resourceSort)
+            let sourceFolderSemanticsCaptured = sortedTakeout.allSatisfy { resource in
+                rootsByID[resource.rootID]?.sourceFolderSemanticsCaptured == true
+            }
+            if sourceFolderSemanticsCaptured, let canonical = sortedTakeout.first {
+                return DraftItem(
+                    kind: .takeoutOnlyExactGroup,
+                    subjectID: group.groupID,
+                    decision: .automaticRedundant,
+                    reason: .takeoutSourceFolderSemanticsCaptured,
+                    preferredRootID: canonical.rootID,
+                    preferredResources: [canonical],
+                    candidateResources: Array(sortedTakeout.dropFirst())
+                )
+            }
+
             return DraftItem(
                 kind: .takeoutOnlyExactGroup,
                 subjectID: group.groupID,
@@ -198,7 +215,7 @@ public enum ReconciliationPlanner {
                 reason: .takeoutCollectionSemanticsPending,
                 preferredRootID: nil,
                 preferredResources: [],
-                candidateResources: takeout.sorted(by: resourceSort)
+                candidateResources: sortedTakeout
             )
         }
     }

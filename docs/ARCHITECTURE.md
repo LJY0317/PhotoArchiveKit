@@ -242,6 +242,10 @@ apply precondition:
 
 stable movable root marker가 아직 없기 때문에 이 same-session path를 일반적인 persisted apply로 확장하지 않는다. archive copy/rename, offline plan replay, missing-root reconciliation 같은 이후 mutation에는 stable root identity가 선행되어야 한다.
 
+### Takeout source-folder semantics before physical collapse
+
+Takeout-only standalone exact duplicates may represent the same bytes repeated in year folders and album-like folders. Before reducing those copies to one physical representation, PhotoArchiveKit records the source-folder hierarchy as local `collections` and the logical asset's membership in each observed folder. Folder names and paths stay inside the local catalog and are not included in agent-safe output. Once every involved Takeout root reports `sourceFolderSemanticsCaptured`, the planner may keep one exact physical copy and quarantine only the excess copies; this does not claim every Takeout folder is a confirmed Google album, only that the original source organization has been preserved losslessly enough for later interpretation.
+
 ### Similar/derived copy
 
 perceptual similarity, matching capture time, provider provenance는 review candidate를 만들 수 있지만 asset collapse나 automatic deletion 권한이 아니다.
