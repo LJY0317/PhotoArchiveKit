@@ -120,7 +120,7 @@ swift run photoarchive-selftest
 - 첫 real-library quarantine dry-run을 `~/Pictures` + Takeout 3개 root와 별도 연습용 quarantine target에 대해 수행했다. 강화된 regular-file/size/symlink-boundary + fresh SHA-256 preflight에서 `2,262` AUTO item / `4,195` resource가 통과했다.
 - 이어 같은 AUTO 집합을 실제 quarantine에 적용했다. manifest는 `state=complete`, `4,195` move를 기록했고 postcondition 전수검사에서 source 잔존 0, destination 누락 0, destination size mismatch 0이었다. 재scan 결과 resource는 `30,240 -> 26,045`로 정확히 4,195 감소했지만 logical asset `8,178`, logical Live Photo `2,710`, local-library complete Live Photo `1,604`는 모두 그대로였다.
 - 이후 same-identifier occurrence를 directory/basename boundary hint로 partition하되 embedded identifier를 identity authority로 유지하도록 개선했다. real-library에서 추가 22 Live Photo item / 44 resource가 canonical coverage AUTO로 승격했다.
-- Takeout source-folder semantics capture까지 적용한 최신 real-library plan은 `3,787` AUTO item / `3,813` resource와 `190` REVIEW item / `227` resource다. AUTO = source-folder semantics가 보존된 Takeout-only standalone exact excess `3,769` + 새로 partition된 Live Photo canonical coverage `44`. REVIEW = complete preferred Live Photo가 없는 `220` resource + uncovered Live Photo variant `7`. 이 3,813개는 fresh SHA-256 quarantine dry-run을 통과했고 `filesModified=false`였다.
+- Takeout source-folder semantics capture까지 적용한 다음 real-library plan은 `3,787` AUTO item / `3,813` resource와 `190` REVIEW item / `227` resource였다. AUTO = source-folder semantics가 보존된 Takeout-only standalone exact excess `3,769` + 새로 partition된 Live Photo canonical coverage `44`. 이 3,813개는 두 번째 real-library quarantine에 실제 적용됐고 manifest `complete`, source 잔존 0, destination 누락 0, size mismatch 0을 확인했다. resource는 `26,045 -> 22,232`, logical asset `8,178`, logical Live Photo `2,710`은 유지됐다. 현재 exact reconciliation은 AUTO 0 / REVIEW 227이다.
 - synthetic self-test에서 standalone non-Takeout preferred copy를 유지하면서 exact Takeout copy만 quarantine으로 이동하고, 이동된 byte가 동일하며 restore manifest가 생성되고 agent-safe quarantine report에 path/filename이 노출되지 않음을 확인했다.
 - synthetic tracking test에서 같은 volume의 file rename 후 resource ID가 유지되고 old/new path가 location history로 남으며, `.photoarchive-root`가 있는 root directory 자체를 다른 path로 이동한 뒤에도 root ID가 유지됨을 확인했다.
 - organization synthetic apply test에서 `IMG_1234.HEIC + IMG_1234.MOV`가 같은 capture-time destination basename으로 함께 이동하고 custom filename은 보존되며 marker gate, post-move filesystem ID/size, restore manifest, agent-safe path redaction이 동작함을 확인했다.
@@ -157,9 +157,9 @@ private fixture와 temporary catalog는 repository에 포함하지 않는다.
 
 ## 다음 구체 작업
 
-1. 최신 dry-run에서 fresh verification을 통과한 `3,813` AUTO resource의 두 번째 연습용 quarantine을 사용자 승인 후 적용하고, manifest/postcondition/재-scan을 검증한다.
-2. 남은 `227` mixed-exact Live Photo review는 complete paired-video evidence가 없는 still-only asset이 대부분이므로 자동 제거하지 않는다. additional source/backup에서 paired video를 찾거나 strict restore evidence가 생길 때만 재평가한다.
-3. `restore-quarantine`과 resumable recovery를 추가해 reversible mutation lifecycle을 완성한다.
+1. 남은 `227` mixed-exact Live Photo review는 complete paired-video evidence가 없는 still-only asset이 대부분이므로 자동 제거하지 않는다. additional source/backup/HDD에서 paired video를 찾거나 strict restore evidence가 생길 때만 재평가한다.
+2. `restore-quarantine`과 resumable recovery를 추가해 두 번의 real quarantine을 포함한 reversible mutation lifecycle을 완성한다.
+3. 현재 organization REVIEW의 `multiple_physical_representations` 168 resource는 exact-deletion hold와 별개다. preferred representation 선택을 더 강화한 뒤 rename/flatten 대상으로 재평가한다.
 4. Czkawka image/video similarity adapter를 추가해 byte가 다른 probable duplicate만 opaque review group으로 agent에 제공한다. raw pHash/frame/cache/path는 local adapter 안에 둔다.
 5. native incremental hash cache를 설계해 unchanged file의 full SHA-256 재계산을 줄인다. Czkawka exact accelerator는 이중 hashing을 피할 수 있을 때만 benchmark 후 `automatic` 후보로 재평가한다.
 6. preferred-representation plan을 immutable persisted plan으로 발전시키고 direct byte verification 옵션과 stable replay precondition을 추가한다.

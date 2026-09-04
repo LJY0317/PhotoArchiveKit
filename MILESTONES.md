@@ -225,6 +225,25 @@ review items/resources            190 /  227
 
 3,813 AUTO resource는 fresh SHA-256 quarantine dry-run을 통과했고 `filesModified=false`였다. 남은 227 resource는 대부분 local과 Takeout 모두 paired video가 확인되지 않는 still-only Live Photo resource이므로 Live Photo atomicity 원칙상 자동 제거하지 않는다.
 
+## 2026-09-04 — 두 번째 real-library reversible quarantine 적용
+
+Post-quarantine semantic collapse에서 새로 AUTO로 승격된 3,787 item / 3,813 resource를 같은 연습용 quarantine에 실제 적용했다.
+
+```text
+moved resources                      3813
+manifest state                   complete
+source files still present              0
+missing quarantine destinations         0
+destination size mismatches              0
+recognized resources      26045 -> 22232
+logical assets             8178 -> 8178
+logical Live Photos        2710 -> 2710
+post-quarantine AUTO resources          0
+remaining exact-review resources       227
+```
+
+첫 번째와 두 번째 quarantine을 합치면 exact evidence로 안전하게 격리한 resource는 총 8,008개다. 두 번 모두 permanent deletion 없이 reversible quarantine만 수행했고 logical asset/Live Photo count는 유지됐다.
+
 ## 2026-09-04 — Stable identity와 organization planning
 
 Path를 physical identity로 취급하지 않도록 same-volume filesystem resource identifier와 resource location/original-name history를 catalog에 추가했다. Synthetic regression에서 파일 rename 후 resource ID가 유지되고 old/new path history가 모두 남는 것을 확인했다.
