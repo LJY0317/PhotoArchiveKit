@@ -63,7 +63,7 @@ The initial CLI can:
 - detect optional user-installed interoperability tools without requiring or bundling them;
 - dry-run or apply a local quarantine of only `automatic_redundant` exact candidates after fresh SHA-256 verification against a preferred copy; Live Photo candidate sets are verified before any resource in the item moves;
 - preserve Google Takeout source-folder/album-like memberships in local SQLite before collapsing Takeout-only exact standalone copies, without exposing collection names or paths to agent-safe output;
-- write a local restore manifest for applied quarantine sessions and roll back the whole session if a move fails;
+- write a local restore manifest for applied quarantine sessions, roll back the whole session if a move fails, and dry-run/apply `restore-quarantine` only after the quarantined bytes are freshly re-verified against the local catalog's original SHA-256 evidence;
 - perform all current analysis without contacting a network service.
 
 The catalog stores local integrity data, including raw exact-file hashes, because it needs them for reliable comparison. Human diagnostics and AI-agent output are deliberately separated: `--json` may include local paths for troubleshooting, while `--agent-json` omits paths, filenames, byte sizes, capture timestamps, raw hashes, Live Photo identifiers, GPS, previews, and other file-level private data. AI agents should use only the agent-safe surface.
@@ -133,6 +133,13 @@ swift run photoarchive quarantine \
 ```
 
 Only after reviewing the dry run, add `--apply` to move the freshly re-verified `automatic_redundant` resources. `REVIEW` items are never moved by this command. Applied sessions are stored under `PhotoArchiveKit/<session-id>/` inside the supplied quarantine directory together with a local restore manifest.
+
+A completed quarantine can be safely reversed. Restore is also a dry run by default and re-hashes every quarantined resource against the exact hash retained only in the local catalog before moving anything back:
+
+```bash
+swift run photoarchive restore-quarantine --agent-json "/path/to/session/manifest.json"
+# add --apply only after the preflight succeeds
+```
 
 Preview deterministic camera-name cleanup without moving media:
 

@@ -134,6 +134,43 @@ struct PhotoArchiveSelfTest {
         }
         try require(fileManager.fileExists(atPath: manifestPath), "quarantine restore manifest is missing")
 
+        let restoreDryRun = try QuarantineRestoreExecutor.preflight(
+            manifestURL: URL(fileURLWithPath: manifestPath),
+            catalogURL: temporary.appendingPathComponent("catalog.sqlite3")
+        )
+        try require(restoreDryRun.dryRun, "quarantine restore preflight must be a dry run")
+        try require(restoreDryRun.resourceCount == 1, "restore preflight should contain one synthetic resource")
+        try require(!fileManager.fileExists(atPath: fileB.path), "restore dry run must not move the quarantined resource")
+        let restoreAgentJSON = String(
+            decoding: try encoder.encode(AgentSafeQuarantineRestoreReport(report: restoreDryRun)),
+            as: UTF8.self
+        )
+        try require(!restoreAgentJSON.contains(rootB.path), "agent-safe restore output exposed a source path")
+        try require(!restoreAgentJSON.contains(manifestPath), "agent-safe restore output exposed a manifest path")
+        try require(!restoreAgentJSON.contains("copy.jpg"), "agent-safe restore output exposed a filename")
+
+        try Data("tampered-quarantine-resource".utf8).write(to: URL(fileURLWithPath: movedDestination))
+        do {
+            _ = try QuarantineRestoreExecutor.preflight(
+                manifestURL: URL(fileURLWithPath: manifestPath),
+                catalogURL: temporary.appendingPathComponent("catalog.sqlite3")
+            )
+            throw SelfTestFailure("restore preflight accepted a changed quarantine resource")
+        } catch QuarantineRestoreError.quarantineResourceChanged {
+            // Expected: restore must re-verify the local catalog's exact-file evidence.
+        }
+        try beforeB.write(to: URL(fileURLWithPath: movedDestination))
+
+        let restored = try QuarantineRestoreExecutor.apply(
+            manifestURL: URL(fileURLWithPath: manifestPath),
+            catalogURL: temporary.appendingPathComponent("catalog.sqlite3")
+        )
+        try require(restored.filesModified, "restore apply should report file modification")
+        try require(fileManager.fileExists(atPath: fileB.path), "restore apply did not return the resource to its source")
+        try require(!fileManager.fileExists(atPath: movedDestination), "restore apply left the resource in quarantine")
+        try require(try Data(contentsOf: fileB) == beforeB, "restored bytes changed")
+        try require(restored.restoreStatePath != nil, "restore apply should write local restore state")
+
         let trackingRoot = temporary.appendingPathComponent("Tracking", isDirectory: true)
         let trackingMovedRoot = temporary.appendingPathComponent("TrackingMoved", isDirectory: true)
         let trackingCatalog = temporary.appendingPathComponent("tracking.sqlite3")

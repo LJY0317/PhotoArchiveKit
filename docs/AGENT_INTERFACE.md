@@ -27,9 +27,10 @@ photoarchive plan --agent-json --local "/path/to/local" --takeout "/path/to/take
 photoarchive organize-plan --agent-json --local "/path/to/local"
 photoarchive organize --agent-json --local "/path/to/local"
 photoarchive quarantine --agent-json --to "/local/quarantine" --local "/path/to/local" --takeout "/path/to/takeout"
+photoarchive restore-quarantine --agent-json "/local/quarantine/PhotoArchiveKit/<session>/manifest.json"
 ```
 
-`plan`은 exact/provenance evidence를 opaque reconciliation item으로 만들고, `organize-plan`은 camera-style filename의 rename/flat-move를 opaque organization item으로 만든다. `organize`와 `quarantine`은 기본 dry-run이며 agent-safe output에는 item/resource count와 outcome만 반환한다. 실제 mutation gate는 사람이 local CLI에서 명시적으로 붙이는 `--apply`이고, organization apply는 stable root marker도 요구한다. 장기적으로는 short-lived approval token을 추가한다.
+`plan`은 exact/provenance evidence를 opaque reconciliation item으로 만들고, `organize-plan`은 camera-style filename의 rename/flat-move를 opaque organization item으로 만든다. `organize`, `quarantine`, `restore-quarantine`은 기본 dry-run이며 agent-safe output에는 item/resource count와 outcome만 반환한다. restore 과정의 manifest/source/destination path와 local exact hash도 agent에 전달하지 않는다. 실제 mutation gate는 사람이 local CLI에서 명시적으로 붙이는 `--apply`이고, organization apply는 stable root marker도 요구한다. 장기적으로는 short-lived approval token을 추가한다.
 
 agent-safe JSON report에는 다음이 포함된다.
 

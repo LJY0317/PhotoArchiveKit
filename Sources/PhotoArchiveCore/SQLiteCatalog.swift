@@ -957,6 +957,20 @@ final class SQLiteCatalog {
         }
     }
 
+    func quarantineRestoreRootPath(rootID: String) throws -> String? {
+        try queryText(
+            "SELECT canonical_path FROM source_roots WHERE id = ?",
+            bindings: [.text(rootID)]
+        )
+    }
+
+    func quarantineRestoreExactHash(rootID: String, relativePath: String) throws -> Data? {
+        try queryBlob(
+            "SELECT exact_hash FROM resources WHERE root_id = ? AND relative_path = ?",
+            bindings: [.text(rootID), .text(relativePath)]
+        )
+    }
+
     private func queryText(_ sql: String, bindings: [SQLiteBinding]) throws -> String? {
         try withStatement(sql, bindings: bindings) { statement in
             let result = sqlite3_step(statement)
@@ -966,6 +980,23 @@ final class SQLiteCatalog {
             }
             guard let text = sqlite3_column_text(statement, 0) else { return nil }
             return String(cString: text)
+        }
+    }
+
+    private func queryBlob(_ sql: String, bindings: [SQLiteBinding]) throws -> Data? {
+        try withStatement(sql, bindings: bindings) { statement in
+            let result = sqlite3_step(statement)
+            if result == SQLITE_DONE { return nil }
+            guard result == SQLITE_ROW else {
+                throw sqliteError(sql: sql)
+            }
+            guard sqlite3_column_type(statement, 0) != SQLITE_NULL,
+                  let bytes = sqlite3_column_blob(statement, 0)
+            else {
+                return nil
+            }
+            let count = Int(sqlite3_column_bytes(statement, 0))
+            return Data(bytes: bytes, count: count)
         }
     }
 

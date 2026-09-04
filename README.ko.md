@@ -63,7 +63,7 @@ byte 보존 복제본          provenance와 이력
 - 선택적 외부 도구의 설치 여부만 감지하며 필수 의존성으로 만들지 않음
 - `automatic_redundant` exact 후보만 fresh SHA-256으로 preferred copy와 다시 검증한 뒤 local quarantine dry-run/apply 가능; Live Photo candidate set은 해당 item의 모든 resource 검증이 끝난 뒤에만 이동
 - Google Takeout의 source-folder/album-like membership을 local SQLite에 먼저 보존한 뒤 Takeout-only exact standalone copy를 물리적으로 collapse할 수 있으며, collection 이름/path는 agent-safe output에 노출하지 않음
-- 적용된 quarantine session에 local restore manifest를 남기고, 이동 중 오류가 발생하면 그 session에서 이미 이동한 resource 전체를 rollback
+- 적용된 quarantine session에 local restore manifest를 남기고, 이동 중 오류가 발생하면 그 session에서 이미 이동한 resource 전체를 rollback하며, `restore-quarantine`도 local catalog의 원래 SHA-256 evidence와 quarantined byte를 fresh 검증한 뒤에만 dry-run/apply
 - 현재 모든 분석 단계는 network에 접속하지 않음
 
 정확한 중복 판정을 위해 catalog 내부에는 raw exact-file hash가 저장됩니다. 사람용 local diagnostic과 AI agent용 output은 분리합니다. `--json`은 troubleshooting을 위해 local path를 포함할 수 있지만, `--agent-json`은 path·filename·byte size·capture timestamp·raw hash·Live Photo identifier·GPS·preview 등 file-level private data를 제거합니다. AI agent는 agent-safe surface만 사용합니다.
@@ -133,6 +133,13 @@ swift run photoarchive quarantine \
 ```
 
 Dry-run을 확인한 뒤에만 `--apply`를 붙이면 fresh verification을 다시 통과한 `automatic_redundant` resource만 이동합니다. `REVIEW` 항목은 이 명령이 절대 이동하지 않습니다. 적용된 session은 quarantine 폴더 안의 `PhotoArchiveKit/<session-id>/` 아래에 원래 위치를 복원할 수 있는 local manifest와 함께 보존됩니다.
+
+완료된 quarantine은 안전하게 역복구할 수 있습니다. restore도 기본 dry-run이며, 실제 복원 전에 quarantined resource 전체를 local catalog에만 저장된 원래 exact SHA-256과 다시 비교합니다.
+
+```bash
+swift run photoarchive restore-quarantine --agent-json "/path/to/session/manifest.json"
+# preflight 성공 후에만 --apply 추가
+```
 
 실제 media를 움직이지 않고 camera-style filename 정리 계획을 볼 수 있습니다.
 

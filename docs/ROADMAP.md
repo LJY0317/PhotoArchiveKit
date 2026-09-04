@@ -52,7 +52,7 @@ Roadmap은 작고 검증 가능한 layer를 우선한다. 어느 phase도 existi
 - [ ] staging copy, local byte verification, atomic finalization
 - [x] quarantine/organization mutation에서 Live Photo resource-set transaction + session rollback
 - [ ] checkpoint에서 interrupted session resume
-- [x] permanent deletion 대신 reversible quarantine
+- [x] permanent deletion 대신 reversible quarantine + catalog SHA-256 재검증을 거치는 dry-run/apply `restore-quarantine`
 - [ ] archive metadata directory에 catalog snapshot
 - [ ] replica policy 및 verification record
 - [ ] user-installed `rclone`을 사용하는 optional rclone adapter

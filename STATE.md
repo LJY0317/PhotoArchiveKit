@@ -34,6 +34,7 @@
 - filename/path, byte size, capture timestamp, catalog path 등을 제거하는 AI agent용 `--agent-json` privacy-minimized output
 - read-only `photoarchive plan` preferred-representation reconciliation: non-Takeout exact copy 우선, Live Photo canonical coverage, repeated same-identifier occurrence partitioning, Takeout source-folder semantics 보존 후 standalone Takeout-only exact collapse, unresolved Live Photo variant review
 - `photoarchive quarantine`: 기본 dry-run, `--apply`에서만 `automatic_redundant` exact 후보를 사용자 지정 local quarantine으로 이동. apply 직전 source/preferred의 regular-file·size·symlink boundary와 fresh SHA-256을 재검증하고, Live Photo item은 전체 resource가 검증된 뒤 이동하며, session 실패 시 이미 이동한 resource를 전체 rollback. 완료 session에는 local restore manifest를 남김
+- `photoarchive restore-quarantine`: 완료된 manifest를 기본 dry-run으로 역검증하고, original source가 비어 있는지와 quarantined resource가 local SQLite의 원래 exact SHA-256과 여전히 같은지 확인한 뒤 `--apply`에서만 복원. 실패 시 이미 복원한 resource를 다시 quarantine으로 rollback하며 agent-safe output에는 path/hash를 노출하지 않음
 - same-volume filesystem resource identifier + `resource_locations` history로 rename/move 후에도 physical resource ID를 유지하고, 최초 filename을 `resource_original_names`에 보존
 - `.photoarchive-root` stable marker 생성/인식과 marker key -> catalog root binding. marker가 유지되면 root directory 자체가 이동해도 기존 root ID를 재사용
 - `photoarchive organize-plan`: `IMG_####` / `IMG_E####` camera-style filename만 대상으로 local capture wall-clock 기반 `YYYY-MM-DD_HH-mm-ss[_NN]` flat rename/move proposal 생성. custom filename, incomplete Live Photo, multiple physical representation은 review
@@ -61,6 +62,7 @@ swift run photoarchive organize [--apply] [options] ROOT...
 swift run photoarchive root inspect PATH
 swift run photoarchive root init [--apply] PATH
 swift run photoarchive quarantine --to PATH [--apply] [options] ROOT...
+swift run photoarchive restore-quarantine [--apply] [--catalog PATH] MANIFEST
 swift run photoarchive-selftest
 ```
 
@@ -121,7 +123,8 @@ swift run photoarchive-selftest
 - 이어 같은 AUTO 집합을 실제 quarantine에 적용했다. manifest는 `state=complete`, `4,195` move를 기록했고 postcondition 전수검사에서 source 잔존 0, destination 누락 0, destination size mismatch 0이었다. 재scan 결과 resource는 `30,240 -> 26,045`로 정확히 4,195 감소했지만 logical asset `8,178`, logical Live Photo `2,710`, local-library complete Live Photo `1,604`는 모두 그대로였다.
 - 이후 same-identifier occurrence를 directory/basename boundary hint로 partition하되 embedded identifier를 identity authority로 유지하도록 개선했다. real-library에서 추가 22 Live Photo item / 44 resource가 canonical coverage AUTO로 승격했다.
 - Takeout source-folder semantics capture까지 적용한 다음 real-library plan은 `3,787` AUTO item / `3,813` resource와 `190` REVIEW item / `227` resource였다. AUTO = source-folder semantics가 보존된 Takeout-only standalone exact excess `3,769` + 새로 partition된 Live Photo canonical coverage `44`. 이 3,813개는 두 번째 real-library quarantine에 실제 적용됐고 manifest `complete`, source 잔존 0, destination 누락 0, size mismatch 0을 확인했다. resource는 `26,045 -> 22,232`, logical asset `8,178`, logical Live Photo `2,710`은 유지됐다. 현재 exact reconciliation은 AUTO 0 / REVIEW 227이다.
-- synthetic self-test에서 standalone non-Takeout preferred copy를 유지하면서 exact Takeout copy만 quarantine으로 이동하고, 이동된 byte가 동일하며 restore manifest가 생성되고 agent-safe quarantine report에 path/filename이 노출되지 않음을 확인했다.
+- synthetic self-test에서 standalone non-Takeout preferred copy를 유지하면서 exact Takeout copy만 quarantine으로 이동하고, 이동된 byte가 동일하며 restore manifest가 생성되고 agent-safe quarantine report에 path/filename이 노출되지 않음을 확인했다. 같은 fixture에서 restore dry-run/apply, tampered quarantined byte 거부, source 원위치 복원, restore-state 생성, agent-safe path redaction도 검증했다.
+- 두 real quarantine의 기존 v1 manifest도 `restore-quarantine --agent-json` dry-run을 통과했다: 첫 session `2,262 item / 4,195 resource`, 둘째 `3,787 item / 3,813 resource`, 둘 다 `filesModified=false`. 첫 legacy manifest의 과거 `photo` 단독 item 24개는 manifest 전체를 session 단위로 역복구하는 compatibility 경로로 취급하고, 새 manifest는 source-relative path와 strict Live Photo item completeness를 요구한다.
 - synthetic tracking test에서 같은 volume의 file rename 후 resource ID가 유지되고 old/new path가 location history로 남으며, `.photoarchive-root`가 있는 root directory 자체를 다른 path로 이동한 뒤에도 root ID가 유지됨을 확인했다.
 - organization synthetic apply test에서 `IMG_1234.HEIC + IMG_1234.MOV`가 같은 capture-time destination basename으로 함께 이동하고 custom filename은 보존되며 marker gate, post-move filesystem ID/size, restore manifest, agent-safe path redaction이 동작함을 확인했다.
 - real-library `organize-plan --agent-json` 최신 결과는 `2,765` AUTO item / `4,292` resource, `628` REVIEW item / `795` resource다. AUTO는 trusted timestamp 또는 timezone이 빠진 EXIF local wall-clock을 가진 iPhone camera-style filename이고, REVIEW는 filesystem fallback `58`, custom-name Live Photo `154 resource`, incomplete Live Photo `415 resource`, multiple physical representation `168 resource`다. 실제 rename/move는 아직 0개다.
@@ -158,9 +161,9 @@ private fixture와 temporary catalog는 repository에 포함하지 않는다.
 ## 다음 구체 작업
 
 1. 남은 `227` mixed-exact Live Photo review는 complete paired-video evidence가 없는 still-only asset이 대부분이므로 자동 제거하지 않는다. additional source/backup/HDD에서 paired video를 찾거나 strict restore evidence가 생길 때만 재평가한다.
-2. `restore-quarantine`과 resumable recovery를 추가해 두 번의 real quarantine을 포함한 reversible mutation lifecycle을 완성한다.
+2. quarantine의 forward/restore lifecycle은 현재 필요 수준에서 완료로 닫는다. interrupted-session resume은 향후 HDD archive copy/apply에서 실제 필요성이 생길 때 구현한다.
 3. 현재 organization REVIEW의 `multiple_physical_representations` 168 resource는 exact-deletion hold와 별개다. preferred representation 선택을 더 강화한 뒤 rename/flatten 대상으로 재평가한다.
-4. Czkawka image/video similarity adapter를 추가해 byte가 다른 probable duplicate만 opaque review group으로 agent에 제공한다. raw pHash/frame/cache/path는 local adapter 안에 둔다.
+4. Czkawka image/video similarity adapter는 residual human review가 실제 bottleneck이 될 때만 추가한다. 현재 core archive 흐름보다 앞서지 않는다.
 5. native incremental hash cache를 설계해 unchanged file의 full SHA-256 재계산을 줄인다. Czkawka exact accelerator는 이중 hashing을 피할 수 있을 때만 benchmark 후 `automatic` 후보로 재평가한다.
 6. preferred-representation plan을 immutable persisted plan으로 발전시키고 direct byte verification 옵션과 stable replay precondition을 추가한다.
 7. 실제 `~/Pictures`와 향후 HDD archive root에 stable root marker를 사용자 승인 후 초기화하고 relocation fixture를 real filesystem에서 확인

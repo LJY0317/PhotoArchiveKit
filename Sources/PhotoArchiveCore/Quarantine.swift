@@ -58,6 +58,7 @@ public struct QuarantineMoveRecord: Codable, Sendable, Equatable {
     public let rootID: String
     public let role: ResourceRole
     public let sourcePath: String
+    public let sourceRelativePath: String?
     public let destinationPath: String
     public let byteSize: Int64
 }
@@ -368,6 +369,7 @@ public enum QuarantineExecutor {
                         rootID: candidate.rootID,
                         role: candidate.role,
                         sourcePath: sourceURL.path,
+                        sourceRelativePath: candidate.relativePath,
                         destinationPath: destinationURL.path,
                         byteSize: candidate.byteSize
                     )

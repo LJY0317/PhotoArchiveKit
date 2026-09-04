@@ -240,6 +240,8 @@ apply precondition:
 
 이 quarantine은 오래된 persisted plan을 replay하지 않는다. session 도중 move가 실패하면 같은 quarantine session에서 이미 이동한 resource 전체를 reverse order로 원위치 rollback한다. successful apply는 quarantine target 안에 source/destination mapping을 가진 local restore manifest를 남긴다. permanent delete는 없다.
 
+`photoarchive restore-quarantine`은 이 manifest를 역방향 mutation authority로 사용하되 기본은 dry-run이다. original source가 비어 있어야 하고, quarantined file은 expected size뿐 아니라 local SQLite에 보존된 원래 exact SHA-256과 fresh하게 다시 일치해야 한다. 적용 중 실패하면 이미 source로 돌아간 resource를 다시 quarantine으로 rollback한다. agent-safe restore report에는 manifest/source/destination path나 hash가 포함되지 않는다. 현재 두 real quarantine의 legacy v1 manifest까지 dry-run 호환성을 검증했으므로, 별도의 더 복잡한 quarantine recovery subsystem은 실제 실패 사례가 생기기 전까지 추가하지 않는다.
+
 stable root marker 기능은 구현됐지만 existing root에는 자동으로 marker를 쓰지 않는다. persisted/offline plan replay, archive copy, missing-root reconciliation은 user-initialized marker와 immutable persisted plan/approval token을 함께 요구해야 한다.
 
 ### Organization mutation boundary

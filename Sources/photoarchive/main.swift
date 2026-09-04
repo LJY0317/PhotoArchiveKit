@@ -26,6 +26,8 @@ struct PhotoArchiveCLI {
                 try await runScan(arguments, mode: .organize)
             case "quarantine":
                 try await runScan(arguments, mode: .quarantine)
+            case "restore-quarantine":
+                try runRestoreQuarantine(arguments)
             case "root":
                 try runRoot(arguments)
             case "doctor":
@@ -40,6 +42,58 @@ struct PhotoArchiveCLI {
         } catch {
             writeStandardError("error: \(error.localizedDescription)\n")
             exit(1)
+        }
+    }
+
+    private static func runRestoreQuarantine(_ arguments: [String]) throws {
+        var catalogURL = PhotoArchivePaths.defaultCatalogURL
+        var apply = false
+        var outputJSON = false
+        var outputAgentJSON = false
+        var manifestPaths: [String] = []
+
+        var index = 0
+        while index < arguments.count {
+            let argument = arguments[index]
+            switch argument {
+            case "--catalog":
+                catalogURL = fileURL(try value(after: argument, at: &index, in: arguments))
+            case "--apply":
+                apply = true
+            case "--json":
+                outputJSON = true
+            case "--agent-json":
+                outputAgentJSON = true
+            case "--help", "-h":
+                printRestoreQuarantineHelp()
+                return
+            default:
+                if argument.hasPrefix("-") {
+                    throw CLIError("Unknown restore-quarantine option: \(argument)")
+                }
+                manifestPaths.append(argument)
+            }
+            index += 1
+        }
+
+        guard manifestPaths.count == 1 else {
+            throw CLIError("restore-quarantine requires exactly one manifest.json path.")
+        }
+        if outputJSON && outputAgentJSON {
+            throw CLIError("Use either --json or --agent-json, not both.")
+        }
+
+        let manifestURL = fileURL(manifestPaths[0])
+        let report = try apply
+            ? QuarantineRestoreExecutor.apply(manifestURL: manifestURL, catalogURL: catalogURL)
+            : QuarantineRestoreExecutor.preflight(manifestURL: manifestURL, catalogURL: catalogURL)
+
+        if outputAgentJSON {
+            try printJSON(AgentSafeQuarantineRestoreReport(report: report))
+        } else if outputJSON {
+            try printJSON(report)
+        } else {
+            printQuarantineRestoreReport(report)
         }
     }
 
@@ -392,6 +446,24 @@ struct PhotoArchiveCLI {
         }
     }
 
+    private static func printQuarantineRestoreReport(_ report: QuarantineRestoreReport) {
+        print(report.dryRun ? "PhotoArchiveKit quarantine restore dry run" : "PhotoArchiveKit quarantine restored")
+        print("Session: \(report.sessionID)")
+        print("Items: \(report.itemCount)")
+        print("Resources: \(report.resourceCount)")
+        print("Bytes: \(report.totalBytes)")
+        print("Manifest: \(report.manifestPath)")
+        if let restoreStatePath = report.restoreStatePath {
+            print("Restore state: \(restoreStatePath)")
+        }
+        print("")
+        if report.dryRun {
+            print("No files were modified. Re-run with --apply only after reviewing this restore preflight.")
+        } else {
+            print("Quarantined resources were restored to their recorded source locations.")
+        }
+    }
+
     private static func printQuarantineReport(_ report: QuarantineReport) {
         print(report.dryRun ? "PhotoArchiveKit quarantine dry run" : "PhotoArchiveKit quarantine applied")
         print("Session: \(report.sessionID)")
@@ -541,6 +613,7 @@ struct PhotoArchiveCLI {
               photoarchive organize-plan [options] ROOT...
               photoarchive organize [--apply] [options] ROOT...
               photoarchive quarantine --to PATH [--apply] [options] ROOT...
+              photoarchive restore-quarantine [--apply] [--catalog PATH] MANIFEST
               photoarchive root inspect PATH
               photoarchive root init [--apply] PATH
               photoarchive doctor
@@ -552,7 +625,31 @@ struct PhotoArchiveCLI {
 
             Run 'photoarchive scan --help', 'photoarchive plan --help',
             'photoarchive organize-plan --help', 'photoarchive organize --help',
-            or 'photoarchive quarantine --help' for options.
+            'photoarchive quarantine --help', or 'photoarchive restore-quarantine --help'
+            for options.
+            """
+        )
+    }
+
+    private static func printRestoreQuarantineHelp() {
+        print(
+            """
+            Usage:
+              photoarchive restore-quarantine [options] MANIFEST
+
+            Options:
+              --catalog PATH   SQLite catalog containing the original exact-file evidence
+              --apply          Restore after full preflight; default is dry-run
+              --json           Print local diagnostic JSON, including local manifest path
+              --agent-json     Print privacy-minimized JSON without file paths or hashes
+              --help           Show this help
+
+            Restore accepts only a completed quarantine manifest. Before any move it verifies
+            that every original source path is free, each quarantined resource is still a
+            regular file of the expected size, and its fresh SHA-256 matches the original
+            exact hash stored in the local catalog. Live Photo restore items must contain both
+            still and paired-video roles. A failed apply rolls already restored resources back
+            into quarantine. No permanent deletion is performed.
             """
         )
     }

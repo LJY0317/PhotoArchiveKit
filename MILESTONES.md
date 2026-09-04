@@ -244,6 +244,20 @@ remaining exact-review resources       227
 
 첫 번째와 두 번째 quarantine을 합치면 exact evidence로 안전하게 격리한 resource는 총 8,008개다. 두 번 모두 permanent deletion 없이 reversible quarantine만 수행했고 logical asset/Live Photo count는 유지됐다.
 
+## 2026-09-04 — Quarantine restore lifecycle 완료
+
+`photoarchive restore-quarantine`을 추가했다. completed manifest만 허용하고 기본은 dry-run이다. original source가 비어 있는지 확인한 뒤 quarantined resource를 expected size와 local SQLite에 남은 원래 exact SHA-256으로 fresh 검증하고, `--apply`에서만 source로 돌려놓는다. apply 중 실패하면 이미 복원한 resource를 다시 quarantine으로 reverse-order rollback한다. agent-safe report에는 manifest/source/destination path와 hash를 포함하지 않는다.
+
+Synthetic test에서 restore dry-run/apply, tampered quarantined byte 거부, byte-identical source 복원, restore-state 생성, agent-safe redaction을 검증했다. 또한 실제 두 quarantine의 기존 v1 manifest를 mutation 없이 dry-run 검증했다.
+
+```text
+first legacy session    2262 items / 4195 resources   PASS
+second legacy session   3787 items / 3813 resources   PASS
+files modified                                        0
+```
+
+첫 legacy manifest에는 stricter Live Photo mutation invariant 이전에 생성된 `photo` 단독 item 24개가 있어, legacy restore는 manifest 전체를 하나의 rollback session으로 원상복귀하는 compatibility 경로로 처리한다. 이후 새 manifest는 source-relative path를 기록하고 strict Live Photo item completeness를 요구한다. 이 실제 restore preflight까지 통과했으므로 quarantine forward/restore lifecycle은 현재 필요 수준에서 완료로 닫고, 더 복잡한 recovery subsystem은 실제 실패 사례가 생길 때만 다시 연다.
+
 ## 2026-09-04 — Stable identity와 organization planning
 
 Path를 physical identity로 취급하지 않도록 same-volume filesystem resource identifier와 resource location/original-name history를 catalog에 추가했다. Synthetic regression에서 파일 rename 후 resource ID가 유지되고 old/new path history가 모두 남는 것을 확인했다.
