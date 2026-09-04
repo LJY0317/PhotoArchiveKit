@@ -9,7 +9,7 @@ PhotoArchiveKit is a local-first, session-based toolkit for preserving and organ
 
 The project is intentionally small. It does not run a background daemon, host a gallery server, or move media behind an opaque storage format. Media remains in ordinary filesystem folders; a local SQLite catalog records relationships and decisions that folders cannot express.
 
-> **Project status:** early read-only prototype. The scanner is usable, but archive mutation, renaming, cloud upload, and deletion are not implemented yet.
+> **Project status:** early safety-first prototype. `scan` and `plan` are read-only. A narrowly scoped `quarantine` command can move only freshly re-verified automatic exact-duplicate candidates into a user-supplied local quarantine directory; permanent deletion, archive rename/copy, and cloud upload are not implemented yet.
 
 ## Why this exists
 
@@ -54,7 +54,9 @@ The initial CLI can:
 - persist resources, logical assets, provenance, duplicate groups, future collection mappings, and scan sessions in SQLite;
 - produce a human-readable report or sanitized JSON;
 - detect optional user-installed interoperability tools without requiring or bundling them;
-- complete all current work without modifying media files or contacting a network service.
+- dry-run or apply a local quarantine of only `automatic_redundant` exact candidates after fresh SHA-256 verification against a preferred copy; Live Photo candidate sets are verified before any resource in the item moves;
+- write a local restore manifest for applied quarantine sessions and roll back the whole session if a move fails;
+- perform all current analysis without contacting a network service.
 
 The catalog stores local integrity data, including raw exact-file hashes, because it needs them for reliable comparison. Human diagnostics and AI-agent output are deliberately separated: `--json` may include local paths for troubleshooting, while `--agent-json` omits paths, filenames, byte sizes, capture timestamps, raw hashes, Live Photo identifiers, GPS, previews, and other file-level private data. AI agents should use only the agent-safe surface.
 
@@ -111,7 +113,18 @@ swift run photoarchive plan \
   --takeout "~/Pictures/Takeout"
 ```
 
-For an AI agent, use `--agent-json` with either `scan` or `plan`; local diagnostic `--json` can contain paths.
+For an AI agent, use `--agent-json` with `scan`, `plan`, or `quarantine`; local diagnostic `--json` can contain paths.
+
+Preview a quarantine without moving anything:
+
+```bash
+swift run photoarchive quarantine \
+  --to "~/LJY Practice Trash" \
+  --local "~/Pictures" \
+  --takeout "~/Pictures/Takeout"
+```
+
+Only after reviewing the dry run, add `--apply` to move the freshly re-verified `automatic_redundant` resources. `REVIEW` items are never moved by this command. Applied sessions are stored under `PhotoArchiveKit/<session-id>/` inside the supplied quarantine directory together with a local restore manifest.
 
 Scan several sources together so exact copies, provenance, and cross-source Live Photo relationships can be reconciled without flattening the folders first:
 

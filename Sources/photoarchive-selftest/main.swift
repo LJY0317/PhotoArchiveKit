@@ -97,6 +97,42 @@ struct PhotoArchiveSelfTest {
             "agent-safe reconciliation plan exposed a path"
         )
 
+        let quarantineRoot = temporary.appendingPathComponent("Quarantine", isDirectory: true)
+        try fileManager.createDirectory(at: quarantineRoot, withIntermediateDirectories: true)
+        let quarantineDryRun = try QuarantineExecutor.preflight(
+            report: first,
+            plan: standalonePlan,
+            targetURL: quarantineRoot
+        )
+        try require(quarantineDryRun.dryRun, "quarantine preflight should be a dry run")
+        try require(quarantineDryRun.resourceCount == 1, "expected one synthetic quarantine candidate")
+        try require(fileManager.fileExists(atPath: fileB.path), "dry run must not move the Takeout copy")
+
+        let quarantineAgentJSON = String(
+            decoding: try encoder.encode(AgentSafeQuarantineReport(report: quarantineDryRun)),
+            as: UTF8.self
+        )
+        try require(!quarantineAgentJSON.contains(rootB.path), "agent-safe quarantine output exposed a path")
+        try require(!quarantineAgentJSON.contains("copy.jpg"), "agent-safe quarantine output exposed a filename")
+
+        let quarantineApplied = try QuarantineExecutor.apply(
+            report: first,
+            plan: standalonePlan,
+            targetURL: quarantineRoot
+        )
+        try require(quarantineApplied.filesModified, "quarantine apply should report file modification")
+        try require(fileManager.fileExists(atPath: fileA.path), "preferred local copy must remain in place")
+        try require(!fileManager.fileExists(atPath: fileB.path), "redundant Takeout copy should move to quarantine")
+        guard let movedDestination = quarantineApplied.moves.first?.destinationPath else {
+            throw SelfTestFailure("quarantine apply did not record a destination")
+        }
+        try require(fileManager.fileExists(atPath: movedDestination), "quarantined copy is missing at its destination")
+        try require(try Data(contentsOf: URL(fileURLWithPath: movedDestination)) == beforeB, "quarantined bytes changed")
+        guard let manifestPath = quarantineApplied.manifestPath else {
+            throw SelfTestFailure("quarantine apply did not create a restore manifest")
+        }
+        try require(fileManager.fileExists(atPath: manifestPath), "quarantine restore manifest is missing")
+
         let coverageReport = syntheticCanonicalCoverageReport()
         let coveragePlan = ReconciliationPlanner.makePlan(from: coverageReport)
         try require(

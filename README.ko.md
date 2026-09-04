@@ -9,7 +9,7 @@ PhotoArchiveKit은 iPhone 사진·동영상·Live Photo를 특정 사진 클라�
 
 프로젝트는 의도적으로 가볍게 유지합니다. 백그라운드 daemon을 실행하거나 별도 gallery server를 운영하지 않으며, 미디어를 불투명한 전용 저장 형식 안으로 옮기지 않습니다. 사진과 동영상은 일반 파일시스템 폴더에 남고, 폴더만으로 표현할 수 없는 관계와 결정만 로컬 SQLite catalog에 기록합니다.
 
-> **현재 상태:** 초기 읽기 전용 prototype입니다. scanner는 실제로 사용할 수 있지만 archive 변경, rename, cloud upload, 삭제는 아직 구현하지 않았습니다.
+> **현재 상태:** 초기 safety-first prototype입니다. `scan`과 `plan`은 읽기 전용입니다. 제한된 `quarantine` 명령은 fresh verification을 다시 통과한 automatic exact-duplicate 후보만 사용자가 지정한 local quarantine 폴더로 이동할 수 있습니다. 영구 삭제, archive rename/copy, cloud upload는 아직 구현하지 않았습니다.
 
 ## 왜 필요한가
 
@@ -54,7 +54,9 @@ byte 보존 복제본          provenance와 이력
 - resource, 논리 asset, provenance, duplicate group, 향후 collection mapping, scan session을 SQLite에 저장
 - 사람이 읽는 report와 privacy-safe JSON report 제공
 - 선택적 외부 도구의 설치 여부만 감지하며 필수 의존성으로 만들지 않음
-- 현재 모든 작업에서 media 파일을 변경하지 않고 network에 접속하지 않음
+- `automatic_redundant` exact 후보만 fresh SHA-256으로 preferred copy와 다시 검증한 뒤 local quarantine dry-run/apply 가능; Live Photo candidate set은 해당 item의 모든 resource 검증이 끝난 뒤에만 이동
+- 적용된 quarantine session에 local restore manifest를 남기고, 이동 중 오류가 발생하면 그 session에서 이미 이동한 resource 전체를 rollback
+- 현재 모든 분석 단계는 network에 접속하지 않음
 
 정확한 중복 판정을 위해 catalog 내부에는 raw exact-file hash가 저장됩니다. 사람용 local diagnostic과 AI agent용 output은 분리합니다. `--json`은 troubleshooting을 위해 local path를 포함할 수 있지만, `--agent-json`은 path·filename·byte size·capture timestamp·raw hash·Live Photo identifier·GPS·preview 등 file-level private data를 제거합니다. AI agent는 agent-safe surface만 사용합니다.
 
@@ -111,7 +113,18 @@ swift run photoarchive plan \
   --takeout "~/Pictures/Takeout"
 ```
 
-AI agent는 `scan`과 `plan` 모두에서 `--agent-json`을 사용해야 하며, path를 포함할 수 있는 local diagnostic `--json`은 agent에 전달하지 않습니다.
+AI agent는 `scan`, `plan`, `quarantine`에서 `--agent-json`을 사용해야 하며, path를 포함할 수 있는 local diagnostic `--json`은 agent에 전달하지 않습니다.
+
+아무 파일도 이동하지 않고 quarantine 후보를 먼저 검증합니다.
+
+```bash
+swift run photoarchive quarantine \
+  --to "~/LJY 연습용 임시 휴지통" \
+  --local "~/Pictures" \
+  --takeout "~/Pictures/Takeout"
+```
+
+Dry-run을 확인한 뒤에만 `--apply`를 붙이면 fresh verification을 다시 통과한 `automatic_redundant` resource만 이동합니다. `REVIEW` 항목은 이 명령이 절대 이동하지 않습니다. 적용된 session은 quarantine 폴더 안의 `PhotoArchiveKit/<session-id>/` 아래에 원래 위치를 복원할 수 있는 local manifest와 함께 보존됩니다.
 
 폴더를 먼저 한곳에 섞지 않고 여러 source를 함께 scan하면 exact copy, provenance, source 간 Live Photo 관계를 통합할 수 있습니다.
 

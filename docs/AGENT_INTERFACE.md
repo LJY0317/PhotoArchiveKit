@@ -17,14 +17,15 @@ agent는 opaque root/logical asset/group/plan ID, provenance category, resource 
 
 ## 현재 interface
 
-현재 CLI는 read-only agent usage에 적합하다.
+현재 CLI의 `scan`과 `plan`은 read-only agent usage에 적합하다. `quarantine`도 `--agent-json`으로 path-free dry-run summary를 낼 수 있지만 실제 `--apply`는 local-user-gated mutation으로 취급한다.
 
 ```bash
 photoarchive scan --agent-json --inbox "/path/to/inbox"
 photoarchive plan --agent-json --local "/path/to/local" --takeout "/path/to/takeout"
+photoarchive quarantine --agent-json --to "/local/quarantine" --local "/path/to/local" --takeout "/path/to/takeout"
 ```
 
-`plan`은 non-Takeout exact copy 우선 정책과 Live Photo canonical coverage를 적용해 `automatic_redundant`와 `review`를 opaque item으로 분리하지만 media를 변경하지 않는다.
+`plan`은 non-Takeout exact copy 우선 정책과 Live Photo canonical coverage를 적용해 `automatic_redundant`와 `review`를 opaque item으로 분리하지만 media를 변경하지 않는다. `quarantine` dry-run은 같은 plan을 fresh SHA-256으로 다시 검증한 뒤 item/resource count와 outcome만 agent에 반환한다. 현재 mutation gate는 사람이 local CLI에서 명시적으로 붙이는 `--apply`이며, 장기적으로는 short-lived approval token을 추가한다.
 
 agent-safe JSON report에는 다음이 포함된다.
 
@@ -123,6 +124,7 @@ agent가 할 수 있는 일:
 
 agent가 독립적으로 해서는 안 되는 일:
 
+- 사용자의 explicit local approval 없이 `quarantine --apply` 실행
 - media permanent delete
 - missing-root safety check override
 - validated Live Photo resource set 분리

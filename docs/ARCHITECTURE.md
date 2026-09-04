@@ -120,7 +120,7 @@ data model은 simple UI가 default Inbox 하나로 시작하더라도 여러 roo
 
 의도한 model에서는 path를 identity가 아니라 configuration으로 취급한다. opaque root ID가 relative path를 소유하고 configured Inbox 또는 mount location은 바뀔 수 있다.
 
-현재 read-only prototype은 canonical path로 existing root를 resolve하므로 configured root를 이동하면 새 root record가 생성된다. stable user-supplied root ID와 `.photoarchive-root` 같은 marker가 다음 root-identity milestone이다. future mutating command는 absence를 해석하거나 plan을 적용하기 전에 marker를 verify해야 한다. unavailable root를 mass deletion으로 해석해서는 안 된다.
+현재 root identity는 canonical path로 existing root를 resolve하므로 configured root를 이동하면 새 root record가 생성된다. stable user-supplied root ID와 `.photoarchive-root` 같은 marker가 다음 root-identity milestone이다. 제한된 same-session quarantine은 현재 root를 같은 invocation에서 scan하고 fresh verification한 뒤 즉시 적용하므로 persisted root identity를 추론하지 않는다. offline/persisted plan replay, archive copy/rename 등 이후 mutating command는 absence를 해석하거나 plan을 적용하기 전에 stable marker를 verify해야 한다. unavailable root를 mass deletion으로 해석해서는 안 된다.
 
 ## Session model
 
@@ -223,7 +223,24 @@ read-only `photoarchive plan`은 exact evidence와 provenance를 asset-level dec
 - Live Photo는 complete non-Takeout canonical occurrence를 먼저 선택한다.
 - canonical still/video와 같은 role의 exact group이 모든 Takeout resource를 cover하면 repeated Takeout occurrence의 내부 pairing이 ambiguous해도 canonical coverage로 Takeout set 전체를 automatic redundant candidate로 제안한다.
 - complete preferred occurrence가 없거나 canonical pair가 cover하지 못하는 exact variant가 있으면 review에 남긴다.
-- plan은 read-only이며 실제 delete/quarantine authority가 아니다.
+- plan 자체는 read-only다. mutation authority는 별도 quarantine/apply layer가 fresh precondition을 다시 검증한 뒤에만 가진다.
+
+### Quarantine mutation boundary
+
+현재 첫 mutation은 same-session `photoarchive quarantine`으로 제한한다. command는 scan -> reconciliation plan -> fresh verification을 같은 invocation에서 수행하며 기본은 dry-run이다. `--apply`가 있을 때만 `automatic_redundant` candidate를 user-supplied local quarantine으로 move한다.
+
+apply precondition:
+
+- source와 preferred counterpart가 여전히 regular file인지 확인
+- symlink로 registered root 밖으로 빠지지 않는지 확인
+- scan 당시 byte size와 현재 size가 같은지 확인
+- candidate와 preferred counterpart를 fresh full-file SHA-256으로 다시 비교
+- Live Photo item은 해당 candidate resource 전체가 검증된 뒤에만 첫 move 수행
+- destination collision이 있으면 mutation 전 중단
+
+이 quarantine은 오래된 persisted plan을 replay하지 않는다. session 도중 move가 실패하면 같은 quarantine session에서 이미 이동한 resource 전체를 reverse order로 원위치 rollback한다. successful apply는 quarantine target 안에 source/destination mapping을 가진 local restore manifest를 남긴다. permanent delete는 없다.
+
+stable movable root marker가 아직 없기 때문에 이 same-session path를 일반적인 persisted apply로 확장하지 않는다. archive copy/rename, offline plan replay, missing-root reconciliation 같은 이후 mutation에는 stable root identity가 선행되어야 한다.
 
 ### Similar/derived copy
 

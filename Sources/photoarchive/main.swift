@@ -20,6 +20,8 @@ struct PhotoArchiveCLI {
                 try await runScan(arguments, mode: .scan)
             case "plan":
                 try await runScan(arguments, mode: .plan)
+            case "quarantine":
+                try await runScan(arguments, mode: .quarantine)
             case "doctor":
                 runDoctor()
             case "version", "--version", "-v":
@@ -38,6 +40,7 @@ struct PhotoArchiveCLI {
     private enum WorkflowMode {
         case scan
         case plan
+        case quarantine
     }
 
     private static func runScan(_ arguments: [String], mode: WorkflowMode) async throws {
@@ -48,6 +51,8 @@ struct PhotoArchiveCLI {
         var exactDuplicateEngine = ExactDuplicateEngine.automatic
         var eventGapHours = 6.0
         var maxConcurrency = min(max(ProcessInfo.processInfo.activeProcessorCount, 1), 8)
+        var quarantineTargetURL: URL?
+        var applyQuarantine = false
         var roots: [ScanRoot] = []
 
         var index = 0
@@ -80,6 +85,16 @@ struct PhotoArchiveCLI {
                     throw CLIError("--jobs must be between 1 and 64.")
                 }
                 maxConcurrency = value
+            case "--to":
+                guard mode == .quarantine else {
+                    throw CLIError("--to is only valid with the quarantine command.")
+                }
+                quarantineTargetURL = fileURL(try value(after: argument, at: &index, in: arguments))
+            case "--apply":
+                guard mode == .quarantine else {
+                    throw CLIError("--apply is only valid with the quarantine command.")
+                }
+                applyQuarantine = true
             case "--inbox":
                 let path = try value(after: argument, at: &index, in: arguments)
                 roots.append(ScanRoot(url: fileURL(path), kind: .inbox))
@@ -121,7 +136,13 @@ struct PhotoArchiveCLI {
                 let path = try value(after: argument, at: &index, in: arguments)
                 roots.append(ScanRoot(url: fileURL(path), kind: .reference))
             case "--help", "-h":
-                printScanHelp(command: mode == .plan ? "plan" : "scan")
+                let command: String
+                switch mode {
+                case .scan: command = "scan"
+                case .plan: command = "plan"
+                case .quarantine: command = "quarantine"
+                }
+                printScanHelp(command: command)
                 return
             default:
                 if argument.hasPrefix("-") {
@@ -158,6 +179,39 @@ struct PhotoArchiveCLI {
                 try printJSON(plan)
             } else {
                 printReconciliationPlan(plan)
+            }
+            return
+        }
+
+        if mode == .quarantine {
+            guard computeExactDuplicates else {
+                throw CLIError("quarantine requires exact duplicate comparison.")
+            }
+            guard let quarantineTargetURL else {
+                throw CLIError("quarantine requires --to PATH.")
+            }
+            let plan = ReconciliationPlanner.makePlan(from: report)
+            let quarantineReport: QuarantineReport
+            if applyQuarantine {
+                quarantineReport = try QuarantineExecutor.apply(
+                    report: report,
+                    plan: plan,
+                    targetURL: quarantineTargetURL
+                )
+            } else {
+                quarantineReport = try QuarantineExecutor.preflight(
+                    report: report,
+                    plan: plan,
+                    targetURL: quarantineTargetURL
+                )
+            }
+
+            if outputAgentJSON {
+                try printJSON(AgentSafeQuarantineReport(report: quarantineReport))
+            } else if outputJSON {
+                try printJSON(quarantineReport)
+            } else {
+                printQuarantineReport(quarantineReport)
             }
             return
         }
@@ -215,6 +269,24 @@ struct PhotoArchiveCLI {
         }
         print("")
         print("No media files were modified.")
+    }
+
+    private static func printQuarantineReport(_ report: QuarantineReport) {
+        print(report.dryRun ? "PhotoArchiveKit quarantine dry run" : "PhotoArchiveKit quarantine applied")
+        print("Session: \(report.sessionID)")
+        print("Target: \(report.targetPath)")
+        print("Items: \(report.itemCount)")
+        print("Resources: \(report.resourceCount)")
+        print("Bytes: \(report.totalBytes)")
+        if let manifestPath = report.manifestPath {
+            print("Manifest: \(manifestPath)")
+        }
+        print("")
+        if report.dryRun {
+            print("No media files were modified. Re-run with --apply only after reviewing this dry run.")
+        } else {
+            print("Only automatic exact-duplicate candidates were moved. Review candidates were untouched.")
+        }
     }
 
     private static func printHumanReport(_ report: ScanReport) {
@@ -345,19 +417,24 @@ struct PhotoArchiveCLI {
             Usage:
               photoarchive scan [options] ROOT...
               photoarchive plan [options] ROOT...
+              photoarchive quarantine --to PATH [--apply] [options] ROOT...
               photoarchive doctor
               photoarchive version
 
-            The initial release is read-only. It catalogs files, validates Live Photo
-            relationships, finds exact duplicate groups locally, and proposes time-based
-            event folders. It never sends media, identifiers, or hashes to a server.
+            Scan and plan are read-only. Quarantine also defaults to a verified dry run;
+            only an explicit --apply moves automatic exact-duplicate candidates into a
+            user-supplied local quarantine directory. It never permanently deletes media.
 
-            Run 'photoarchive scan --help' or 'photoarchive plan --help' for options.
+            Run 'photoarchive scan --help', 'photoarchive plan --help', or
+            'photoarchive quarantine --help' for options.
             """
         )
     }
 
     private static func printScanHelp(command: String) {
+        let quarantineOptions = command == "quarantine"
+            ? "  --to PATH                  Existing quarantine directory (required)\n  --apply                    Move verified AUTO candidates; default is dry-run\n"
+            : ""
         print(
             """
             Usage:
@@ -387,7 +464,12 @@ struct PhotoArchiveCLI {
               --exact-engine ENGINE      automatic, native, or czkawka (default: automatic)
               --event-gap-hours NUMBER   Start a new event after this gap (default: 6)
               --jobs NUMBER              Concurrent metadata probes, 1-64
-              --help                     Show this help
+            \(quarantineOptions)  --help                     Show this help
+
+            quarantine never acts on REVIEW items. Before --apply it freshly re-hashes
+            every candidate against a preferred exact counterpart; Live Photo candidate
+            sets are fully verified before any resource in that item is moved. A local
+            restore manifest is written under the quarantine directory.
 
             automatic exact mode currently uses the native SHA-256 path. The explicit
             czkawka engine uses Czkawka cache/prehash candidate discovery and then native

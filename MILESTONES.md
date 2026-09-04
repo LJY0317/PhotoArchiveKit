@@ -149,7 +149,7 @@ candidate resources with no complete non-Takeout occurrence       3
 
 즉 파일 하나의 byte equality는 확인됐어도 scanner가 같은 Live Photo identifier의 반복 export를 아직 안전한 1쌍 occurrence로 partition하지 못하는 경우가 대부분이다. 이 집합은 filename이나 visual similarity 때문이 아니라 **logical asset의 resource 경계를 확정하기 전 한쪽 resource만 제거하지 않기 위한 보수적 hold**다.
 
-후속 real-library 분석에서 **canonical coverage** rule도 검증했다. non-Takeout에 complete canonical Live Photo가 있고 같은 logical asset의 모든 Takeout still/video resource가 역할별 exact copy로 완전히 cover되면, `2 photos + 2 paired videos`처럼 반복 export의 내부 pairing을 먼저 확정하지 않아도 Takeout set 전체를 redundant로 볼 수 있다. 이 rule을 적용하면 mixed exact Takeout resource 4,466개 중 약 4,245개를 automatic candidate로 설명할 수 있고 약 221개만 occurrence partitioning/review 대상으로 남는다.
+canonical coverage의 초기 exploratory SQL은 약 `4,245 automatic / 221 review`를 추정했지만 이후 실제 `photoarchive plan` 구현이 resource/item boundary를 완전히 적용한 결과 `4,195 automatic / 271 review`가 정확한 기준값으로 확정되었다. exploratory 수치는 historical analysis로만 남기고 deletion/quarantine 판단에는 사용하지 않는다.
 
 또한 Takeout 내부끼리만 byte-identical인 media group도 대규모로 존재했다.
 
@@ -160,6 +160,23 @@ estimated redundant bytes          35.19 GiB
 ```
 
 이 집합은 같은 media가 연도 folder와 album folder 등에 반복된 경우를 포함할 수 있으므로 collection/album semantics를 catalog로 옮긴 뒤 한 physical representation으로 collapse해야 한다. 이 validation에서도 media file은 수정하지 않았다.
+
+### 첫 quarantine mutation-path 검증
+
+`photoarchive quarantine`을 same-session scan -> plan -> fresh verification -> optional move 경로로 구현했다. synthetic fixture에서는 preferred local copy를 유지하면서 exact Takeout copy만 quarantine으로 이동했고, 이동된 byte가 동일하며 local restore manifest가 생성되는 것을 확인했다. agent-safe quarantine report에는 source/destination path와 filename을 포함하지 않는다.
+
+real library에서는 실제 move 전에 강화된 dry-run preflight만 수행했다.
+
+```text
+freshly verified AUTO items       2262
+freshly verified resources        4195
+files modified                       0
+quarantine target top-level entries  0
+```
+
+preflight는 각 candidate와 preferred counterpart가 현재 regular file인지, scan 당시 size를 유지하는지, symlink를 통해 registered root 밖으로 빠지지 않는지 확인한 뒤 full-file SHA-256을 fresh하게 다시 계산했다. Live Photo item은 모든 planned resource verification이 완료되어야 mutation 단계로 넘어갈 수 있다. 실제 apply 중 오류가 발생하면 같은 session에서 이미 이동한 resource 전체를 reverse-order rollback하도록 self-test 경로를 마련했다.
+
+Chat의 현재 DevSpace terminal surface는 사용자 media file move 실행을 허용하지 않으므로 이 milestone에서 real-library mutation은 의도적으로 수행하지 않았다. local CLI의 explicit `--apply` 경로가 다음 실전 단계다.
 
 ## 2026-09-04 — Product North Star 고정
 

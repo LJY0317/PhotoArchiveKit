@@ -33,6 +33,7 @@
 - 사람이 읽는 output과 local diagnostic `--json`
 - filename/path, byte size, capture timestamp, catalog path 등을 제거하는 AI agent용 `--agent-json` privacy-minimized output
 - read-only `photoarchive plan` preferred-representation reconciliation: non-Takeout exact copy 우선, Live Photo canonical coverage, unresolved exact variant review
+- `photoarchive quarantine`: 기본 dry-run, `--apply`에서만 `automatic_redundant` exact 후보를 사용자 지정 local quarantine으로 이동. apply 직전 source/preferred의 regular-file·size·symlink boundary와 fresh SHA-256을 재검증하고, Live Photo item은 전체 resource가 검증된 뒤 이동하며, session 실패 시 이미 이동한 resource를 전체 rollback. 완료 session에는 local restore manifest를 남김
 - 선택적 `--exact-engine czkawka`: Czkawka cache/prehash candidate discovery 후 native SHA-256 재검증; 기본 `automatic`은 현재 native exact path
 - 필수 third-party binary 없이 optional tool 감지
 - mixed local, Apple-direct, Google Takeout, Google web root를 구분하는 explicit source provenance
@@ -50,10 +51,12 @@
 ```bash
 swift run photoarchive doctor
 swift run photoarchive scan [options] ROOT...
+swift run photoarchive plan [options] ROOT...
+swift run photoarchive quarantine --to PATH [--apply] [options] ROOT...
 swift run photoarchive-selftest
 ```
 
-scanner는 media에 대해 read-only다. 명시적으로 선택한 SQLite catalog만 쓴다.
+`scan`과 `plan`은 media에 대해 read-only다. `quarantine`은 기본 dry-run이며 명시적 `--apply`에서만 same-session scan/plan/fresh-verification을 통과한 AUTO exact 후보를 local quarantine으로 이동한다. 영구 삭제는 없다.
 
 ## 제품 결정
 
@@ -103,12 +106,14 @@ scanner는 media에 대해 read-only다. 명시적으로 선택한 SQLite catalo
 - 같은 real library에서 `--exact-engine czkawka`와 `--exact-engine native`가 동일한 reconciliation plan을 생성했다.
 - wall-clock benchmark는 `Czkawka candidate discovery + native verification` 약 37.66초, native-only 약 36.21초였다. 현재 hybrid는 이중 작업 때문에 더 빠르지 않으므로 `automatic`은 native를 유지한다.
 - Takeout-only exact group 4,189개에는 redundant media occurrence 4,193개가 있으며 약 35.19 GiB다. album/collection semantics를 catalog로 옮기기 전에는 자동 제거하지 않는다.
+- 첫 real-library quarantine dry-run을 `~/Pictures` + Takeout 3개 root와 별도 연습용 quarantine target에 대해 수행했다. 강화된 regular-file/size/symlink-boundary + fresh SHA-256 preflight에서 `2,262` AUTO item / `4,195` resource가 통과했고 `filesModified=false`였다. target entry count도 0으로 확인해 실제 media 이동은 없었다.
+- synthetic self-test에서 standalone non-Takeout preferred copy를 유지하면서 exact Takeout copy만 quarantine으로 이동하고, 이동된 byte가 동일하며 restore manifest가 생성되고 agent-safe quarantine report에 path/filename이 노출되지 않음을 확인했다.
 
 private fixture와 temporary catalog는 repository에 포함하지 않는다.
 
 ## 알려진 제한사항
 
-- archive copy, rename, move, quarantine, delete, cloud upload command가 아직 없다.
+- archive copy, rename, permanent delete, cloud upload command는 아직 없다. `quarantine`은 same-session exact AUTO 후보만 local target으로 move하는 제한된 첫 mutation이며 persisted plan replay나 general-purpose move command가 아니다.
 - Live Photo timed `still-image-time` metadata를 strict하게 parse하지 않는다.
 - still-side identifier extraction은 격리되어 있지만 현재 iPhone file에서 관찰한 ImageIO MakerApple entry를 따른다. 추가 format fixture가 필요하다.
 - source-root identity는 현재 canonical path를 따른다. stable movable ID와 root marker가 구현되기 전에는 Inbox/archive root를 이동하면 새 root record가 만들어진다.
@@ -131,22 +136,23 @@ private fixture와 temporary catalog는 repository에 포함하지 않는다.
 - `--agent-json`은 filename/path, catalog path, exact byte size, capture timestamp, suggested folder name도 제거함
 - catalog-local keyed fingerprint를 만든 직후 in-memory probe record에서 raw Live Photo identifier를 제거함
 - private media extension과 runtime database는 Git에서 ignore됨
-- 미래 mutating command는 missing path를 해석하기 전에 archive-root marker를 추가하고 검증해야 함
+- 현재 `quarantine`은 오래된 plan을 replay하지 않고 같은 invocation에서 현재 root를 scan한 뒤 fresh verification하고 즉시 적용하는 제한된 예외다. persisted plan/apply, archive copy/rename 등 미래 mutating command는 missing path를 해석하기 전에 stable root marker를 추가하고 검증해야 함
 
 ## 다음 구체 작업
 
-1. canonical coverage로 풀리지 않는 271 mixed-exact Takeout resource를 위해 same-identifier occurrence partitioning을 구현한다. embedded identifier는 pairing authority로 유지하고 directory/co-location, basename, source export structure, exact equivalence는 partition hint로만 사용한다.
-2. Czkawka image/video similarity adapter를 추가해 byte가 다른 probable duplicate만 opaque review group으로 agent에 제공한다. raw pHash/frame/cache/path는 local adapter 안에 둔다.
-3. native incremental hash cache를 설계해 unchanged file의 full SHA-256 재계산을 줄인다. Czkawka exact accelerator는 이중 hashing을 피할 수 있을 때만 benchmark 후 `automatic` 후보로 재평가한다.
-4. Takeout-only exact duplicate를 한 physical representation으로 collapse하기 전에 album/collection membership 등 필요한 Takeout semantics를 catalog로 import한다.
-5. preferred-representation plan을 immutable persisted plan으로 발전시키고 apply 전 fresh hash/direct byte verification precondition을 추가한다.
-6. mutation 전에 stable movable root ID와 archive-root marker 추가
-7. strict Live Photo timed-metadata validation 추가
-8. versioned sanitized JSONL catalog export/restore 추가
-9. canonical capture-time 및 reversible rename-plan rule 정의
-10. 기존 folder를 example로 사용하는 event-level archive-folder learning 추가
-11. apply 전에 immutable archive destination plan 추가
-12. North Star archive workflow가 real library에서 안정화되기 전에는 Google upload와 broader provider convenience를 보류
+1. 연습용 real quarantine을 실제 적용한 뒤 manifest/rollback/재-scan 결과를 검증하고, 필요하면 `restore-quarantine`과 resumable recovery를 추가한다. 현재 Chat/DevSpace terminal surface는 실제 사용자 파일 move 실행을 허용하지 않아 real-library 검증은 dry-run까지 완료된 상태다.
+2. canonical coverage로 풀리지 않는 271 mixed-exact Takeout resource를 위해 same-identifier occurrence partitioning을 구현한다. embedded identifier는 pairing authority로 유지하고 directory/co-location, basename, source export structure, exact equivalence는 partition hint로만 사용한다.
+3. Czkawka image/video similarity adapter를 추가해 byte가 다른 probable duplicate만 opaque review group으로 agent에 제공한다. raw pHash/frame/cache/path는 local adapter 안에 둔다.
+4. native incremental hash cache를 설계해 unchanged file의 full SHA-256 재계산을 줄인다. Czkawka exact accelerator는 이중 hashing을 피할 수 있을 때만 benchmark 후 `automatic` 후보로 재평가한다.
+5. Takeout-only exact duplicate를 한 physical representation으로 collapse하기 전에 album/collection membership 등 필요한 Takeout semantics를 catalog로 import한다.
+6. preferred-representation plan을 immutable persisted plan으로 발전시키고 direct byte verification 옵션과 stable replay precondition을 추가한다.
+7. persisted mutation 전에 stable movable root ID와 archive-root marker 추가
+8. strict Live Photo timed-metadata validation 추가
+9. versioned sanitized JSONL catalog export/restore 추가
+10. canonical capture-time 및 reversible rename-plan rule 정의
+11. 기존 folder를 example로 사용하는 event-level archive-folder learning 추가
+12. immutable archive destination plan 및 verified copy path 추가
+13. North Star archive workflow가 real library에서 안정화되기 전에는 Google upload와 broader provider convenience를 보류
 
 ## 재개 지점
 

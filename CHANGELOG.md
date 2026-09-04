@@ -25,10 +25,11 @@ PhotoArchiveKit의 중요한 변경 사항을 여기에 기록한다.
 - repeated Takeout Live Photo를 non-Takeout complete pair가 역할별 exact copy로 완전히 cover할 때 occurrence partitioning 전에도 redundant로 판단할 수 있는 canonical-coverage 정책
 - non-Takeout exact copy 우선과 Live Photo canonical coverage를 적용하는 read-only `photoarchive plan` 및 agent-safe reconciliation plan
 - 선택적 `--exact-engine czkawka` candidate discovery + native SHA-256 verification cross-check; real-library benchmark 결과 기본 `automatic` exact path는 현재 native 유지
+- same-session `photoarchive quarantine`: 기본 dry-run, 명시적 `--apply`에서만 `automatic_redundant` exact candidate를 local quarantine으로 move. apply 직전 regular-file/size/symlink boundary와 fresh SHA-256을 다시 검증하고, Live Photo item 전체 검증 후 이동하며, session failure 시 전체 rollback과 local restore manifest를 제공
 
 ### 보안
 
-- media rename, move, upload, quarantine, delete command 없음
+- general-purpose media rename/move, upload, permanent delete command 없음; quarantine은 freshly verified AUTO exact candidate 전용의 제한된 reversible move만 허용
 - core에 background daemon 또는 network request 없음
 - raw hash와 raw Live Photo identifier는 agent-safe report 밖에 유지
 - agent-safe report는 filename/path, exact byte size, capture timestamp도 제거
