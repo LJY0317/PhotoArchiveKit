@@ -23,6 +23,8 @@ PhotoArchiveKit의 중요한 변경 사항을 여기에 기록한다.
 - 영어/한국어 문서, CI, repository privacy check, optional-tool licensing guidance
 - AI agent용 `--agent-json`: filename/path, catalog path, exact byte size, capture timestamp, raw fingerprint를 제거하고 opaque ID/status만 출력
 - repeated Takeout Live Photo를 non-Takeout complete pair가 역할별 exact copy로 완전히 cover할 때 occurrence partitioning 전에도 redundant로 판단할 수 있는 canonical-coverage 정책
+- non-Takeout exact copy 우선과 Live Photo canonical coverage를 적용하는 read-only `photoarchive plan` 및 agent-safe reconciliation plan
+- 선택적 `--exact-engine czkawka` candidate discovery + native SHA-256 verification cross-check; real-library benchmark 결과 기본 `automatic` exact path는 현재 native 유지
 
 ### 보안
 

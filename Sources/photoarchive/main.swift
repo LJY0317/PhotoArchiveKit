@@ -17,7 +17,9 @@ struct PhotoArchiveCLI {
 
             switch command {
             case "scan":
-                try await runScan(arguments)
+                try await runScan(arguments, mode: .scan)
+            case "plan":
+                try await runScan(arguments, mode: .plan)
             case "doctor":
                 runDoctor()
             case "version", "--version", "-v":
@@ -33,11 +35,17 @@ struct PhotoArchiveCLI {
         }
     }
 
-    private static func runScan(_ arguments: [String]) async throws {
+    private enum WorkflowMode {
+        case scan
+        case plan
+    }
+
+    private static func runScan(_ arguments: [String], mode: WorkflowMode) async throws {
         var catalogURL = PhotoArchivePaths.defaultCatalogURL
         var outputJSON = false
         var outputAgentJSON = false
         var computeExactDuplicates = true
+        var exactDuplicateEngine = ExactDuplicateEngine.automatic
         var eventGapHours = 6.0
         var maxConcurrency = min(max(ProcessInfo.processInfo.activeProcessorCount, 1), 8)
         var roots: [ScanRoot] = []
@@ -54,6 +62,12 @@ struct PhotoArchiveCLI {
                 outputAgentJSON = true
             case "--no-exact-duplicates":
                 computeExactDuplicates = false
+            case "--exact-engine":
+                let raw = try value(after: argument, at: &index, in: arguments)
+                guard let engine = ExactDuplicateEngine(rawValue: raw.lowercased()) else {
+                    throw CLIError("--exact-engine must be one of: automatic, native, czkawka.")
+                }
+                exactDuplicateEngine = engine
             case "--event-gap-hours":
                 let raw = try value(after: argument, at: &index, in: arguments)
                 guard let value = Double(raw), value > 0 else {
@@ -107,7 +121,7 @@ struct PhotoArchiveCLI {
                 let path = try value(after: argument, at: &index, in: arguments)
                 roots.append(ScanRoot(url: fileURL(path), kind: .reference))
             case "--help", "-h":
-                printScanHelp()
+                printScanHelp(command: mode == .plan ? "plan" : "scan")
                 return
             default:
                 if argument.hasPrefix("-") {
@@ -130,10 +144,23 @@ struct PhotoArchiveCLI {
             roots: roots,
             options: ScanOptions(
                 computeExactDuplicates: computeExactDuplicates,
+                exactDuplicateEngine: exactDuplicateEngine,
                 eventGap: eventGapHours * 60 * 60,
                 maxConcurrentProbes: maxConcurrency
             )
         )
+
+        if mode == .plan {
+            let plan = ReconciliationPlanner.makePlan(from: report)
+            if outputAgentJSON {
+                try printJSON(AgentSafeReconciliationPlan(plan: plan))
+            } else if outputJSON {
+                try printJSON(plan)
+            } else {
+                printReconciliationPlan(plan)
+            }
+            return
+        }
 
         if outputAgentJSON {
             let encoder = JSONEncoder()
@@ -149,6 +176,45 @@ struct PhotoArchiveCLI {
         } else {
             printHumanReport(report)
         }
+    }
+
+    private static func printJSON<T: Encodable>(_ value: T) throws {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        encoder.dateEncodingStrategy = .iso8601
+        let data = try encoder.encode(value)
+        print(String(decoding: data, as: UTF8.self))
+    }
+
+    private static func printReconciliationPlan(_ plan: ReconciliationPlan) {
+        print("PhotoArchiveKit read-only reconciliation plan")
+        print("Policy: \(plan.policy)")
+        print("Session: \(plan.sessionID)")
+        print("Automatic redundant resources: \(plan.summary.automaticRedundantResourceCount)")
+        print("Review resources: \(plan.summary.reviewResourceCount)")
+        print("Automatic items: \(plan.summary.automaticItemCount)")
+        print("Review items: \(plan.summary.reviewItemCount)")
+        print("")
+
+        for item in plan.items.prefix(80) {
+            print("[\(item.itemID)] \(item.decision.rawValue) \(item.kind.rawValue)")
+            print("  subject: \(item.subjectID)")
+            print("  reason: \(item.reason.rawValue)")
+            if let preferredRootID = item.preferredRootID {
+                print("  preferred root: \(preferredRootID)")
+            }
+            for resource in item.candidateResources.prefix(12) {
+                print("  candidate: \(resource.rootLabel)/\(resource.relativePath) [\(resource.role.rawValue)]")
+            }
+            if item.candidateResources.count > 12 {
+                print("  ... \(item.candidateResources.count - 12) more candidate resources")
+            }
+        }
+        if plan.items.count > 80 {
+            print("... \(plan.items.count - 80) more items; use --json locally or --agent-json for an AI agent")
+        }
+        print("")
+        print("No media files were modified.")
     }
 
     private static func printHumanReport(_ report: ScanReport) {
@@ -278,6 +344,7 @@ struct PhotoArchiveCLI {
 
             Usage:
               photoarchive scan [options] ROOT...
+              photoarchive plan [options] ROOT...
               photoarchive doctor
               photoarchive version
 
@@ -285,16 +352,16 @@ struct PhotoArchiveCLI {
             relationships, finds exact duplicate groups locally, and proposes time-based
             event folders. It never sends media, identifiers, or hashes to a server.
 
-            Run 'photoarchive scan --help' for scan options.
+            Run 'photoarchive scan --help' or 'photoarchive plan --help' for options.
             """
         )
     }
 
-    private static func printScanHelp() {
+    private static func printScanHelp(command: String) {
         print(
             """
             Usage:
-              photoarchive scan [options] ROOT...
+              photoarchive \(command) [options] ROOT...
 
             Root options (repeatable):
               --inbox PATH       Register an Inbox root with unknown provenance
@@ -316,10 +383,16 @@ struct PhotoArchiveCLI {
               --catalog PATH             SQLite catalog path
               --json                     Print the full local diagnostic JSON report
               --agent-json               Print path-free, metadata-minimized JSON for AI agents
-              --no-exact-duplicates      Skip local SHA-256 duplicate comparisons
+              --no-exact-duplicates      Skip exact duplicate comparisons
+              --exact-engine ENGINE      automatic, native, or czkawka (default: automatic)
               --event-gap-hours NUMBER   Start a new event after this gap (default: 6)
               --jobs NUMBER              Concurrent metadata probes, 1-64
               --help                     Show this help
+
+            automatic exact mode currently uses the native SHA-256 path. The explicit
+            czkawka engine uses Czkawka cache/prehash candidate discovery and then native
+            SHA-256 verification; it is intended for cross-checking until benchmarking
+            shows that a future integration avoids duplicate work.
 
             --json is for local human diagnostics and includes paths. AI agents should
             use --agent-json, which omits catalog/root/file paths, filenames, byte sizes,

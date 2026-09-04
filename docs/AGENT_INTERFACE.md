@@ -21,7 +21,10 @@ agent는 opaque root/logical asset/group/plan ID, provenance category, resource 
 
 ```bash
 photoarchive scan --agent-json --inbox "/path/to/inbox"
+photoarchive plan --agent-json --local "/path/to/local" --takeout "/path/to/takeout"
 ```
+
+`plan`은 non-Takeout exact copy 우선 정책과 Live Photo canonical coverage를 적용해 `automatic_redundant`와 `review`를 opaque item으로 분리하지만 media를 변경하지 않는다.
 
 agent-safe JSON report에는 다음이 포함된다.
 

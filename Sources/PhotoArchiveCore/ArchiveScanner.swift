@@ -63,8 +63,10 @@ public final class ArchiveScanner {
             }
 
             if options.computeExactDuplicates {
-                warnings.append(contentsOf: await hashDuplicateCandidates(
+                warnings.append(contentsOf: try await hashDuplicateCandidates(
                     resources: &resources,
+                    roots: roots,
+                    engine: options.exactDuplicateEngine,
                     maxConcurrency: min(options.maxConcurrentProbes, 4)
                 ))
             }
@@ -282,6 +284,36 @@ public final class ArchiveScanner {
 
     private func hashDuplicateCandidates(
         resources: inout [ProbedResource],
+        roots: [RootDescriptor],
+        engine: ExactDuplicateEngine,
+        maxConcurrency: Int
+    ) async throws -> [ScanWarning] {
+        switch engine {
+        case .native:
+            return await hashNativeDuplicateCandidates(
+                resources: &resources,
+                maxConcurrency: maxConcurrency
+            )
+        case .czkawka:
+            return try await hashCzkawkaDuplicateCandidates(
+                resources: &resources,
+                roots: roots,
+                maxConcurrency: maxConcurrency
+            )
+        case .automatic:
+            // Real-library benchmarking showed that running Czkawka candidate discovery
+            // and then re-reading every candidate for native SHA-256 verification was
+            // slightly slower than native exact comparison alone. Keep automatic mode
+            // deterministic and single-pass until an integration can avoid double work.
+            return await hashNativeDuplicateCandidates(
+                resources: &resources,
+                maxConcurrency: maxConcurrency
+            )
+        }
+    }
+
+    private func hashNativeDuplicateCandidates(
+        resources: inout [ProbedResource],
         maxConcurrency: Int
     ) async -> [ScanWarning] {
         let candidateIndices = Dictionary(grouping: resources.indices.filter {
@@ -291,6 +323,44 @@ public final class ArchiveScanner {
         .filter { $0.count > 1 }
         .flatMap { $0 }
 
+        return await hashCandidateIndices(
+            candidateIndices,
+            resources: &resources,
+            maxConcurrency: maxConcurrency
+        )
+    }
+
+    private func hashCzkawkaDuplicateCandidates(
+        resources: inout [ProbedResource],
+        roots: [RootDescriptor],
+        maxConcurrency: Int
+    ) async throws -> [ScanWarning] {
+        let groups = try CzkawkaExactCandidateAdapter.exactCandidateGroups(roots: roots)
+        let indexByPath = Dictionary(uniqueKeysWithValues: resources.indices.map { index in
+            (resources[index].url.standardizedFileURL.path, index)
+        })
+
+        var candidateIndices = Set<Int>()
+        for group in groups {
+            let indices = group.compactMap { path in
+                indexByPath[URL(fileURLWithPath: path).standardizedFileURL.path]
+            }
+            guard indices.count > 1 else { continue }
+            candidateIndices.formUnion(indices)
+        }
+
+        return await hashCandidateIndices(
+            candidateIndices.sorted(),
+            resources: &resources,
+            maxConcurrency: maxConcurrency
+        )
+    }
+
+    private func hashCandidateIndices(
+        _ candidateIndices: [Int],
+        resources: inout [ProbedResource],
+        maxConcurrency: Int
+    ) async -> [ScanWarning] {
         guard !candidateIndices.isEmpty else { return [] }
 
         let results = await withTaskGroup(of: HashResult.self) { group in

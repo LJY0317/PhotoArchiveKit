@@ -13,6 +13,11 @@ PhotoArchiveKit은 iPhone 사진·동영상·Live Photo를 특정 사진 클라�
 
 ## 왜 필요한가
 
+PhotoArchiveKit은 이제 두 가지 가치를 가장 높은 우선순위로 둡니다.
+
+1. **Agent-private orchestration:** AI agent가 local CLI를 이용해 정리하더라도 media byte, raw hash, Live Photo identifier, GPS, MakerNote, filename/path, exact byte size, capture timestamp 같은 개인 media/file detail을 AI service에 보낼 필요가 없어야 합니다. `--agent-json`은 opaque ID와 최소 status/provenance/count 정보만 제공합니다.
+2. **복원 가능한 Live Photo archive:** Live Photo를 still + paired-video resource graph로 보존해 일반 HDD/file-cloud replica가 사람이 읽을 수 있는 파일 형태를 유지하면서도 미래에 Live Photo 복원 또는 provider projection에 필요한 관계를 잃지 않게 합니다.
+
 장기 사진 archive에는 최소 세 종류의 상태가 있습니다.
 
 1. 사진·동영상 원본 byte
@@ -97,6 +102,16 @@ swift run photoarchive doctor
 ```bash
 swift run photoarchive scan --inbox "~/Photo Inbox"
 ```
+
+읽기 전용 preferred-representation plan을 생성할 수 있습니다. non-Takeout exact copy를 우선하고 Live Photo canonical coverage를 적용한 뒤 해결되지 않은 항목만 review로 남깁니다.
+
+```bash
+swift run photoarchive plan \
+  --local "~/Pictures" \
+  --takeout "~/Pictures/Takeout"
+```
+
+AI agent는 `scan`과 `plan` 모두에서 `--agent-json`을 사용해야 하며, path를 포함할 수 있는 local diagnostic `--json`은 agent에 전달하지 않습니다.
 
 폴더를 먼저 한곳에 섞지 않고 여러 source를 함께 scan하면 exact copy, provenance, source 간 Live Photo 관계를 통합할 수 있습니다.
 

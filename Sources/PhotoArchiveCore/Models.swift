@@ -35,17 +35,26 @@ public struct ScanRoot: Sendable {
     }
 }
 
+public enum ExactDuplicateEngine: String, Codable, CaseIterable, Sendable {
+    case automatic
+    case native
+    case czkawka
+}
+
 public struct ScanOptions: Sendable {
     public var computeExactDuplicates: Bool
+    public var exactDuplicateEngine: ExactDuplicateEngine
     public var eventGap: TimeInterval
     public var maxConcurrentProbes: Int
 
     public init(
         computeExactDuplicates: Bool = true,
+        exactDuplicateEngine: ExactDuplicateEngine = .automatic,
         eventGap: TimeInterval = 6 * 60 * 60,
         maxConcurrentProbes: Int = min(max(ProcessInfo.processInfo.activeProcessorCount, 1), 8)
     ) {
         self.computeExactDuplicates = computeExactDuplicates
+        self.exactDuplicateEngine = exactDuplicateEngine
         self.eventGap = eventGap
         self.maxConcurrentProbes = max(1, maxConcurrentProbes)
     }

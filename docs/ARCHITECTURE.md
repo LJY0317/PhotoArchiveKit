@@ -6,14 +6,13 @@ PhotoArchiveKit은 iPhone을 주 카메라로 사용하고 cloud backup은 상�
 
 핵심 우선순위:
 
-1. original media resource와 Live Photo relationship을 보존한다.
-2. PhotoArchiveKit 없이도 media가 ordinary file로 사용 가능하게 유지한다.
-3. Google Photos, Apple Photos 등 provider와 독립적으로 organization을 보존한다.
-4. deterministic 및 local machine-learning stage로 manual classification을 최소화한다.
-5. media-derived secret과 file-level private detail은 로컬에 유지하고, AI agent에는 opaque semantic result만 제공한다.
-6. 정상 agent workflow는 filename/path, raw hash/identifier, GPS, capture timestamp, thumbnail/frame/audio를 AI service에 전달하지 않는다.
-7. future mutation은 모두 reviewable, resumable, reversible하게 만든다.
-8. background CPU, battery, filesystem cost를 피한다.
+1. 정상 AI agent workflow에서 media byte, raw fingerprint/identifier, filename/path, GPS, capture timestamp 같은 private detail이 local trust boundary를 벗어나지 않게 하고 agent에는 opaque semantic result만 제공한다.
+2. original media resource와 Live Photo relationship을 복원 가능한 graph로 보존한다.
+3. PhotoArchiveKit 없이도 media가 ordinary file로 사용 가능하게 유지한다.
+4. Google Photos, Apple Photos 등 provider와 독립적으로 organization을 보존한다.
+5. deterministic 및 local machine-learning stage로 manual classification을 최소화한다.
+6. future mutation은 모두 reviewable, resumable, reversible하게 만든다.
+7. background CPU, battery, filesystem cost를 피한다.
 
 ## 세 가지 truth layer
 
@@ -206,15 +205,25 @@ classifier result는 deletion을 authorize하지 않는다.
 
 ### Exact resource duplicate
 
-native fallback은 candidate file을 먼저 size로 group한 뒤 matching size group에 대해 full-file SHA-256을 계산한다. 이 신호는 perceptual similarity가 아니라 exact file-content identity다. agent-safe report에는 digest 대신 `D000017` 같은 opaque ID만 노출한다.
+기본 `automatic`/`native` path는 candidate file을 먼저 size로 group한 뒤 matching size group에 대해 full-file SHA-256을 계산한다. 이 신호는 perceptual similarity가 아니라 exact file-content identity다. agent-safe report에는 digest 대신 `D000017` 같은 opaque ID만 노출한다.
 
-대규모 library에서 `czkawka_cli`가 설치되어 있으면 향후 adapter는 Czkawka의 size -> prehash -> cached full-hash pipeline을 **candidate discovery accelerator**로 우선 사용할 수 있다. PhotoArchiveKit은 외부 raw hash를 agent에 노출하지 않고 candidate path를 local process 안에서 받아 asset graph로 승격한다. destructive plan/apply 직전에는 PhotoArchiveKit이 자체 fresh integrity check 또는 direct byte comparison으로 다시 검증한다. 외부 tool 부재 시 native SHA-256 path가 fallback이 된다.
+선택적 `czkawka` exact engine은 Czkawka의 size -> prehash -> cached full-hash pipeline으로 candidate group을 먼저 찾고, PhotoArchiveKit이 그 candidate file만 native SHA-256으로 다시 읽어 catalog equality를 검증한다. raw Czkawka hash/cache는 agent에 노출하지 않는다. real-library benchmark에서는 이 이중 검증 경로가 native-only보다 빨라지지 않았으므로 `automatic`은 현재 native를 유지하고 Czkawka exact는 독립 cross-check 용도로 둔다. 향후 duplicate work를 피하는 integration 또는 native incremental hash cache가 구현되면 benchmark 후 default를 재검토한다.
 
 ### Exact logical Live Photo duplicate
 
 일반적인 occurrence 비교에서는 두 resource role이 모두 있어야 한다. identical still이 있어도 paired video가 missing/different하면 exact duplicate Live Photo occurrence가 아니다.
 
 예외적으로 canonical coverage가 성립하면 repeated Takeout occurrence의 내부 pairing ambiguity를 먼저 풀지 않아도 된다. non-Takeout complete pair가 보존되고, 제거하려는 Takeout asset의 모든 still/video resource가 역할별 exact copy로 완전히 cover될 때만 해당 Takeout set 전체를 automatic redundant candidate로 만들 수 있다.
+
+### Preferred-representation reconciliation
+
+read-only `photoarchive plan`은 exact evidence와 provenance를 asset-level decision으로 승격한다.
+
+- standalone exact group에 non-Takeout과 Takeout copy가 함께 있으면 non-Takeout representation을 preferred로 두고 Takeout resource를 automatic redundant candidate로 제안한다.
+- Live Photo는 complete non-Takeout canonical occurrence를 먼저 선택한다.
+- canonical still/video와 같은 role의 exact group이 모든 Takeout resource를 cover하면 repeated Takeout occurrence의 내부 pairing이 ambiguous해도 canonical coverage로 Takeout set 전체를 automatic redundant candidate로 제안한다.
+- complete preferred occurrence가 없거나 canonical pair가 cover하지 못하는 exact variant가 있으면 review에 남긴다.
+- plan은 read-only이며 실제 delete/quarantine authority가 아니다.
 
 ### Similar/derived copy
 

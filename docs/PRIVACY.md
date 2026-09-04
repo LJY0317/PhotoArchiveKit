@@ -1,6 +1,6 @@
 # Privacy Model
 
-PhotoArchiveKit의 핵심 제품 목표 중 하나는 **AI agent가 사용자의 사진 archive를 다루더라도 개인 media와 media-derived/file-level private detail이 AI service로 전달되지 않게 하는 것**이다. local process가 raw data를 읽고 계산할 수는 있지만, 정상 agent workflow는 opaque semantic result만 받아야 한다.
+PhotoArchiveKit의 **첫 번째 핵심 제품 가치**는 AI agent가 사용자의 사진 archive를 다루더라도 개인 media와 media-derived/file-level private detail이 AI service로 전달되지 않게 하는 것이다. local process가 raw data를 읽고 계산할 수는 있지만, 정상 agent workflow는 opaque semantic result만 받아야 하며 raw media/hash/identifier/path를 읽을 이유가 없어야 한다.
 
 이 보장은 PhotoArchiveKit의 agent-safe interface 안에서 제공한다. 사용자가 별도의 general-purpose shell/file tool로 개인 media나 diagnostic output을 직접 AI agent에 노출하면 이 경계를 우회할 수 있으므로, agent automation은 PhotoArchiveKit의 privacy-minimized CLI/API surface를 사용한다.
 

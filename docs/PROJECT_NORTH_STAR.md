@@ -8,6 +8,14 @@ PhotoArchiveKit을 만드는 이유는 새로운 사진 갤러리나 범용 사�
 
 핵심 문제는 iPhone 사진 앱, Mac, Google Photos, 외장 HDD 등에 동기화·내보내기·백업 때문에 여러 사본으로 존재하는 사진, 동영상, Live Photo를 안전하게 정리하는 것이다.
 
+## 핵심 가치 우선순위
+
+PhotoArchiveKit의 첫 번째 핵심 가치는 **AI agent가 개인 media를 분류·정리하는 동안 media byte와 media/file-derived private data를 agent나 AI service가 읽을 필요가 없게 하는 local privacy boundary**다. hash, Live Photo identifier, GPS, MakerNote, perceptual fingerprint, filename/path, exact byte size, capture timestamp 같은 값은 필요한 경우 local process가 처리하고, agent에는 opaque root/asset/group/plan ID와 provenance category, role, status, count, confidence, warning code 같은 최소 semantic result만 전달한다. 정상 agent workflow는 `--agent-json` 같은 privacy-minimized surface를 사용한다.
+
+두 번째 핵심 가치는 **Live Photo를 단순한 두 파일이 아니라 복원 가능한 logical asset/resource graph로 보존하면서 HDD와 일반 file-cloud replica에 사람이 읽을 수 있는 파일 형태로 백업하는 것**이다. still + paired video 관계와 provenance를 catalog에 유지하고, copy/rename/quarantine은 asset 단위로 계획한다. cloud drive는 byte replica 역할을 하며, 미래 Apple/Google API가 더 나은 Live Photo import/projection을 제공하면 보존된 resource graph에서 다시 복원·projection할 수 있어야 한다.
+
+그 다음 가치가 exact/perceptual duplicate reconciliation, preferred representation, folder organization, verified replica, provider-neutral migration state다. 주변 편의 기능은 이 순서를 뒤집지 않는다.
+
 최종적으로 다음 상태를 만드는 것이 목적이다.
 
 1. 동일한 촬영물을 나타내는 여러 사본을 찾아 하나의 logical asset으로 묶는다.

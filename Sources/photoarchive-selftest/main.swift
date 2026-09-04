@@ -36,8 +36,8 @@ struct PhotoArchiveSelfTest {
             catalogURL: temporary.appendingPathComponent("catalog.sqlite3")
         )
         let roots = [
-            ScanRoot(url: rootA, kind: .reference),
-            ScanRoot(url: rootB, kind: .reference)
+            ScanRoot(url: rootA, kind: .reference, provenance: .localLibrary),
+            ScanRoot(url: rootB, kind: .reference, provenance: .googleTakeout)
         ]
         let first = try await scanner.scan(roots: roots)
         let second = try await scanner.scan(roots: roots)
@@ -51,6 +51,17 @@ struct PhotoArchiveSelfTest {
             first.exactDuplicateGroups.first?.groupID == second.exactDuplicateGroups.first?.groupID,
             "opaque duplicate group ID should remain stable across scans"
         )
+
+        if executableExists("czkawka_cli") {
+            let czkawkaReport = try await scanner.scan(
+                roots: roots,
+                options: ScanOptions(exactDuplicateEngine: .czkawka)
+            )
+            try require(
+                czkawkaReport.summary.exactDuplicateGroupCount == first.summary.exactDuplicateGroupCount,
+                "Czkawka candidate discovery plus native verification should match native exact grouping"
+            )
+        }
 
         let encoder = JSONEncoder()
         let json = String(decoding: try encoder.encode(first), as: UTF8.self)
@@ -67,6 +78,39 @@ struct PhotoArchiveSelfTest {
         try require(!agentJSON.contains("one.jpg"), "agent-safe report exposed a filename")
         try require(!agentJSON.contains("copy.jpg"), "agent-safe report exposed a filename")
         try require(!agentJSON.contains("catalog.sqlite3"), "agent-safe report exposed a catalog path")
+
+        let standalonePlan = ReconciliationPlanner.makePlan(from: first)
+        try require(
+            standalonePlan.summary.automaticRedundantResourceCount == 1,
+            "a Takeout standalone exact copy should be an automatic redundant candidate"
+        )
+        let standaloneAgentPlanJSON = String(
+            decoding: try encoder.encode(AgentSafeReconciliationPlan(plan: standalonePlan)),
+            as: UTF8.self
+        )
+        try require(
+            !standaloneAgentPlanJSON.contains("copy.jpg"),
+            "agent-safe reconciliation plan exposed a filename"
+        )
+        try require(
+            !standaloneAgentPlanJSON.contains(rootB.path),
+            "agent-safe reconciliation plan exposed a path"
+        )
+
+        let coverageReport = syntheticCanonicalCoverageReport()
+        let coveragePlan = ReconciliationPlanner.makePlan(from: coverageReport)
+        try require(
+            coveragePlan.summary.automaticRedundantResourceCount == 4,
+            "canonical coverage should allow repeated exact Takeout Live Photo resources"
+        )
+        try require(
+            coveragePlan.summary.reviewResourceCount == 0,
+            "fully covered repeated Takeout Live Photo resources should not require review"
+        )
+        try require(
+            coveragePlan.items.contains { $0.reason == .livePhotoCanonicalCoverage },
+            "canonical coverage reason should be recorded in the plan"
+        )
 
         let parentRoot = temporary.appendingPathComponent("Pictures", isDirectory: true)
         let takeoutRoot = parentRoot.appendingPathComponent("Takeout", isDirectory: true)
@@ -137,6 +181,152 @@ struct PhotoArchiveSelfTest {
             throw SelfTestFailure(message)
         }
     }
+}
+
+private func executableExists(_ name: String) -> Bool {
+    let environmentPath = ProcessInfo.processInfo.environment["PATH"] ?? ""
+    return environmentPath.split(separator: ":").contains { directory in
+        let candidate = URL(fileURLWithPath: String(directory)).appendingPathComponent(name).path
+        return FileManager.default.isExecutableFile(atPath: candidate)
+    }
+}
+
+private func syntheticCanonicalCoverageReport() -> ScanReport {
+    let localRootID = "RLOCAL"
+    let takeoutRootID = "RTAKEOUT"
+    let localPhoto = ResourceReference(
+        rootID: localRootID,
+        rootLabel: "Local",
+        relativePath: "local/IMG_0001.HEIC",
+        role: .photo,
+        byteSize: 100
+    )
+    let localVideo = ResourceReference(
+        rootID: localRootID,
+        rootLabel: "Local",
+        relativePath: "local/IMG_0001.MOV",
+        role: .pairedVideo,
+        byteSize: 200
+    )
+    let takeoutPhotoA = ResourceReference(
+        rootID: takeoutRootID,
+        rootLabel: "Takeout",
+        relativePath: "year/IMG_0001.HEIC",
+        role: .photo,
+        byteSize: 100
+    )
+    let takeoutPhotoB = ResourceReference(
+        rootID: takeoutRootID,
+        rootLabel: "Takeout",
+        relativePath: "album/IMG_0001.HEIC",
+        role: .photo,
+        byteSize: 100
+    )
+    let takeoutVideoA = ResourceReference(
+        rootID: takeoutRootID,
+        rootLabel: "Takeout",
+        relativePath: "year/IMG_0001.MOV",
+        role: .pairedVideo,
+        byteSize: 200
+    )
+    let takeoutVideoB = ResourceReference(
+        rootID: takeoutRootID,
+        rootLabel: "Takeout",
+        relativePath: "album/IMG_0001.MOV",
+        role: .pairedVideo,
+        byteSize: 200
+    )
+
+    let roots = [
+        RootScanReport(
+            rootID: localRootID,
+            label: "Local",
+            kind: .inbox,
+            provenance: .localLibrary,
+            canonicalPath: "/synthetic/local",
+            mediaFileCount: 2,
+            completeLivePhotos: 1,
+            stillOnlyLiveResources: 0,
+            videoOnlyLiveResources: 0,
+            standaloneImages: 0,
+            standaloneVideos: 0,
+            sidecars: 0,
+            metadataProbeFailures: 0
+        ),
+        RootScanReport(
+            rootID: takeoutRootID,
+            label: "Takeout",
+            kind: .importSource,
+            provenance: .googleTakeout,
+            canonicalPath: "/synthetic/takeout",
+            mediaFileCount: 4,
+            completeLivePhotos: 0,
+            stillOnlyLiveResources: 2,
+            videoOnlyLiveResources: 0,
+            standaloneImages: 0,
+            standaloneVideos: 0,
+            sidecars: 0,
+            metadataProbeFailures: 0
+        )
+    ]
+    let livePhoto = LivePhotoAssetReport(
+        assetID: "ALIVE",
+        occurrenceCount: 2,
+        stillCopyCount: 3,
+        videoCopyCount: 3,
+        occurrences: [
+            LivePhotoOccurrenceReport(
+                rootID: localRootID,
+                rootLabel: "Local",
+                status: .complete,
+                stillCount: 1,
+                videoCount: 1,
+                resources: [localPhoto, localVideo]
+            ),
+            LivePhotoOccurrenceReport(
+                rootID: takeoutRootID,
+                rootLabel: "Takeout",
+                status: .multipleVariants,
+                stillCount: 2,
+                videoCount: 2,
+                resources: [takeoutPhotoA, takeoutVideoA, takeoutPhotoB, takeoutVideoB]
+            )
+        ]
+    )
+    let duplicateGroups = [
+        ExactDuplicateGroupReport(
+            groupID: "DPHOTO",
+            byteSize: 100,
+            members: [localPhoto, takeoutPhotoA, takeoutPhotoB]
+        ),
+        ExactDuplicateGroupReport(
+            groupID: "DVIDEO",
+            byteSize: 200,
+            members: [localVideo, takeoutVideoA, takeoutVideoB]
+        )
+    ]
+    let now = Date(timeIntervalSince1970: 1)
+    return ScanReport(
+        sessionID: "SYNTHETIC",
+        startedAt: now,
+        completedAt: now,
+        catalogPath: "/synthetic/catalog.sqlite3",
+        summary: ScanSummary(
+            rootCount: 2,
+            resourceCount: 6,
+            logicalAssetCount: 1,
+            livePhotoAssetCount: 1,
+            exactDuplicateGroupCount: 2,
+            eventSuggestionCount: 0,
+            warningCount: 0
+        ),
+        roots: roots,
+        livePhotos: [livePhoto],
+        exactDuplicateGroups: duplicateGroups,
+        eventSuggestions: [],
+        warnings: [],
+        filesModified: false
+    )
 }
 
 private struct SelfTestFailure: LocalizedError {

@@ -13,6 +13,11 @@ The project is intentionally small. It does not run a background daemon, host a 
 
 ## Why this exists
 
+PhotoArchiveKit now treats two product values as highest priority:
+
+1. **Agent-private orchestration.** A local AI-agent workflow should not need to send media bytes, raw hashes, Live Photo identifiers, GPS, MakerNote data, filenames/paths, exact byte sizes, or capture timestamps to an AI service. `--agent-json` exposes only opaque IDs plus minimal status/provenance/count information.
+2. **Restorable Live Photo archiving.** A Live Photo is preserved as a still + paired-video resource graph so ordinary HDD/file-cloud replicas remain human-readable while retaining enough relationship state for later restoration or provider projection.
+
 A durable photo archive has at least three different kinds of state:
 
 1. Original media bytes.
@@ -97,6 +102,16 @@ Run a read-only scan of one folder:
 ```bash
 swift run photoarchive scan --inbox "~/Photo Inbox"
 ```
+
+Generate a read-only preferred-representation plan. This keeps non-Takeout exact copies preferred and applies Live Photo canonical coverage before placing unresolved cases into review:
+
+```bash
+swift run photoarchive plan \
+  --local "~/Pictures" \
+  --takeout "~/Pictures/Takeout"
+```
+
+For an AI agent, use `--agent-json` with either `scan` or `plan`; local diagnostic `--json` can contain paths.
 
 Scan several sources together so exact copies, provenance, and cross-source Live Photo relationships can be reconciled without flattening the folders first:
 

@@ -32,6 +32,8 @@
 - time-gap 기반 event folder suggestion
 - 사람이 읽는 output과 local diagnostic `--json`
 - filename/path, byte size, capture timestamp, catalog path 등을 제거하는 AI agent용 `--agent-json` privacy-minimized output
+- read-only `photoarchive plan` preferred-representation reconciliation: non-Takeout exact copy 우선, Live Photo canonical coverage, unresolved exact variant review
+- 선택적 `--exact-engine czkawka`: Czkawka cache/prehash candidate discovery 후 native SHA-256 재검증; 기본 `automatic`은 현재 native exact path
 - 필수 third-party binary 없이 optional tool 감지
 - mixed local, Apple-direct, Google Takeout, Google web root를 구분하는 explicit source provenance
 - 상위 local library 안에 Takeout root가 있어도 가장 구체적인 등록 root가 파일을 소유하도록 하는 nested-root ownership
@@ -94,7 +96,9 @@ scanner는 media에 대해 read-only다. 명시적으로 선택한 SQLite catalo
 - real library의 기존 Krokiet/Czkawka cache를 재사용해 `czkawka_cli` exact scan을 재현했다. 주요 photo/video extension 기준 8,269 exact group, 8,739 redundant occurrence, 약 76.66 GiB가 확인되었다.
 - local-library와 Google-Takeout을 동시에 포함한 exact group은 Czkawka와 PhotoArchiveKit이 동일하게 4,052개를 찾았고, 그 안의 Takeout resource도 양쪽 모두 4,466개였다.
 - occurrence 단위의 초기 보수적 rule에서는 Takeout resource 3,479개가 automatic candidate였고 987개가 hold였다. 이 hold는 perceptual similarity가 아니라 개별 file hash가 이미 exact match인 Live Photo resource였다.
-- `canonical coverage`를 추가 분석한 결과, non-Takeout complete canonical pair가 있고 해당 logical asset의 모든 Takeout resource가 역할별 exact copy로 완전히 cover되는 경우 repeated occurrence pairing을 먼저 풀지 않아도 안전하게 Takeout set 전체를 redundant로 볼 수 있다. 이 rule을 적용하면 mixed exact Takeout resource 4,466개 중 약 4,245개를 자동 후보로 설명할 수 있고 약 221개만 실제 review/partitioning 대상으로 남는다.
+- 구현된 `photoarchive plan`의 canonical coverage를 real library에 적용한 최종 기준값은 mixed exact Takeout resource 4,466개 = `automatic 4,195 + review 271`이다. automatic은 standalone 739개 + Live Photo canonical-coverage resource 3,456개이며, review는 complete preferred Live Photo가 없는 exact resource 270개 + uncovered exact variant 1개다. 이전 수동 SQL의 약 4,245/221은 근사치였으므로 이 planner 결과로 대체한다.
+- 같은 real library에서 `--exact-engine czkawka`와 `--exact-engine native`가 동일한 reconciliation plan을 생성했다.
+- wall-clock benchmark는 `Czkawka candidate discovery + native verification` 약 37.66초, native-only 약 36.21초였다. 현재 hybrid는 이중 작업 때문에 더 빠르지 않으므로 `automatic`은 native를 유지한다.
 - Takeout-only exact group 4,189개에는 redundant media occurrence 4,193개가 있으며 약 35.19 GiB다. album/collection semantics를 catalog로 옮기기 전에는 자동 제거하지 않는다.
 
 private fixture와 temporary catalog는 repository에 포함하지 않는다.
@@ -128,11 +132,11 @@ private fixture와 temporary catalog는 repository에 포함하지 않는다.
 
 ## 다음 구체 작업
 
-1. explicit provenance와 exact/Live Photo evidence를 이용한 read-only preferred-representation reconciliation plan 추가. 기본 policy는 quality가 동등하면 non-Takeout을 Google Takeout보다 우선한다.
-2. reconciliation plan에 canonical coverage를 구현한다. non-Takeout complete pair가 있고 해당 logical asset의 모든 제거 대상 Takeout resource가 역할별 exact copy로 cover되면 repeated occurrence 내부 pairing을 먼저 확정하지 않아도 Takeout set 전체를 automatic redundant candidate로 제안한다.
-3. canonical coverage로 풀리지 않는 약 221 mixed-exact Takeout resource를 위해 same-identifier occurrence partitioning을 구현한다. embedded identifier는 pairing authority로 유지하고 directory/co-location, basename, source export structure, exact equivalence는 partition hint로만 사용한다.
-4. Czkawka adapter를 large-library exact candidate accelerator + perceptual image/video similarity engine으로 설계한다. raw Czkawka hash/cache는 local adapter 안에 두고 agent에는 opaque group만 전달한다. destructive plan/apply 직전에는 native fresh hash/direct byte verification을 수행한다.
-5. Takeout-only exact duplicate를 한 physical representation으로 collapse하기 전에 album/collection membership 등 필요한 Takeout semantics를 catalog로 import한다.
+1. canonical coverage로 풀리지 않는 271 mixed-exact Takeout resource를 위해 same-identifier occurrence partitioning을 구현한다. embedded identifier는 pairing authority로 유지하고 directory/co-location, basename, source export structure, exact equivalence는 partition hint로만 사용한다.
+2. Czkawka image/video similarity adapter를 추가해 byte가 다른 probable duplicate만 opaque review group으로 agent에 제공한다. raw pHash/frame/cache/path는 local adapter 안에 둔다.
+3. native incremental hash cache를 설계해 unchanged file의 full SHA-256 재계산을 줄인다. Czkawka exact accelerator는 이중 hashing을 피할 수 있을 때만 benchmark 후 `automatic` 후보로 재평가한다.
+4. Takeout-only exact duplicate를 한 physical representation으로 collapse하기 전에 album/collection membership 등 필요한 Takeout semantics를 catalog로 import한다.
+5. preferred-representation plan을 immutable persisted plan으로 발전시키고 apply 전 fresh hash/direct byte verification precondition을 추가한다.
 6. mutation 전에 stable movable root ID와 archive-root marker 추가
 7. strict Live Photo timed-metadata validation 추가
 8. versioned sanitized JSONL catalog export/restore 추가

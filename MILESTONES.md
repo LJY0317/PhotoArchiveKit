@@ -110,6 +110,29 @@ current held exact-resource candidates                        987
 
 보류 987개는 perceptual similarity 후보가 아니다. **모두 파일 단위 exact hash가 non-Takeout resource와 일치하는 집합 안에 있다.** 보류 이유는 Live Photo occurrence boundary다.
 
+이후 `photoarchive plan`으로 preferred-representation planner와 canonical coverage를 실제 구현해 같은 library를 다시 평가했다. 구현된 planner의 정확한 mixed-exact 기준값은 다음과 같다.
+
+```text
+mixed local/Takeout exact resources     4466
+automatic redundant resources           4195
+  standalone exact                       739
+  Live Photo canonical coverage         3456
+review resources                          271
+  no complete preferred Live Photo       270
+  uncovered exact Live Photo variant       1
+```
+
+따라서 이전 수동 SQL에서 얻은 약 `4245 automatic / 221 review`는 근사치였고, 위 planner 결과가 새로운 기준값이다. `--exact-engine native`와 `--exact-engine czkawka`는 동일한 plan summary를 만들었다.
+
+성능 benchmark:
+
+```text
+Czkawka candidate discovery + native verification   37.66 s
+native size-group + full SHA-256                     36.21 s
+```
+
+현재 hybrid Czkawka exact path는 이중 작업 때문에 native보다 빠르지 않았다. `automatic`은 native를 유지하고 Czkawka exact는 독립 cross-check로 사용한다. Czkawka의 장기적인 주 전문 영역은 perceptual image/video similarity이며, exact accelerator 승격은 duplicate hashing을 피하는 integration 또는 native incremental cache 이후 다시 benchmark한다.
+
 ```text
 candidate resources in ambiguous/incomplete Takeout occurrences 984
 candidate resources with no complete non-Takeout occurrence       3

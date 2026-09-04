@@ -68,15 +68,18 @@ rclone은 bundle하지 않는다. upstream license는 MIT다.
 
 PhotoArchiveKit은 catalog identity와 archive safety에 필요한 local exact-resource grouping을 이미 수행한다. 이 exact engine은 같은 byte-size 후보에 대해 파일 전체 SHA-256을 읽어 **파일 내용이 cryptographic exact match인 경우만** 같은 exact group으로 묶으며 perceptual similarity를 판정하지 않는다.
 
-future `czkawka_cli` adapter의 주 역할은 다음과 같다.
+현재 `czkawka_cli` adapter의 역할은 다음과 같다.
 
-- large-library exact duplicate **candidate discovery accelerator**
-- 초기 real-library audit나 release validation에서 PhotoArchiveKit exact 결과를 독립적으로 cross-check
-- perceptually similar image candidate
-- similar-video candidate
+- 명시적 `--exact-engine czkawka`에서 cache/prehash 기반 exact candidate discovery
+- candidate를 PhotoArchiveKit native SHA-256으로 다시 검증하는 독립 cross-check
+- 초기 real-library audit나 release validation에서 native exact 결과와 비교
+- future perceptually similar image candidate
+- future similar-video candidate
 - 지원되는 경우 추가 broken-file diagnostic
 
-Czkawka는 size -> prehash -> cached full-hash pipeline과 mature cache를 제공하므로, 사용자의 Mac처럼 이미 설치되어 있고 대규모 root를 반복 scan하는 환경에서는 **평상시 exact candidate discovery에도 우선 사용하는 것이 합리적**이다. 다만 Czkawka가 final deletion authority가 되지는 않는다. PhotoArchiveKit은 candidate를 local process 안에서 받아 Live Photo/provenance/canonical-coverage graph에 결합하고, destructive plan/apply 직전에는 자체 fresh SHA-256 또는 direct byte comparison으로 다시 검증한다. Czkawka가 없으면 native SHA-256 scanner가 정상 fallback이다.
+real-library benchmark에서 `Czkawka candidate discovery + native SHA-256 verification`은 약 37.66초, native-only는 약 36.21초로 측정되어 현재 형태의 이중 작업은 속도 이득을 만들지 못했다. 따라서 `automatic` exact engine은 현재 native를 사용한다. 향후 Czkawka candidate를 이중 hashing 없이 안전하게 catalog에 흡수하거나 PhotoArchiveKit native incremental hash cache를 구현한 뒤 다시 benchmark하고 default 승격 여부를 결정한다.
+
+Czkawka가 final deletion authority가 되는 것은 아니다. PhotoArchiveKit은 candidate를 local process 안에서 받아 Live Photo/provenance/canonical-coverage graph에 결합하고, destructive plan/apply 직전에는 fresh integrity check 또는 direct byte comparison으로 다시 검증한다.
 
 perceptual similarity는 Czkawka/Krokiet이 장기적으로 맡을 전문 영역이며 review signal이지 automatic deletion authority가 아니다. raw exact/perceptual hash, frame, cache는 로컬에 유지한다.
 
