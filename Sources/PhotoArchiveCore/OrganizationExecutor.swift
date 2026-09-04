@@ -55,6 +55,24 @@ public struct OrganizationApplyMoveRecord: Codable, Sendable, Equatable {
     public let sourcePath: String
     public let destinationPath: String
     public let byteSize: Int64
+
+    public init(
+        itemID: String,
+        resourceID: String,
+        rootID: String,
+        role: ResourceRole,
+        sourcePath: String,
+        destinationPath: String,
+        byteSize: Int64
+    ) {
+        self.itemID = itemID
+        self.resourceID = resourceID
+        self.rootID = rootID
+        self.role = role
+        self.sourcePath = sourcePath
+        self.destinationPath = destinationPath
+        self.byteSize = byteSize
+    }
 }
 
 public struct OrganizationApplyManifest: Codable, Sendable, Equatable {
@@ -65,6 +83,24 @@ public struct OrganizationApplyManifest: Codable, Sendable, Equatable {
     public let state: String
     public let moves: [OrganizationApplyMoveRecord]
     public let filesModified: Bool
+
+    public init(
+        schemaVersion: Int,
+        sessionID: String,
+        policy: String,
+        createdAt: Date,
+        state: String,
+        moves: [OrganizationApplyMoveRecord],
+        filesModified: Bool
+    ) {
+        self.schemaVersion = schemaVersion
+        self.sessionID = sessionID
+        self.policy = policy
+        self.createdAt = createdAt
+        self.state = state
+        self.moves = moves
+        self.filesModified = filesModified
+    }
 }
 
 public struct OrganizationApplyReport: Codable, Sendable, Equatable {

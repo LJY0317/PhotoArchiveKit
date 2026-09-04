@@ -394,6 +394,88 @@ struct PhotoArchiveSelfTest {
         try require(!organizationApplyAgentJSON.contains(organizationApplyRoot.path), "agent-safe organization apply output exposed a root path")
         try require(!organizationApplyAgentJSON.contains("IMG_1234"), "agent-safe organization apply output exposed a filename")
 
+        let cleanupRoot = temporary.appendingPathComponent("CleanupRoot", isDirectory: true)
+        let cleanupNested = cleanupRoot.appendingPathComponent("batch/inner", isDirectory: true)
+        let cleanupKeep = cleanupRoot.appendingPathComponent("keep", isDirectory: true)
+        try fileManager.createDirectory(at: cleanupNested, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: cleanupKeep, withIntermediateDirectories: true)
+        _ = try RootMarkerStore.create(at: cleanupRoot)
+        let cleanupSourceA = cleanupNested.appendingPathComponent("IMG_0001.JPG")
+        let cleanupSourceB = cleanupKeep.appendingPathComponent("IMG_0002.JPG")
+        try Data("cleanup-a".utf8).write(to: cleanupSourceA)
+        try Data("cleanup-b".utf8).write(to: cleanupSourceB)
+        try Data("preserve-this-directory".utf8).write(to: cleanupKeep.appendingPathComponent("note.txt"))
+        let cleanupCatalog = temporary.appendingPathComponent("cleanup.sqlite3")
+        let cleanupScanner = try ArchiveScanner(catalogURL: cleanupCatalog)
+        let cleanupScan = try await cleanupScanner.scan(roots: [
+            ScanRoot(url: cleanupRoot, kind: .inbox, provenance: .localLibrary)
+        ])
+        guard let cleanupResourceA = cleanupScan.resources.first(where: { $0.relativePath == "batch/inner/IMG_0001.JPG" }),
+              let cleanupResourceB = cleanupScan.resources.first(where: { $0.relativePath == "keep/IMG_0002.JPG" })
+        else {
+            throw SelfTestFailure("cleanup fixture resources were not scanned")
+        }
+        let cleanupDestinationA = cleanupRoot.appendingPathComponent("2026-01-01_00-00-01.jpg")
+        let cleanupDestinationB = cleanupRoot.appendingPathComponent("2026-01-01_00-00-02.jpg")
+        try fileManager.moveItem(at: cleanupSourceA, to: cleanupDestinationA)
+        try fileManager.moveItem(at: cleanupSourceB, to: cleanupDestinationB)
+        let cleanupOrganizationManifestURL = temporary.appendingPathComponent("cleanup-organization.json")
+        let cleanupOrganizationManifest = OrganizationApplyManifest(
+            schemaVersion: 1,
+            sessionID: cleanupScan.sessionID,
+            policy: "selftest_cleanup",
+            createdAt: Date(),
+            state: "complete",
+            moves: [
+                OrganizationApplyMoveRecord(
+                    itemID: "O-CLEAN-A",
+                    resourceID: cleanupResourceA.resourceID,
+                    rootID: cleanupResourceA.rootID,
+                    role: cleanupResourceA.role,
+                    sourcePath: cleanupSourceA.path,
+                    destinationPath: cleanupDestinationA.path,
+                    byteSize: cleanupResourceA.byteSize
+                ),
+                OrganizationApplyMoveRecord(
+                    itemID: "O-CLEAN-B",
+                    resourceID: cleanupResourceB.resourceID,
+                    rootID: cleanupResourceB.rootID,
+                    role: cleanupResourceB.role,
+                    sourcePath: cleanupSourceB.path,
+                    destinationPath: cleanupDestinationB.path,
+                    byteSize: cleanupResourceB.byteSize
+                )
+            ],
+            filesModified: true
+        )
+        let cleanupEncoder = JSONEncoder()
+        cleanupEncoder.dateEncodingStrategy = .iso8601
+        try cleanupEncoder.encode(cleanupOrganizationManifest).write(to: cleanupOrganizationManifestURL)
+
+        let cleanupDryRun = try EmptyDirectoryCleanupExecutor.preflight(
+            organizationManifestURL: cleanupOrganizationManifestURL,
+            catalogURL: cleanupCatalog
+        )
+        try require(cleanupDryRun.dryRun, "empty-directory cleanup preflight must be a dry run")
+        try require(cleanupDryRun.directoryCount == 2, "cleanup should remove only the nested empty directory chain")
+        try require(fileManager.fileExists(atPath: cleanupNested.path), "cleanup dry run removed an empty directory")
+        let cleanupAgentJSON = String(
+            decoding: try encoder.encode(AgentSafeEmptyDirectoryCleanupReport(report: cleanupDryRun)),
+            as: UTF8.self
+        )
+        try require(!cleanupAgentJSON.contains(cleanupRoot.path), "agent-safe empty-directory cleanup exposed a path")
+        try require(!cleanupAgentJSON.contains("batch"), "agent-safe empty-directory cleanup exposed a directory name")
+
+        let cleanupApplied = try EmptyDirectoryCleanupExecutor.apply(
+            organizationManifestURL: cleanupOrganizationManifestURL,
+            catalogURL: cleanupCatalog
+        )
+        try require(cleanupApplied.directoryCount == 2, "empty-directory cleanup should remove two directories")
+        try require(!fileManager.fileExists(atPath: cleanupNested.path), "nested empty directory was not removed")
+        try require(!fileManager.fileExists(atPath: cleanupRoot.appendingPathComponent("batch").path), "empty parent directory was not removed")
+        try require(fileManager.fileExists(atPath: cleanupKeep.path), "non-empty directory must be preserved")
+        try require(cleanupApplied.cleanupManifestPath != nil, "empty-directory cleanup should record a local manifest")
+
         let coverageReport = syntheticCanonicalCoverageReport()
         let coveragePlan = ReconciliationPlanner.makePlan(from: coverageReport)
         try require(

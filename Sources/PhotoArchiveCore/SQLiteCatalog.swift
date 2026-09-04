@@ -1036,11 +1036,30 @@ final class SQLiteCatalog {
         }
     }
 
-    func quarantineRestoreRootPath(rootID: String) throws -> String? {
+    func sourceRootPath(rootID: String) throws -> String? {
         try queryText(
             "SELECT canonical_path FROM source_roots WHERE id = ?",
             bindings: [.text(rootID)]
         )
+    }
+
+    func quarantineRestoreRootPath(rootID: String) throws -> String? {
+        try sourceRootPath(rootID: rootID)
+    }
+
+    func resourceLocationExists(
+        resourceID: String,
+        rootID: String,
+        relativePath: String
+    ) throws -> Bool {
+        try queryText(
+            """
+            SELECT '1' FROM resource_locations
+            WHERE resource_id = ? AND root_id = ? AND relative_path = ?
+            LIMIT 1
+            """,
+            bindings: [.text(resourceID), .text(rootID), .text(relativePath)]
+        ) != nil
     }
 
     func quarantineRestoreExactHash(rootID: String, relativePath: String) throws -> Data? {

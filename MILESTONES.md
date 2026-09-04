@@ -281,6 +281,8 @@ review items/resources          628 /  795
 
 적용 후 capture-time 이름으로 이미 flat 정리된 Live Photo 1,527개를 `custom_filename_preserved` REVIEW로 다시 표시하던 idempotence 문제를 수정했다. planner는 expected capture-time stem과 root-level same-basename pair가 이미 성립하면 완료된 no-op로 제외한다. 실제 library post-plan은 다시 `AUTO 0`, 원래 보류만 `628 item / 795 resource`로 복원됐다. `photoarchive organize` executor는 marker-gated dry-run/apply, Live Photo atomic same-basename move, post-move filesystem identity/size verification, stable resource ID 기반 SQLite path/location-history transaction, session rollback과 local restore manifest까지 현재 필요 수준에서 완료로 닫는다.
 
+`cleanup-empty-dirs`를 추가해 전체 library의 임의 빈 폴더가 아니라 위 completed organization manifest에서 실제 파일이 빠져나간 source path와 catalog `resource_locations` history가 일치하는 directory chain만 cleanup 후보로 만든다. stable root marker를 요구하고 package/symlink boundary를 거부하며 apply 순간에도 literal empty인지 재검증한다. real organization manifest dry-run 결과는 412 directory였고, count-only 검증에서 `.photoslibrary` 내부 0, Takeout 0, `Pictures` root 자체 0이었다. 실제 directory 삭제는 아직 적용하지 않았다.
+
 ## 2026-09-04 — Product North Star 고정
 
 최초 제품 목적을 `docs/PROJECT_NORTH_STAR.md`와 `AGENTS.md`의 explicit scope gate로 고정했다.

@@ -59,6 +59,7 @@ The initial CLI can:
 - keep same-volume resource identity stable across rename/move and recognize a moved source root through an optional `.photoarchive-root` marker;
 - generate a read-only `organize-plan` for only `IMG_####` / `IMG_E####` camera-style names, using capture wall-clock names such as `YYYY-MM-DD_HH-mm-ss[_NN]` while preserving custom filenames;
 - require a stable root marker before `organize --apply`, keep Live Photo still+video on one destination basename, verify post-move filesystem identity/size, transactionally update the stable resource path/history in SQLite without a second full scan, write a restore manifest, and roll back filesystem moves if catalog commit fails;
+- let `cleanup-empty-dirs` consider only source directories proven by a completed organization manifest plus catalog location history, require the stable root marker, skip package/symlink boundaries, and remove only directories that are still literally empty at apply time;
 - produce a human-readable report or sanitized JSON;
 - detect optional user-installed interoperability tools without requiring or bundling them;
 - dry-run or apply a local quarantine of only `automatic_redundant` exact candidates after fresh SHA-256 verification against a preferred copy; Live Photo candidate sets are verified before any resource in the item moves;
@@ -121,7 +122,7 @@ swift run photoarchive plan \
   --takeout "~/Pictures/Takeout"
 ```
 
-For an AI agent, use `--agent-json` with `scan`, `plan`, `organize-plan`, `organize`, or `quarantine`; local diagnostic `--json` can contain paths.
+For an AI agent, use `--agent-json` with `scan`, `plan`, `organize-plan`, `organize`, `quarantine`, or `cleanup-empty-dirs`; local diagnostic `--json` can contain paths.
 
 Preview a quarantine without moving anything:
 
@@ -148,6 +149,13 @@ swift run photoarchive organize-plan --agent-json --local "~/Pictures"
 ```
 
 Before any organization apply, initialize a stable root marker explicitly (`photoarchive root init --apply "~/Pictures"`). `photoarchive organize` then defaults to a marker-verified dry run; only an explicit `--apply` can rename/flatten automatic items. Custom filenames and review items stay untouched.
+
+After organization, empty-directory cleanup can be constrained to directories that actually lost files in that completed organization session. It is also a dry run by default:
+
+```bash
+swift run photoarchive cleanup-empty-dirs --agent-json "/path/to/organization.json"
+# add --apply only after the preflight succeeds
+```
 
 Scan several sources together so exact copies, provenance, and cross-source Live Photo relationships can be reconciled without flattening the folders first:
 

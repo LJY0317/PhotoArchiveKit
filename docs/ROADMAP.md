@@ -36,7 +36,7 @@ Roadmap은 작고 검증 가능한 layer를 우선한다. 어느 phase도 existi
 - [x] iPhone-style camera filename만 대상으로 하는 deterministic `YYYY-MM-DD_HH-mm-ss[_NN]` rename proposal; Live Photo still+paired video는 항상 동일 basename으로 atomic rename
 - [x] 최초 filename과 resource location history를 catalog에 영구 보존하고 기존 provenance/representation 관계와 함께 추적
 - [x] same-volume filesystem resource identity + `.photoarchive-root` marker를 이용해 rename/move 및 root relocation이 단순 path 누적으로 변하지 않게 함
-- [x] canonical iPhone-camera candidate를 local root 최상위로 옮기는 deterministic read-only move proposal; 의미 없는 empty directory 삭제는 아직 verified cleanup 단계로 분리
+- [x] canonical iPhone-camera candidate를 local root 최상위로 옮기는 deterministic move/apply와, completed organization source history에만 제한된 verified `cleanup-empty-dirs` dry-run/apply
 - [ ] existing archive folder를 collection example로 import
 - [ ] event-level collection proposal
 - [ ] confidence band 및 policy preset

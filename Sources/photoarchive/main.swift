@@ -28,6 +28,8 @@ struct PhotoArchiveCLI {
                 try await runScan(arguments, mode: .quarantine)
             case "restore-quarantine":
                 try runRestoreQuarantine(arguments)
+            case "cleanup-empty-dirs":
+                try runCleanupEmptyDirectories(arguments)
             case "root":
                 try runRoot(arguments)
             case "doctor":
@@ -94,6 +96,64 @@ struct PhotoArchiveCLI {
             try printJSON(report)
         } else {
             printQuarantineRestoreReport(report)
+        }
+    }
+
+    private static func runCleanupEmptyDirectories(_ arguments: [String]) throws {
+        var catalogURL = PhotoArchivePaths.defaultCatalogURL
+        var apply = false
+        var outputJSON = false
+        var outputAgentJSON = false
+        var manifestPaths: [String] = []
+
+        var index = 0
+        while index < arguments.count {
+            let argument = arguments[index]
+            switch argument {
+            case "--catalog":
+                catalogURL = fileURL(try value(after: argument, at: &index, in: arguments))
+            case "--apply":
+                apply = true
+            case "--json":
+                outputJSON = true
+            case "--agent-json":
+                outputAgentJSON = true
+            case "--help", "-h":
+                printCleanupEmptyDirectoriesHelp()
+                return
+            default:
+                if argument.hasPrefix("-") {
+                    throw CLIError("Unknown cleanup-empty-dirs option: \(argument)")
+                }
+                manifestPaths.append(argument)
+            }
+            index += 1
+        }
+
+        guard manifestPaths.count == 1 else {
+            throw CLIError("cleanup-empty-dirs requires exactly one organization.json path.")
+        }
+        if outputJSON && outputAgentJSON {
+            throw CLIError("Use either --json or --agent-json, not both.")
+        }
+
+        let manifestURL = fileURL(manifestPaths[0])
+        let report = try apply
+            ? EmptyDirectoryCleanupExecutor.apply(
+                organizationManifestURL: manifestURL,
+                catalogURL: catalogURL
+            )
+            : EmptyDirectoryCleanupExecutor.preflight(
+                organizationManifestURL: manifestURL,
+                catalogURL: catalogURL
+            )
+
+        if outputAgentJSON {
+            try printJSON(AgentSafeEmptyDirectoryCleanupReport(report: report))
+        } else if outputJSON {
+            try printJSON(report)
+        } else {
+            printEmptyDirectoryCleanupReport(report)
         }
     }
 
@@ -450,6 +510,23 @@ struct PhotoArchiveCLI {
         }
     }
 
+    private static func printEmptyDirectoryCleanupReport(_ report: EmptyDirectoryCleanupReport) {
+        print(report.dryRun ? "PhotoArchiveKit empty-directory cleanup dry run" : "PhotoArchiveKit empty-directory cleanup applied")
+        print("Session: \(report.sessionID)")
+        print("Directories: \(report.directoryCount)")
+        if let cleanupManifestPath = report.cleanupManifestPath {
+            print("Cleanup manifest: \(cleanupManifestPath)")
+        }
+        print("")
+        if report.dryRun {
+            print("No directories were removed. Re-run with --apply only after reviewing this preflight.")
+        } else if report.filesModified {
+            print("Only empty directories derived from the completed organization manifest were removed.")
+        } else {
+            print("No removable empty directories remained.")
+        }
+    }
+
     private static func printQuarantineRestoreReport(_ report: QuarantineRestoreReport) {
         print(report.dryRun ? "PhotoArchiveKit quarantine restore dry run" : "PhotoArchiveKit quarantine restored")
         print("Session: \(report.sessionID)")
@@ -618,6 +695,7 @@ struct PhotoArchiveCLI {
               photoarchive organize [--apply] [options] ROOT...
               photoarchive quarantine --to PATH [--apply] [options] ROOT...
               photoarchive restore-quarantine [--apply] [--catalog PATH] MANIFEST
+              photoarchive cleanup-empty-dirs [--apply] [--catalog PATH] ORGANIZATION_MANIFEST
               photoarchive root inspect PATH
               photoarchive root init [--apply] PATH
               photoarchive doctor
@@ -629,8 +707,30 @@ struct PhotoArchiveCLI {
 
             Run 'photoarchive scan --help', 'photoarchive plan --help',
             'photoarchive organize-plan --help', 'photoarchive organize --help',
-            'photoarchive quarantine --help', or 'photoarchive restore-quarantine --help'
-            for options.
+            'photoarchive quarantine --help', 'photoarchive restore-quarantine --help',
+            or 'photoarchive cleanup-empty-dirs --help' for options.
+            """
+        )
+    }
+
+    private static func printCleanupEmptyDirectoriesHelp() {
+        print(
+            """
+            Usage:
+              photoarchive cleanup-empty-dirs [options] ORGANIZATION_MANIFEST
+
+            Options:
+              --catalog PATH   SQLite catalog containing resource location history
+              --apply          Remove verified empty directories; default is dry-run
+              --json           Print local diagnostic JSON, including directory paths
+              --agent-json     Print privacy-minimized JSON without directory paths
+              --help           Show this help
+
+            Cleanup is intentionally narrow: it considers only source directories recorded
+            by a completed organization manifest, confirms those source locations exist in
+            local catalog history, requires the stable root marker, skips package/symlink
+            boundaries, and removes only directories that are still literally empty when
+            --apply runs. The registered root itself is never removed.
             """
         )
     }

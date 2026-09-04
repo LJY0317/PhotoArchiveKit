@@ -59,6 +59,7 @@ byte 보존 복제본          provenance와 이력
 - 같은 volume 안의 rename/move에서는 physical resource identity를 유지하고, optional `.photoarchive-root` marker로 이동된 source root도 동일 root로 다시 인식
 - `IMG_####` / `IMG_E####` camera-style 이름만 대상으로 `YYYY-MM-DD_HH-mm-ss[_NN]` 촬영시각 기반 flat rename `organize-plan` 생성; custom filename은 보존
 - `organize --apply`에는 stable root marker를 요구하고, Live Photo still+video를 같은 destination basename으로 유지하며 post-move filesystem identity/size를 검증한 뒤 stable resource path/history를 full rescan 없이 SQLite에 transaction commit하고, catalog commit 실패 시 filesystem move 전체 rollback
+- `cleanup-empty-dirs`는 완료된 organization manifest와 catalog location history에 실제로 기록된 source directory만 대상으로 하며, stable root marker를 확인하고 package/symlink boundary를 제외한 뒤 apply 순간에도 완전히 빈 directory만 제거
 - 사람이 읽는 report와 privacy-safe JSON report 제공
 - 선택적 외부 도구의 설치 여부만 감지하며 필수 의존성으로 만들지 않음
 - `automatic_redundant` exact 후보만 fresh SHA-256으로 preferred copy와 다시 검증한 뒤 local quarantine dry-run/apply 가능; Live Photo candidate set은 해당 item의 모든 resource 검증이 끝난 뒤에만 이동
@@ -121,7 +122,7 @@ swift run photoarchive plan \
   --takeout "~/Pictures/Takeout"
 ```
 
-AI agent는 `scan`, `plan`, `organize-plan`, `organize`, `quarantine`에서 `--agent-json`을 사용해야 하며, path를 포함할 수 있는 local diagnostic `--json`은 agent에 전달하지 않습니다.
+AI agent는 `scan`, `plan`, `organize-plan`, `organize`, `quarantine`, `cleanup-empty-dirs`에서 `--agent-json`을 사용해야 하며, path를 포함할 수 있는 local diagnostic `--json`은 agent에 전달하지 않습니다.
 
 아무 파일도 이동하지 않고 quarantine 후보를 먼저 검증합니다.
 
@@ -148,6 +149,13 @@ swift run photoarchive organize-plan --agent-json --local "~/Pictures"
 ```
 
 organization apply 전에는 stable root marker를 명시적으로 초기화합니다(`photoarchive root init --apply "~/Pictures"`). `photoarchive organize`는 marker를 확인하는 dry-run이 기본이며, `--apply`에서만 automatic item을 rename/flat move합니다. custom filename과 review item은 그대로 둡니다.
+
+정리가 끝난 뒤에는 해당 organization manifest에서 실제 파일이 빠져나간 source directory만 좁게 대상으로 삼아 빈 폴더를 정리할 수 있습니다. 이 명령도 기본 dry-run입니다.
+
+```bash
+swift run photoarchive cleanup-empty-dirs --agent-json "/path/to/organization.json"
+# preflight 성공 후에만 --apply 추가
+```
 
 폴더를 먼저 한곳에 섞지 않고 여러 source를 함께 scan하면 exact copy, provenance, source 간 Live Photo 관계를 통합할 수 있습니다.
 
