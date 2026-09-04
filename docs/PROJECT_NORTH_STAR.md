@@ -76,12 +76,22 @@ iPhone/Apple Photos에서 직접 추출한 원본 계열
 
 ## 외부 도구 활용 원칙
 
-PhotoArchiveKit은 이미 잘하는 도구를 다시 만들지 않는다.
+PhotoArchiveKit은 이미 잘 해결된 문제를 다시 구현하지 않는다. 선택 기준은 단순한 "dependency 최소화"가 아니라 **공식 지원성, 정확성, 성숙도, 재현성, privacy, 유지보수 비용**이다.
 
-- exact/perceptual duplicate 후보 탐색에서 Czkawka/Krokiet 같은 검증된 도구를 선택적으로 활용할 수 있다.
-- off-site file replica와 검증에는 rclone 같은 검증된 도구를 선택적으로 활용할 수 있다.
-- metadata 진단에는 ExifTool/ffprobe 같은 도구를 선택적으로 활용할 수 있다.
-- Apple Photos 연동은 공식 PhotoKit을 우선한다.
+우선순위:
+
+1. 요구 기능을 Apple 또는 provider의 공식 framework/API가 충분히 제공하면 공식 경로를 우선한다.
+2. 공식 경로가 없거나 부족하고 PhotoArchiveKit의 고유 semantic 영역이 아니라면, 널리 사용되고 검증된 best-of-breed open-source 도구를 우선 평가한다.
+3. 자체 구현은 Live Photo asset graph, provenance, preferred representation, archive plan/transaction처럼 우리가 반드시 소유해야 하는 부분이나 외부 선택지가 요구조건을 충족하지 못할 때만 한다.
+
+현재 역할 분담:
+
+- PhotoArchiveKit core의 exact comparison은 catalog identity와 안전한 archive 판단에 필요한 작고 결정론적인 기능으로 유지한다. 같은 byte-size 후보의 파일 전체 SHA-256이 일치할 때만 exact duplicate로 본다.
+- Czkawka/Krokiet은 특히 perceptual image/video similarity 후보와 독립적인 exact cross-check에 활용한다. similarity는 deletion authority가 아니다.
+- off-site file replica와 검증에는 rclone 같은 검증된 도구를 우선한다.
+- broad/obscure metadata 진단이 필요해지면 ExifTool/ffprobe를 우선 평가하고 범용 parser를 새로 만들지 않는다.
+- Apple media metadata와 Photos 연동은 공식 ImageIO/AVFoundation/PhotoKit이 요구를 충분히 충족하는 범위에서 공식 경로를 우선한다.
+- osxphotos가 Apple Photos query/export/album 작업에서 자체 구현보다 더 완전하고 안정적인 경로를 제공하면 optional adapter로 활용할 수 있다. 같은 기능을 공식 PhotoKit이 더 잘 제공하면 PhotoKit이 우선이다.
 
 그러나 외부 도구는 핵심 semantic truth를 소유하지 않는다. 최종 관계도와 사용자 결정은 portable filesystem + SQLite에 남긴다.
 

@@ -19,7 +19,9 @@
 - repository fixture는 synthetic/generated data이거나 공개를 명시적으로 승인받은 자료만 사용한다.
 
 ## 의존성과 라이선스
-- 필수 core에서는 Apple system framework와 Swift standard library를 우선한다.
+- 필요한 기능을 Apple의 공식 framework/API가 충분히 안정적으로 제공한다면 third-party나 자체 재구현보다 공식 경로를 우선한다.
+- 핵심 차별 영역이 아닌 복잡한 기능을 새로 구현하기 전에, 널리 사용되고 유지보수되며 CLI/API와 라이선스가 명확한 best-of-breed 외부 프로젝트가 사실상 상위호환인지 먼저 평가한다. 더 강하고 검증된 도구가 있으면 작은 adapter로 재사용하고 같은 엔진을 다시 만들지 않는다.
+- 자체 구현은 Live Photo asset 관계, provenance, preferred representation, archive plan/transaction처럼 PhotoArchiveKit이 반드시 소유해야 하는 semantic/safety 영역이나, 공식/외부 도구가 privacy·정확성·기능 요구를 충족하지 못하는 경우에 한한다.
 - 선택적 adapter는 사용자가 설치한 도구를 subprocess로 호출할 수 있다. 별도 license review 없이 third-party binary를 vendor하거나 재배포하지 않는다.
 - 선택적 interoperability를 문서화할 때 upstream 도구 이름을 정확하게 사용하고, sponsorship 또는 affiliation을 암시하지 않는다.
 

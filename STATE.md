@@ -59,9 +59,10 @@ scanner는 media에 대해 read-only다. 명시적으로 선택한 SQLite catalo
 - Google Photos에서 album projection을 못 하더라도 eligible ordinary media의 flat upload는 유용한 미래 기능이다.
 - 검증된 Live Photo를 unrelated still/video로 나눠 업로드한 뒤 preserved라고 보고해서는 안 된다.
 - Apple PhotoKit은 Live Photo 생성과 editable album membership을 위한 우선 projection 경로다.
-- optional rclone, Czkawka CLI, ExifTool, ffprobe adapter는 required core와 분리한다.
-- required metadata core는 ImageIO/AVFoundation과 최소 Takeout sidecar importer로 현재 archive workflow에 필요한 좁은 촬영시각·QuickTime·Live Photo linkage 역할을 수행한다. ExifTool 수준의 broad metadata coverage를 재구현하지 않으며 ExifTool은 optional diagnostic으로 유지한다.
-- osxphotos는 required dependency가 아니다. Apple Photos library query/export/album/original-edited interoperability가 필요할 때 optional bridge로 검토하되 장기적인 공식 write path는 PhotoKit을 우선한다.
+- dependency 선택은 원칙적으로 `공식 지원 API/framework > 성숙한 best-of-breed 외부 도구 > 자체 재구현` 순서다. 다만 Live Photo asset graph, provenance, preferred representation, archive transaction처럼 PhotoArchiveKit이 반드시 소유해야 하는 semantic/safety logic은 core에 남긴다.
+- optional rclone, Czkawka CLI, ExifTool, osxphotos, ffprobe adapter는 required core와 분리한다.
+- required metadata core는 ImageIO/AVFoundation과 최소 Takeout sidecar importer로 현재 archive workflow에 필요한 좁은 촬영시각·QuickTime·Live Photo linkage 역할을 수행한다. ExifTool 수준의 broad metadata coverage가 필요해지면 같은 범용 parser를 직접 확대하기보다 ExifTool을 우선 평가한다.
+- osxphotos는 required dependency가 아니다. Apple Photos library query/export/album/original-edited interoperability가 필요할 때 자체 구현과 비교해 더 완전하고 검증된 경로라면 optional bridge로 활용한다. 같은 기능을 공식 PhotoKit이 더 안전하고 완전하게 제공하면 PhotoKit을 우선한다.
 
 ## 검증
 
@@ -86,7 +87,7 @@ scanner는 media에 대해 read-only다. 명시적으로 선택한 SQLite catalo
 - Google web 비교 경로를 바로잡은 뒤 fixture를 다시 scan했다. 테스트한 모든 Google Photos web resource는 Image Capture counterpart와 byte-identical이었으며 motion resource filename이 `.MOV`가 아니라 `.MP4`여도 동일했다.
 - real library의 기존 Krokiet/Czkawka cache를 재사용해 `czkawka_cli` exact scan을 재현했다. 주요 photo/video extension 기준 8,269 exact group, 8,739 redundant occurrence, 약 76.66 GiB가 확인되었다.
 - local-library와 Google-Takeout을 동시에 포함한 exact group은 Czkawka와 PhotoArchiveKit이 동일하게 4,052개를 찾았고, 그 안의 Takeout resource도 양쪽 모두 4,466개였다.
-- 현재 asset model로 즉시 automatic redundant candidate로 올릴 수 있는 Takeout resource는 최소 3,431개다: standalone 739개 + complete Live Photo occurrence 1,346쌍의 resource 2,692개. 나머지 file-level duplicate는 Live Photo completeness/ambiguity 때문에 review가 필요하다.
+- occurrence 단위로 재분석한 현재 automatic redundant candidate는 Takeout resource 3,479개다: standalone 739개 + clean Live Photo occurrence의 role별 exact resource 2,740개. 보류 987개는 perceptual similarity가 아니라 개별 file hash는 이미 exact match이며, 984개는 repeated/incomplete Live Photo occurrence boundary가 ambiguous해서, 3개는 complete non-Takeout occurrence가 확인되지 않아 hold된다.
 - Takeout-only exact group 4,189개에는 redundant media occurrence 4,193개가 있으며 약 35.19 GiB다. album/collection semantics를 catalog로 옮기기 전에는 자동 제거하지 않는다.
 
 private fixture와 temporary catalog는 repository에 포함하지 않는다.
@@ -100,7 +101,7 @@ private fixture와 temporary catalog는 repository에 포함하지 않는다.
 - versioned JSONL catalog export/restore가 없다.
 - SQLite persistence 외 incremental metadata/hash cache optimization이 없다.
 - event grouping은 time-based만 구현되어 있으며 archive-guided semantic folder prediction은 계획 단계다.
-- 같은 source root 안에서 동일 Live Photo identifier의 반복 copy는 현재 하나의 ambiguous occurrence로 요약된다. duplicated export folder를 위한 occurrence partitioning이 필요하다.
+- 같은 source root 안에서 동일 Live Photo identifier의 반복 copy는 현재 하나의 ambiguous occurrence로 요약된다. duplicated export folder를 위한 occurrence partitioning이 필요하다. real-library hold 집합의 거의 전부가 이 제한과 직접 연결된다.
 - standalone exact copy는 exact-duplicate hashing이 켜진 경우에만 하나의 logical asset으로 합쳐진다. scan mode 간 stable identity가 필요하다.
 - PhotoKit, Google Photos, Takeout, rclone, Czkawka, ExifTool, ffprobe 실행 adapter가 아직 없다.
 - Google Photos public API는 full existing-library reconciliation interface로 취급할 수 없다.
@@ -120,8 +121,8 @@ private fixture와 temporary catalog는 repository에 포함하지 않는다.
 ## 다음 구체 작업
 
 1. explicit provenance와 exact/Live Photo evidence를 이용한 read-only preferred-representation reconciliation plan 추가. 기본 policy는 quality가 동등하면 non-Takeout을 Google Takeout보다 우선한다.
-2. reconciliation plan에서 standalone exact asset은 local exact copy가 있으면 Takeout occurrence를 automatic redundant candidate로 제안하고, Live Photo는 complete occurrence의 still + paired video가 role별로 모두 local exact copy와 일치할 때만 occurrence 전체를 automatic candidate로 제안한다.
-3. incomplete/ambiguous Live Photo와 file-level exact만 확인된 resource는 review queue로 분리하고 same-identifier repeated occurrence partitioning을 보강한다.
+2. reconciliation plan에서 standalone exact asset은 local exact copy가 있으면 Takeout occurrence를 automatic redundant candidate로 제안하고, Live Photo는 clean occurrence의 still + paired video가 role별로 모두 non-Takeout exact pair와 일치할 때만 occurrence 전체를 automatic candidate로 제안한다.
+3. same-identifier repeated Live Photo resource를 실제 1쌍 occurrence로 partition하여 현재 exact file임에도 hold되는 약 1천 resource를 안전하게 더 자동화한다. incomplete/ambiguous occurrence는 계속 review queue에 둔다.
 4. Takeout-only exact duplicate를 한 physical representation으로 collapse하기 전에 album/collection membership 등 필요한 Takeout semantics를 catalog로 import한다.
 5. optional Czkawka adapter는 perceptual image/video similarity와 exact cross-check에 사용하되 deletion authority는 PhotoArchiveKit asset plan이 소유한다.
 6. mutation 전에 stable movable root ID와 archive-root marker 추가

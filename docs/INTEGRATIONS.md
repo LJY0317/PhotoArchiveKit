@@ -4,6 +4,22 @@ PhotoArchiveKit의 required runtime은 의도적으로 self-contained다. Apple 
 
 ## 일반 정책
 
+기능 구현 우선순위는 다음과 같다.
+
+1. **공식 platform/provider API 또는 system framework**가 요구 기능을 안정적으로 제공하면 그것을 우선한다. Apple-native 기능은 가능한 범위에서 ImageIO, AVFoundation, PhotoKit 같은 공식 경로를 first choice로 본다.
+2. 공식 경로가 없거나 부족하고, 해당 기능이 PhotoArchiveKit의 고유 semantic 영역이 아니라면 **널리 사용되고 유지보수되며 CLI/API·문서·라이선스가 명확한 best-of-breed 외부 도구**를 먼저 평가한다. 검증된 도구가 자체 구현보다 명확히 강하면 adapter로 재사용한다.
+3. 자체 구현은 Live Photo asset 관계, provenance, preferred representation, archive plan/transaction처럼 PhotoArchiveKit이 반드시 소유해야 하는 영역이거나, 공식/외부 도구가 privacy·정확성·기능 요구를 충족하지 못할 때만 선택한다.
+
+이 정책의 목적은 dependency 수를 무조건 줄이는 것이 아니라 **이미 더 잘 해결된 문제를 다시 만들다가 정확도와 안정성을 떨어뜨리지 않는 것**이다. 외부 도구를 채택하더라도 raw hash·pHash·frame·광범위한 metadata dump 같은 내부 결과는 로컬에 머물고, SQLite의 provider-neutral semantic state와 최종 archive 결정은 PhotoArchiveKit이 소유한다.
+
+현재 예시는 다음과 같다.
+
+- Apple media metadata와 future Photos projection: 공식 Apple framework가 충분하면 공식 경로 우선
+- remote file replication/verification: rclone 같은 성숙한 전용 도구 우선
+- perceptual image/video similarity: Czkawka CLI 같은 성숙한 전용 도구 우선
+- broad/obscure metadata diagnostic: 필요해지는 시점에 ExifTool을 우선 평가하고 같은 범용 metadata engine을 직접 만들지 않음
+- Apple Photos library query/export/album interoperability: 필요해지는 시점에 osxphotos를 우선 평가하되, 동일 기능을 공식 PhotoKit이 더 안전하고 완전하게 제공하면 PhotoKit을 우선
+
 normal integration pattern:
 
 1. 사용자가 upstream program을 독립적으로 설치/configure한다.
@@ -50,11 +66,17 @@ rclone은 bundle하지 않는다. upstream license는 MIT다.
 
 ## Czkawka CLI 및 Krokiet
 
-PhotoArchiveKit은 이미 local exact-resource grouping을 수행한다. future `czkawka_cli` adapter는 다음을 추가할 수 있다.
+PhotoArchiveKit은 catalog identity와 archive safety에 필요한 local exact-resource grouping을 이미 수행한다. 이 exact engine은 같은 byte-size 후보에 대해 파일 전체 SHA-256을 읽어 **파일 내용이 cryptographic exact match인 경우만** 같은 exact group으로 묶으며 perceptual similarity를 판정하지 않는다.
+
+future `czkawka_cli` adapter의 주 역할은 다음과 같다.
 
 - perceptually similar image candidate
 - similar-video candidate
-- 지원되는 경우 추가 broken-file/duplicate diagnostic
+- 초기 real-library audit나 release validation에서 PhotoArchiveKit exact 결과를 독립적으로 cross-check
+- 성능상 이득이 검증될 경우 optional candidate-generation/acceleration
+- 지원되는 경우 추가 broken-file diagnostic
+
+정상적인 매 scan마다 Czkawka exact scan을 반드시 한 번 더 돌릴 필요는 없다. PhotoArchiveKit exact engine이 안정화된 뒤에는 Czkawka exact mode를 독립 검증·회귀 점검에 사용하고, 평상시 가장 큰 추가 가치는 **byte가 다르지만 같은 촬영물일 가능성이 있는 image/video similarity 후보**를 찾는 것이다.
 
 similarity는 review signal이며 automatic deletion authority가 아니다. raw perceptual hash, frame, cache는 로컬에 유지한다.
 

@@ -46,6 +46,9 @@ tokens/
 .local/
 state/private/
 test-output/
+local-reports/
+integration-output/
+integration-cache/
 
 # Never commit personal media or provider exports
 Photo Inbox/

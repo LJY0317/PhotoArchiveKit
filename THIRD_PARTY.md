@@ -16,7 +16,7 @@ PhotoArchiveKit의 required core는 아래 도구를 포함, link, vendor, downl
 
 ## Czkawka CLI
 
-- 목적: optional additional exact-duplicate 및 perceptual-similarity candidate 생성
+- 목적: perceptual image/video similarity candidate 생성, optional exact cross-check/성능 보조
 - integration model: user-installed `czkawka_cli` executable 호출 후 sanitized result import
 - Upstream: <https://github.com/qarmin/czkawka>
 - `czkawka_core`, `czkawka_cli`에 해당하는 upstream license: MIT
@@ -42,7 +42,7 @@ similarity output은 review signal이다. PhotoArchiveKit이 이를 직접 delet
 - Upstream license: upstream 설명에 따르면 Perl과 동일한 조건
 - PhotoArchiveKit에 bundle: 아니오
 
-초기 설계에서는 ExifTool을 read-only로 취급한다. Live Photo identifier 또는 source metadata rewrite는 초기 release 범위 밖이다.
+초기 설계에서는 ExifTool을 read-only로 취급한다. 현재 Apple system framework가 core에 필요한 좁은 metadata 역할을 충족하므로 필수 dependency로 만들지 않지만, broad/obscure metadata coverage가 필요해지면 범용 parser를 새로 확장하기보다 ExifTool을 우선 평가한다. Live Photo identifier 또는 source metadata rewrite는 초기 release 범위 밖이다.
 
 ## osxphotos
 
@@ -52,7 +52,7 @@ similarity output은 review signal이다. PhotoArchiveKit이 이를 직접 delet
 - Upstream license: MIT
 - PhotoArchiveKit에 bundle: 아니오
 
-osxphotos는 현재 required scanner dependency가 아니다. 초기 adapter가 생기더라도 read/query/export를 우선하고 Photos를 변경하는 operation은 별도 test library에서 검증한다. 장기적인 공식 Apple Photos projection은 PhotoKit을 우선한다.
+osxphotos는 현재 required scanner dependency가 아니다. Apple Photos query/export/album/original-edited 기능이 필요해졌을 때 자체 구현보다 더 완전하고 검증된 경로라면 optional adapter로 적극 활용한다. 초기 adapter가 생기더라도 read/query/export를 우선하고 Photos를 변경하는 operation은 별도 test library에서 검증한다. 같은 요구를 공식 PhotoKit이 더 안전하고 완전하게 제공하는 경우에는 PhotoKit을 우선한다.
 
 ## FFmpeg / ffprobe
 

@@ -98,17 +98,33 @@ Takeout occurrences in mixed groups 4466
 
 가장 중요한 교차검증은 **local + Takeout mixed exact group 4,052개와 그 안의 Takeout resource 4,466개가 PhotoArchiveKit의 independent exact-resource catalog 결과와 정확히 일치했다**는 점이다. total group 수의 작은 차이는 두 tool의 전체 scan/support semantics 차이로 남아 있지만, 현재 provenance cleanup의 핵심 집합은 일치했다.
 
-사용자 정책 `non-Takeout > Google Takeout`을 바로 적용했을 때의 asset-level 안전성은 다음과 같았다.
+사용자 정책 `non-Takeout > Google Takeout`을 적용했을 때, 첫 asset-level 집계는 최소 3,431개 Takeout resource를 자동 redundant candidate로 확인했다. 이후 같은 catalog를 occurrence 단위로 더 세밀하게 재분석해 여러 Takeout export에 반복된 같은 Live Photo occurrence도 각각 평가했다.
 
 ```text
-standalone assets with local + Takeout exact copies     685
-Takeout standalone resources redundant to local         739
-complete Takeout Live Photo occurrences safely matched 1346
-Takeout Live Photo resources in those occurrences      2692
-minimum asset-safe Takeout resources                    3431
+Takeout standalone exact resources with non-Takeout copy      739
+Takeout Live Photo resources in clean 1-photo+1-video
+occurrences with a role-by-role exact non-Takeout pair       2740
+current automatic exact-resource candidates                  3479
+current held exact-resource candidates                        987
 ```
 
-따라서 Czkawka가 local exact copy를 확인한 Takeout media resource 4,466개 전부를 즉시 지우면 안 된다. 최소 3,431개는 현재 asset model에서도 자동 redundant candidate로 승격할 수 있지만, 나머지 1,035개는 incomplete/ambiguous Live Photo occurrence 또는 asset-level 조건 때문에 review/occurrence partitioning이 필요하다.
+보류 987개는 perceptual similarity 후보가 아니다. **모두 파일 단위 exact hash가 non-Takeout resource와 일치하는 집합 안에 있다.** 보류 이유는 Live Photo occurrence boundary다.
+
+```text
+candidate resources in ambiguous/incomplete Takeout occurrences 984
+candidate resources with no complete non-Takeout occurrence       3
+```
+
+984개가 속한 occurrence의 대표 구조:
+
+```text
+2 photos + 2 paired videos   163 occurrences / 652 candidate resources
+1 photo  + 0 paired videos   217 occurrences / 217 candidate resources
+2 photos + 0 paired videos    36 occurrences /  71 candidate resources
+0 photos + 1 paired video     44 occurrences /  44 candidate resources
+```
+
+즉 파일 하나의 byte equality는 확인됐어도 scanner가 같은 Live Photo identifier의 반복 export를 아직 안전한 1쌍 occurrence로 partition하지 못하는 경우가 대부분이다. 이 집합은 filename이나 visual similarity 때문이 아니라 **logical asset의 resource 경계를 확정하기 전 한쪽 resource만 제거하지 않기 위한 보수적 hold**다.
 
 또한 Takeout 내부끼리만 byte-identical인 media group도 대규모로 존재했다.
 
