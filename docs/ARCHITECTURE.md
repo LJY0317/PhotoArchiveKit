@@ -44,7 +44,9 @@ SQLite는 folder만으로 안전하게 표현하기 어려운 다음 상태를 �
 - provider object/album mapping
 - scan/archive session
 
-SQLite가 working database다. future versioned JSONL export는 portable interchange 및 disaster-recovery representation으로 사용한다. CSV는 report 용도에는 적합하지만 canonical relational model로 사용하지 않는다.
+SQLite가 working database다. versioned JSONL export는 portable interchange 및 disaster-recovery representation으로 사용한다. 현재 `catalog export` snapshot은 absolute root path, raw exact hash, keyed Live Photo fingerprint, filesystem identifier, capture timestamp, provider object ID, generated scan/event cache를 제외하고 root provenance/marker binding, opaque resource·asset relationship, current/history relative path, original filename, collection hierarchy/membership을 보존한다. 따라서 raw/cache 값을 제거한 **portable sanitized snapshot**이지만 relative path·filename·collection label을 포함하는 local-private 파일이며 agent-safe/share-safe report는 아니다.
+
+`catalog restore`는 snapshot을 기존 SQLite 위에 merge하지 않고 새 catalog에만 복원한다. 기본은 dry-run이고 `--apply`에서만 새 DB를 만든다. stable root marker가 있는 root는 marker key -> root ID binding을 복원하고, marker가 없는 root는 restore 시 `ROOT_ID=PATH` binding으로 현재 local path에 연결할 수 있다. restored resource/asset은 raw hash나 Live Photo fingerprint를 snapshot에서 되살리지 않고 placeholder semantic key로 seed하며, 다음 정상 scan이 파일에서 fresh hash/linkage evidence를 다시 계산했을 때 같은 restored resource set이면 원래 opaque asset ID를 재사용한다.
 
 ### Provider projection
 

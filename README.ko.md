@@ -57,6 +57,7 @@ byte 보존 복제본          provenance와 이력
 - 가능한 경우 timezone을 포함한 EXIF·QuickTime 촬영시각 추출
 - 설정 가능한 시간 간격을 기준으로 날짜형 event folder 자동 제안
 - resource, 논리 asset, provenance, duplicate group, source collection mapping, 최초 filename, path history, scan session을 SQLite에 저장
+- catalog의 portable semantic subset을 versioned JSONL로 export하고 raw hash·Live Photo fingerprint·filesystem ID·absolute root path·capture timestamp·provider object ID·generated scan/event cache 없이 새 SQLite catalog로 dry-run/restore
 - 같은 volume 안의 rename/move에서는 physical resource identity를 유지하고, optional `.photoarchive-root` marker로 이동된 source root도 동일 root로 다시 인식
 - `IMG_####` / `IMG_E####` camera-style 이름만 대상으로 `YYYY-MM-DD_HH-mm-ss[_NN]` 촬영시각 기반 flat rename `organize-plan` 생성; custom filename은 보존
 - `organize --apply`에는 stable root marker를 요구하고, Live Photo still+video를 같은 destination basename으로 유지하며 post-move filesystem identity/size를 검증한 뒤 stable resource path/history를 full rescan 없이 SQLite에 transaction commit하고, catalog commit 실패 시 filesystem move 전체 rollback
@@ -123,7 +124,7 @@ swift run photoarchive plan \
   --takeout "~/Pictures/Takeout"
 ```
 
-AI agent는 `scan`, `plan`, `organize-plan`, `organize`, `quarantine`, `cleanup-empty-dirs`에서 `--agent-json`을 사용해야 하며, path를 포함할 수 있는 local diagnostic `--json`은 agent에 전달하지 않습니다.
+AI agent는 `scan`, `plan`, `organize-plan`, `organize`, `quarantine`, `restore-quarantine`, `cleanup-empty-dirs`와 `catalog` command의 report에서 `--agent-json`을 사용해야 하며, path를 포함할 수 있는 local diagnostic `--json`은 agent에 전달하지 않습니다. JSONL snapshot 파일 자체는 portable restore에 relative path·original filename·collection label이 필요하므로 **agent-safe가 아닙니다**.
 
 아무 파일도 이동하지 않고 quarantine 후보를 먼저 검증합니다.
 
@@ -157,6 +158,27 @@ organization apply 전에는 stable root marker를 명시적으로 초기화합�
 swift run photoarchive cleanup-empty-dirs --agent-json "/path/to/organization.json"
 # preflight 성공 후에만 --apply 추가
 ```
+
+catalog의 portable semantic state를 versioned disaster-recovery snapshot으로 내보낼 수 있습니다.
+
+```bash
+swift run photoarchive catalog export \
+  --output "/path/to/photoarchive-catalog.jsonl"
+```
+
+snapshot은 absolute root path와 raw exact hash, keyed Live Photo fingerprint, filesystem ID, capture timestamp, provider object ID, generated scan/event result 같은 재생성 가능하거나 민감한 local cache를 제외합니다. 하지만 복원에 필요한 relative path·original filename·collection label·opaque ID·asset/resource role·root provenance·stable root-marker binding은 유지하므로 **local-private 파일이며 공유용 sanitized report가 아닙니다**.
+
+restore는 항상 먼저 전체 snapshot을 검증하고 기존 catalog를 덮어쓰지 않습니다. stable marker가 없는 root는 현재 local directory에 명시적으로 다시 bind할 수 있습니다.
+
+```bash
+swift run photoarchive catalog restore \
+  --to "/path/to/restored-catalog.sqlite3" \
+  --bind-root ROPAQUEID="/path/to/current/root" \
+  "/path/to/photoarchive-catalog.jsonl"
+# dry-run 성공 후에만 --apply 추가
+```
+
+복원된 catalog는 opaque root/resource/asset identity와 collection semantics를 seed합니다. 이후 정상 scan은 media metadata와 hash를 파일에서 다시 읽어 snapshot placeholder를 fresh local evidence로 갱신하면서 같은 resource가 확인되면 복원된 opaque asset identity를 유지합니다.
 
 폴더를 먼저 한곳에 섞지 않고 여러 source를 함께 scan하면 exact copy, provenance, source 간 Live Photo 관계를 통합할 수 있습니다.
 

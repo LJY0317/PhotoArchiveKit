@@ -1,6 +1,6 @@
 # Validation Notes
 
-검증 날짜: **2026-09-04**
+검증 날짜: **2026-09-05**
 
 이 문서는 vendor guarantee와 local observation을 구분한다. provider behavior는 바뀔 수 있으며 sample이 통과했다는 사실은 regression observation이지 permanent Apple/Google contract가 아니다.
 
@@ -58,15 +58,22 @@ exact resource group 7개는 여러 경로에서 identical하게 보존된 still
 
 ## `complete`의 의미
 
-현재 scanner는 한 source root 안에서 recognized still 1개와 recognized motion resource 1개가 같은 protected Apple identifier를 공유할 때 occurrence를 complete라고 한다.
+현재 scanner는 한 source root 안에서 recognized still 1개와 recognized motion resource 1개가 같은 protected Apple identifier를 공유하고, paired video의 timed metadata track에 int8 `com.apple.quicktime.still-image-time` marker가 정확히 하나 있으며 그 sample이 유효한 movie timeline 위치에 있을 때 occurrence를 complete라고 한다. marker payload 자체를 timestamp로 해석하지 않는다.
 
 아직 다음을 증명하지는 않는다.
 
 - complete media decodability
-- correct timed `still-image-time` metadata
 - expected audio
 - edit, key-photo choice, adjustment state restoration
 - future software version에서 identical behavior
+
+Synthetic metadata-only MOV fixture에서는 single valid marker, marker absent, wrong datatype, multiple marker를 각각 `valid`, `missing`, `invalid`, `invalid`로 판정하는 것을 확인했다. 현재 real library에서 기존 complete occurrence 1,824개는 모두 strict timed-metadata validation을 통과했다. 다른 Apple device/OS/codec/export variant는 계속 별도 검증 대상으로 남긴다.
+
+## Portable catalog snapshot 검증
+
+Synthetic catalog에서 versioned JSONL export -> restore dry-run -> 새 SQLite apply -> fresh scan round-trip을 검증했다. snapshot은 absolute root path, known raw exact hash, known media bytes를 포함하지 않았고, restored fresh scan은 원래 opaque root/resource/asset ID를 유지하면서 exact evidence를 media에서 다시 계산했다. 별도 Takeout source-folder fixture에서는 collection hierarchy/membership/source mapping이 restore 뒤 유지되고 fresh scan에서 duplicate collection이 생기지 않았다. 기존 snapshot output이나 destination catalog를 덮어쓰는 동작은 거부된다.
+
+이 JSONL은 relative path, original filename, collection label을 보존하므로 agent-safe/share-safe 파일이 아니라 local-private disaster-recovery artifact다.
 
 ## Provenance 결론
 
@@ -76,7 +83,7 @@ byte-identical file만으로 Image Capture와 Google Photos web 중 어디에서
 
 - 한 asset이 두 album에 들어간 small test-only Google Takeout export
 - Edited Live Photo: key photo, crop, color adjustment, mute, Live on/off, effect
-- Strict timed-metadata/decode validation
+- 추가 device/OS/codec/export variant의 timed-metadata/decode validation
 - Same-second capture, subsecond, burst, timezone change, metadata-free media
 - Archive pair -> PhotoKit -> Apple Photos -> Google Photos iOS -> download round trip
 - rclone upload/download 후 local full-byte comparison

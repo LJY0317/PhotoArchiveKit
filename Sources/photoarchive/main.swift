@@ -30,6 +30,8 @@ struct PhotoArchiveCLI {
                 try runRestoreQuarantine(arguments)
             case "cleanup-empty-dirs":
                 try runCleanupEmptyDirectories(arguments)
+            case "catalog":
+                try runCatalog(arguments)
             case "root":
                 try runRoot(arguments)
             case "doctor":
@@ -154,6 +156,126 @@ struct PhotoArchiveCLI {
             try printJSON(report)
         } else {
             printEmptyDirectoryCleanupReport(report)
+        }
+    }
+
+    private static func runCatalog(_ arguments: [String]) throws {
+        guard let action = arguments.first else {
+            printCatalogHelp()
+            return
+        }
+        let rest = Array(arguments.dropFirst())
+        switch action {
+        case "export":
+            var catalogURL = PhotoArchivePaths.defaultCatalogURL
+            var outputURL: URL?
+            var outputJSON = false
+            var outputAgentJSON = false
+            var index = 0
+            while index < rest.count {
+                let argument = rest[index]
+                switch argument {
+                case "--catalog":
+                    catalogURL = fileURL(try value(after: argument, at: &index, in: rest))
+                case "--output":
+                    outputURL = fileURL(try value(after: argument, at: &index, in: rest))
+                case "--json":
+                    outputJSON = true
+                case "--agent-json":
+                    outputAgentJSON = true
+                case "--help", "-h":
+                    printCatalogExportHelp()
+                    return
+                default:
+                    throw CLIError("Unknown catalog export option: \(argument)")
+                }
+                index += 1
+            }
+            guard let outputURL else {
+                throw CLIError("catalog export requires --output PATH.")
+            }
+            if outputJSON && outputAgentJSON {
+                throw CLIError("Use either --json or --agent-json, not both.")
+            }
+            let report = try CatalogSnapshotExporter.export(
+                catalogURL: catalogURL,
+                outputURL: outputURL
+            )
+            if outputAgentJSON {
+                try printJSON(AgentSafeCatalogSnapshotReport(report: report))
+            } else if outputJSON {
+                try printJSON(report)
+            } else {
+                printCatalogSnapshotReport(report)
+            }
+
+        case "restore":
+            var destinationURL: URL?
+            var apply = false
+            var outputJSON = false
+            var outputAgentJSON = false
+            var snapshotPaths: [String] = []
+            var rootBindings: [CatalogRootBinding] = []
+            var index = 0
+            while index < rest.count {
+                let argument = rest[index]
+                switch argument {
+                case "--to":
+                    destinationURL = fileURL(try value(after: argument, at: &index, in: rest))
+                case "--bind-root":
+                    rootBindings.append(try parseCatalogRootBinding(
+                        try value(after: argument, at: &index, in: rest)
+                    ))
+                case "--apply":
+                    apply = true
+                case "--json":
+                    outputJSON = true
+                case "--agent-json":
+                    outputAgentJSON = true
+                case "--help", "-h":
+                    printCatalogRestoreHelp()
+                    return
+                default:
+                    if argument.hasPrefix("-") {
+                        throw CLIError("Unknown catalog restore option: \(argument)")
+                    }
+                    snapshotPaths.append(argument)
+                }
+                index += 1
+            }
+            guard snapshotPaths.count == 1 else {
+                throw CLIError("catalog restore requires exactly one snapshot JSONL path.")
+            }
+            guard let destinationURL else {
+                throw CLIError("catalog restore requires --to PATH.")
+            }
+            if outputJSON && outputAgentJSON {
+                throw CLIError("Use either --json or --agent-json, not both.")
+            }
+            let snapshotURL = fileURL(snapshotPaths[0])
+            let report = try apply
+                ? CatalogSnapshotRestorer.apply(
+                    snapshotURL: snapshotURL,
+                    destinationCatalogURL: destinationURL,
+                    rootBindings: rootBindings
+                )
+                : CatalogSnapshotRestorer.preflight(
+                    snapshotURL: snapshotURL,
+                    destinationCatalogURL: destinationURL,
+                    rootBindings: rootBindings
+                )
+            if outputAgentJSON {
+                try printJSON(AgentSafeCatalogSnapshotReport(report: report))
+            } else if outputJSON {
+                try printJSON(report)
+            } else {
+                printCatalogSnapshotReport(report)
+            }
+
+        case "help", "--help", "-h":
+            printCatalogHelp()
+        default:
+            throw CLIError("Unknown catalog action: \(action)")
         }
     }
 
@@ -563,6 +685,37 @@ struct PhotoArchiveCLI {
         }
     }
 
+    private static func printCatalogSnapshotReport(_ report: CatalogSnapshotReport) {
+        switch report.operation {
+        case .export:
+            print("PhotoArchiveKit portable catalog snapshot exported")
+        case .restore:
+            print(report.dryRun
+                ? "PhotoArchiveKit catalog restore dry run"
+                : "PhotoArchiveKit catalog snapshot restored")
+        }
+        print("Records: \(report.recordCount)")
+        print("Roots: \(report.rootCount)")
+        print("Resources: \(report.resourceCount)")
+        print("Logical assets: \(report.assetCount)")
+        print("Collections: \(report.collectionCount)")
+        if report.operation == .restore {
+            print("Unbound roots: \(report.unboundRootCount)")
+        }
+        print("Snapshot: \(report.snapshotPath)")
+        print("Catalog: \(report.catalogPath)")
+        print("")
+        if report.operation == .export {
+            print("The JSONL snapshot omits absolute root paths, raw hashes, Live Photo fingerprints, filesystem IDs, capture timestamps, provider object IDs, and generated scan/event caches.")
+            print("It remains local-private because portable restore records include relative paths, original filenames, and collection labels. Do not treat it as agent-safe or share-safe data.")
+        } else if report.dryRun {
+            print("No catalog was created. Re-run with --apply after reviewing root bindings.")
+        } else {
+            print("A new catalog was created from the portable semantic snapshot. Existing catalogs are never overwritten by restore.")
+        }
+        print("No media files were modified.")
+    }
+
     private static func printHumanReport(_ report: ScanReport) {
         print("PhotoArchiveKit read-only scan")
         print("Session: \(report.sessionID)")
@@ -669,6 +822,18 @@ struct PhotoArchiveCLI {
             .standardizedFileURL
     }
 
+    private static func parseCatalogRootBinding(_ value: String) throws -> CatalogRootBinding {
+        guard let separator = value.firstIndex(of: "="), separator != value.startIndex else {
+            throw CLIError("--bind-root must use ROOT_ID=PATH.")
+        }
+        let rootID = String(value[..<separator])
+        let path = String(value[value.index(after: separator)...])
+        guard !path.isEmpty else {
+            throw CLIError("--bind-root must use ROOT_ID=PATH.")
+        }
+        return CatalogRootBinding(rootID: rootID, url: fileURL(path))
+    }
+
     private static func value(
         after option: String,
         at index: inout Int,
@@ -696,6 +861,8 @@ struct PhotoArchiveCLI {
               photoarchive quarantine --to PATH [--apply] [options] ROOT...
               photoarchive restore-quarantine [--apply] [--catalog PATH] MANIFEST
               photoarchive cleanup-empty-dirs [--apply] [--catalog PATH] ORGANIZATION_MANIFEST
+              photoarchive catalog export --output PATH [--catalog PATH]
+              photoarchive catalog restore [--apply] --to PATH [--bind-root ROOT_ID=PATH] SNAPSHOT
               photoarchive root inspect PATH
               photoarchive root init [--apply] PATH
               photoarchive doctor
@@ -708,7 +875,66 @@ struct PhotoArchiveCLI {
             Run 'photoarchive scan --help', 'photoarchive plan --help',
             'photoarchive organize-plan --help', 'photoarchive organize --help',
             'photoarchive quarantine --help', 'photoarchive restore-quarantine --help',
-            or 'photoarchive cleanup-empty-dirs --help' for options.
+            'photoarchive cleanup-empty-dirs --help', or 'photoarchive catalog --help'
+            for options.
+            """
+        )
+    }
+
+    private static func printCatalogHelp() {
+        print(
+            """
+            Usage:
+              photoarchive catalog export --output PATH [--catalog PATH] [--json|--agent-json]
+              photoarchive catalog restore [--apply] --to PATH [--bind-root ROOT_ID=PATH] SNAPSHOT
+
+            catalog export writes a versioned JSONL disaster-recovery snapshot of portable
+            semantic state. It excludes absolute root paths, raw exact hashes, keyed Live
+            Photo fingerprints, filesystem IDs, capture timestamps, provider object IDs,
+            and generated scan/event caches. The snapshot is still local-private because it
+            includes relative paths, original filenames, and collection labels required for
+            restore. It is not an agent-safe/share-safe report.
+
+            catalog restore validates the full snapshot by default and creates nothing.
+            --apply creates a new SQLite catalog only; it refuses to overwrite an existing
+            catalog. Repeated --bind-root ROOT_ID=PATH arguments reconnect unmarked roots to
+            their current local directories. Roots with matching .photoarchive-root markers
+            can be rebound by a later scan even when they are not explicitly bound here.
+            """
+        )
+    }
+
+    private static func printCatalogExportHelp() {
+        print(
+            """
+            Usage:
+              photoarchive catalog export --output PATH [options]
+
+            Options:
+              --catalog PATH   Source SQLite catalog (default: Application Support catalog)
+              --output PATH    New JSONL snapshot path; existing files are never overwritten
+              --json           Print local diagnostic JSON including snapshot/catalog paths
+              --agent-json     Print only path-free snapshot counts/status
+              --help           Show this help
+            """
+        )
+    }
+
+    private static func printCatalogRestoreHelp() {
+        print(
+            """
+            Usage:
+              photoarchive catalog restore [options] SNAPSHOT
+
+            Options:
+              --to PATH                  New SQLite catalog path (required)
+              --bind-root ROOT_ID=PATH   Bind one snapshot root to a current local directory; repeatable
+              --apply                    Create the restored catalog; default is dry-run
+              --json                     Print local diagnostic JSON including local paths
+              --agent-json               Print privacy-minimized counts/status without paths
+              --help                     Show this help
+
+            Restore never overwrites an existing catalog and never modifies media files.
             """
         )
     }

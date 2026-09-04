@@ -57,6 +57,7 @@ The initial CLI can:
 - extract timezone-aware EXIF and QuickTime capture times when available;
 - suggest date-based event folders by clustering assets separated by a configurable time gap;
 - persist resources, logical assets, provenance, duplicate groups, source collection mappings, original filenames, path history, and scan sessions in SQLite;
+- export that catalog's portable semantic subset as versioned JSONL and dry-run/restore it into a new SQLite catalog without carrying raw hashes, Live Photo fingerprints, filesystem IDs, absolute root paths, capture timestamps, provider object IDs, or generated scan/event caches;
 - keep same-volume resource identity stable across rename/move and recognize a moved source root through an optional `.photoarchive-root` marker;
 - generate a read-only `organize-plan` for only `IMG_####` / `IMG_E####` camera-style names, using capture wall-clock names such as `YYYY-MM-DD_HH-mm-ss[_NN]` while preserving custom filenames;
 - require a stable root marker before `organize --apply`, keep Live Photo still+video on one destination basename, verify post-move filesystem identity/size, transactionally update the stable resource path/history in SQLite without a second full scan, write a restore manifest, and roll back filesystem moves if catalog commit fails;
@@ -123,7 +124,7 @@ swift run photoarchive plan \
   --takeout "~/Pictures/Takeout"
 ```
 
-For an AI agent, use `--agent-json` with `scan`, `plan`, `organize-plan`, `organize`, `quarantine`, or `cleanup-empty-dirs`; local diagnostic `--json` can contain paths.
+For an AI agent, use `--agent-json` with `scan`, `plan`, `organize-plan`, `organize`, `quarantine`, `restore-quarantine`, `cleanup-empty-dirs`, or the `catalog` command reports; local diagnostic `--json` can contain paths. The JSONL snapshot file itself is **not** agent-safe because portable restore requires relative paths, original filenames, and collection labels.
 
 Preview a quarantine without moving anything:
 
@@ -157,6 +158,27 @@ After organization, empty-directory cleanup can be constrained to directories th
 swift run photoarchive cleanup-empty-dirs --agent-json "/path/to/organization.json"
 # add --apply only after the preflight succeeds
 ```
+
+Export a versioned disaster-recovery snapshot of the catalog's portable semantic state:
+
+```bash
+swift run photoarchive catalog export \
+  --output "/path/to/photoarchive-catalog.jsonl"
+```
+
+The snapshot excludes absolute root paths and reproducible/sensitive local caches such as raw exact hashes, keyed Live Photo fingerprints, filesystem IDs, capture timestamps, provider object IDs, and generated scan/event results. It is still **local-private**, not share-safe, because it keeps relative paths, original filenames, collection labels, opaque IDs, asset/resource roles, root provenance, and stable root-marker bindings needed for disaster recovery.
+
+Restore always validates first and refuses to overwrite an existing catalog. Roots without a stable marker can be explicitly rebound to current directories:
+
+```bash
+swift run photoarchive catalog restore \
+  --to "/path/to/restored-catalog.sqlite3" \
+  --bind-root ROPAQUEID="/path/to/current/root" \
+  "/path/to/photoarchive-catalog.jsonl"
+# add --apply only after the dry run succeeds
+```
+
+The restored catalog seeds opaque root/resource/asset identity and collection semantics. The next normal scan re-reads media metadata and hashes from the files and replaces snapshot placeholders with fresh local evidence while retaining restored opaque asset identity when the same resources are found.
 
 Scan several sources together so exact copies, provenance, and cross-source Live Photo relationships can be reconciled without flattening the folders first:
 

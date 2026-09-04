@@ -41,6 +41,7 @@
 - `photoarchive organize-plan`: `IMG_####` / `IMG_E####` camera-style filename만 대상으로 local capture wall-clock 기반 `YYYY-MM-DD_HH-mm-ss[_NN]` flat rename/move proposal 생성. custom filename, incomplete Live Photo, multiple physical representation은 review
 - `photoarchive organize`: 기본 dry-run, `--apply`에서만 marker가 있는 local root의 AUTO organization item을 move. Live Photo still+paired-video는 동일 destination basename을 사용하고 post-move filesystem ID/size 확인 뒤 stable resource path/location history를 SQLite에 transaction commit한다. catalog commit 실패 시 filesystem move 전체 rollback, local restore manifest를 제공하며 별도 full rescan은 필요하지 않음
 - `photoarchive cleanup-empty-dirs`: 완료된 organization manifest의 실제 source location과 SQLite `resource_locations` history가 일치하는 directory만 후보로 삼고 stable root marker/package/symlink boundary를 검증한 뒤 apply 순간에도 완전히 빈 directory만 deepest-first 제거. unrelated empty folder, registered root, Photos library package는 대상으로 삼지 않음
+- `photoarchive catalog export/restore`: working SQLite의 portable semantic subset을 schema-versioned JSONL로 export하고 새 SQLite catalog에만 dry-run/`--apply` restore. snapshot은 absolute root path, raw exact hash, keyed Live Photo fingerprint/HMAC key, filesystem ID, capture timestamp/size, provider object ID, generated scan/event cache를 제외하지만 disaster recovery에 필요한 relative path/original filename/collection label과 opaque root/resource/asset relation은 local-private 상태로 보존. restore 후 fresh scan이 snapshot placeholder를 새 hash/linkage evidence로 rebind하면서 같은 resource의 opaque asset ID와 Takeout collection semantics를 유지
 - 선택적 `--exact-engine czkawka`: Czkawka cache/prehash candidate discovery 후 native SHA-256 재검증; 기본 `automatic`은 현재 native exact path
 - 필수 third-party binary 없이 optional tool 감지
 - mixed local, Apple-direct, Google Takeout, Google web root를 구분하는 explicit source provenance
@@ -66,6 +67,8 @@ swift run photoarchive root init [--apply] PATH
 swift run photoarchive quarantine --to PATH [--apply] [options] ROOT...
 swift run photoarchive restore-quarantine [--apply] [--catalog PATH] MANIFEST
 swift run photoarchive cleanup-empty-dirs [--apply] [--catalog PATH] ORGANIZATION_MANIFEST
+swift run photoarchive catalog export --output PATH [--catalog PATH]
+swift run photoarchive catalog restore [--apply] --to PATH [--bind-root ROOT_ID=PATH] SNAPSHOT
 swift run photoarchive-selftest
 ```
 
@@ -133,6 +136,7 @@ swift run photoarchive-selftest
 - real-library `organize`를 stable root marker 초기화 후 실제 적용했다. `2,765` AUTO item / `4,292` resource가 capture-time flat name으로 이동됐고 manifest `complete`, old source 잔존 0, destination 누락 0, size mismatch 0을 확인했다. resource `22,232`, logical asset `8,178`, logical Live Photo `2,710`, exact reconciliation `AUTO 0 / REVIEW 227`은 유지됐다. 적용 후 이미 정리된 1,527 Live Photo를 custom-name REVIEW로 다시 표시하던 idempotence 문제를 수정해 현재 organization plan은 `AUTO 0`, 실제 보류만 `628 item / 795 resource`다: filesystem fallback `58`, custom-name Live Photo `154 resource`, incomplete Live Photo `415 resource`, multiple physical representation `168 resource`.
 - 위 real organization manifest를 대상으로 `cleanup-empty-dirs --agent-json` dry-run을 수행해 removal candidate 412개를 확인했다. 후보는 organization source history로 제한되며 count-only local diagnostic에서 `.photoslibrary` 내부 0, Takeout 0, `Pictures` root 자체 0이었다. 이후 같은 manifest에 `--apply`를 수행해 412개 directory를 제거했고, 즉시 다시 dry-run하여 잔여 후보 0을 확인했다.
 - strict Live Photo timed-metadata validation을 synthetic MOV fixture와 real library에서 검증했다. self-test는 valid int8 marker, marker 누락, 잘못된 datatype, multiple marker를 각각 검증한다. real library 22,232 resource / 2,710 logical Live Photo를 다시 읽었을 때 기존 complete occurrence 1,824개가 모두 `still-image-time` 검증을 통과했고 새 `missing`/`invalid`/`unreadable` occurrence는 0이었다. 정상 exact plan 재검증도 `AUTO 0 / REVIEW 227`을 그대로 유지했다.
+- portable catalog snapshot self-test에서 versioned JSONL export가 absolute root path/raw exact hash/media byte를 포함하지 않는 것을 확인했고, restore dry-run은 destination catalog를 만들지 않으며 `--apply`는 기존 catalog를 덮어쓰지 않고 새 catalog만 생성하는 것을 검증했다. 두 synthetic root를 명시적으로 rebind한 뒤 fresh scan에서 원래 opaque root/resource/asset ID가 유지되고 exact evidence가 파일에서 재생성됐다. 별도 Takeout source-folder fixture에서는 collection hierarchy/membership/source key가 restore 후 유지되고 fresh scan에도 collection이 중복 생성되지 않았다. snapshot 파일 자체는 relative path/original filename/collection label을 포함하므로 agent-safe가 아닌 local-private backup으로 취급한다.
 
 private fixture와 temporary catalog는 repository에 포함하지 않는다.
 
@@ -141,7 +145,6 @@ private fixture와 temporary catalog는 repository에 포함하지 않는다.
 - verified HDD archive copy, permanent delete, cloud upload는 아직 없다. `organize`는 same-session deterministic camera-name rename/flatten 전용이며 persisted plan replay나 general-purpose move command가 아니다.
 - still-side identifier extraction은 격리되어 있지만 현재 iPhone file에서 관찰한 ImageIO MakerApple entry를 따른다. 추가 format fixture가 필요하다.
 - stable root marker 기능은 구현됐지만 기존 real roots에는 자동으로 marker를 쓰지 않는다. 각 root는 사용자가 `photoarchive root init --apply PATH`를 명시적으로 실행한 뒤부터 relocation identity를 가진다.
-- versioned JSONL catalog export/restore가 없다.
 - SQLite persistence 외 incremental metadata/hash cache optimization이 없다.
 - event grouping은 time-based만 구현되어 있으며 archive-guided semantic folder prediction은 계획 단계다.
 - same-identifier occurrence partitioning은 현재 same embedded identifier 안에서 directory와 basename을 boundary hint로 사용하는 보수적 1차 구현이다. 같은 directory/stem 안에 여러 still/video가 겹치거나 complete pair가 어디에도 없는 경우는 review에 남긴다.
@@ -174,7 +177,7 @@ private fixture와 temporary catalog는 repository에 포함하지 않는다.
 8. organization apply 전 persisted immutable plan/approval token은 향후 offline/replay mutation에 필요할 때 추가한다. same-session organize는 post-move catalog transaction까지 이미 완료됨
 9. `cleanup-empty-dirs`는 real library apply와 postcondition까지 완료로 닫는다. 같은 organization manifest 기준 412 directory 제거 후 잔여 후보 0을 확인했다.
 10. strict Live Photo timed-metadata validation은 구현과 real-library 검증까지 완료로 닫는다. 현재 library의 기존 complete occurrence 1,824개가 모두 통과했고 reconciliation `AUTO 0 / REVIEW 227`도 유지됐다.
-11. versioned sanitized JSONL catalog export/restore 추가
+11. versioned sanitized JSONL catalog export/restore는 synthetic round-trip, stable opaque ID rebind, Takeout collection semantics preservation까지 완료로 닫는다. archive metadata directory에 실제 snapshot을 배치하고 replica와 함께 검증하는 작업은 HDD archive apply 단계에서 수행한다.
 12. HDD archive destination plan, verified copy, rclone replica/check adapter 추가
 13. 기존 folder를 example로 사용하는 event-level archive-folder learning은 core archive flow 이후로 유지
 14. North Star archive workflow가 real library에서 안정화되기 전에는 Google upload와 broader provider convenience를 보류

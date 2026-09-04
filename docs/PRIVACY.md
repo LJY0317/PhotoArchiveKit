@@ -37,6 +37,21 @@ local SQLite catalog에 저장될 수 있는 항목:
 
 catalog는 private application state다. `.gitignore`로 제외하며 sanitization 없이 issue에 첨부하지 않는다.
 
+### Portable catalog snapshot
+
+`photoarchive catalog export`는 SQLite 전체 dump가 아니라 disaster-recovery에 필요한 semantic subset을 versioned JSONL로 내보낸다. snapshot에는 다음 working-cache/private value를 넣지 않는다.
+
+- absolute configured root path
+- raw exact hash
+- keyed Live Photo identifier fingerprint와 catalog HMAC key
+- filesystem identifier
+- capture timestamp/offset/source
+- exact byte size와 modification timestamp
+- provider object/album ID
+- generated scan/event cache
+
+반면 새 catalog가 archive와 다시 연결될 수 있도록 opaque root/resource/asset ID, root kind/provenance, optional stable root-marker key, relative resource/location path, original filename, asset-resource role, collection hierarchy/membership, Takeout source-folder mapping은 보존한다. 따라서 이 snapshot의 `sanitized`는 **재생성 가능한 raw/cache와 absolute machine path를 제거했다는 뜻**이며, agent-safe/share-safe라는 뜻이 아니다. relative path·filename·collection label은 여전히 개인 정보일 수 있으므로 snapshot은 local-private backup으로 취급하고 AI agent에는 snapshot 본문이 아니라 `catalog ... --agent-json`의 count/status report만 전달한다.
+
 ### Agent-safe report에 절대 포함하지 않는 항목
 
 - image/video byte

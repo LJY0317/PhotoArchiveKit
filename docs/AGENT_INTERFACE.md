@@ -29,9 +29,11 @@ photoarchive organize --agent-json --local "/path/to/local"
 photoarchive quarantine --agent-json --to "/local/quarantine" --local "/path/to/local" --takeout "/path/to/takeout"
 photoarchive restore-quarantine --agent-json "/local/quarantine/PhotoArchiveKit/<session>/manifest.json"
 photoarchive cleanup-empty-dirs --agent-json "/local/operations/<session>/organization.json"
+photoarchive catalog export --agent-json --output "/local/private/catalog.jsonl"
+photoarchive catalog restore --agent-json --to "/local/private/restored.sqlite3" "/local/private/catalog.jsonl"
 ```
 
-`plan`은 exact/provenance evidence를 opaque reconciliation item으로 만들고, `organize-plan`은 camera-style filename의 rename/flat-move를 opaque organization item으로 만든다. `organize`, `quarantine`, `restore-quarantine`, `cleanup-empty-dirs`는 기본 dry-run이며 agent-safe output에는 item/resource/directory count와 outcome만 반환한다. restore/cleanup 과정의 manifest/source/destination/directory path와 local exact hash도 agent에 전달하지 않는다. 실제 mutation gate는 사람이 local CLI에서 명시적으로 붙이는 `--apply`이고, organization/cleanup은 stable root marker를 요구한다. 장기적으로는 short-lived approval token을 추가한다.
+`plan`은 exact/provenance evidence를 opaque reconciliation item으로 만들고, `organize-plan`은 camera-style filename의 rename/flat-move를 opaque organization item으로 만든다. `organize`, `quarantine`, `restore-quarantine`, `cleanup-empty-dirs`, `catalog restore`는 기본 dry-run이며 agent-safe output에는 item/resource/directory/record count와 outcome만 반환한다. restore/cleanup/catalog 과정의 manifest/source/destination/snapshot/catalog path와 local exact hash도 agent에 전달하지 않는다. 실제 media/filesystem mutation gate는 사람이 local CLI에서 명시적으로 붙이는 `--apply`이고, organization/cleanup은 stable root marker를 요구한다. `catalog export`는 명시적 output에 local-private backup file을 작성하지만 그 JSONL 본문은 agent-safe surface가 아니므로 agent가 읽지 않는다. 장기적으로는 short-lived approval token을 추가한다.
 
 agent-safe JSON report에는 다음이 포함된다.
 

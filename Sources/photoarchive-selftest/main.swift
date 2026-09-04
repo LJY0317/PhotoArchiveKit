@@ -118,6 +118,96 @@ struct PhotoArchiveSelfTest {
         try require(!agentJSON.contains("copy.jpg"), "agent-safe report exposed a filename")
         try require(!agentJSON.contains("catalog.sqlite3"), "agent-safe report exposed a catalog path")
 
+        guard let rootAID = first.resources.first(where: { $0.relativePath == "one.jpg" })?.rootID,
+              let rootBID = first.resources.first(where: { $0.relativePath == "copy.jpg" })?.rootID,
+              let originalAssetID = first.resources.first?.assetID
+        else {
+            throw SelfTestFailure("snapshot fixture is missing stable root/asset IDs")
+        }
+        let originalResourceIDs = Set(first.resources.map(\.resourceID))
+        let snapshotURL = temporary.appendingPathComponent("catalog-snapshot.jsonl")
+        let snapshotExport = try CatalogSnapshotExporter.export(
+            catalogURL: temporary.appendingPathComponent("catalog.sqlite3"),
+            outputURL: snapshotURL
+        )
+        try require(snapshotExport.filesModified, "snapshot export should create the JSONL file")
+        try require(snapshotExport.rootCount == 2, "snapshot should contain both roots")
+        try require(snapshotExport.resourceCount == 2, "snapshot should contain both resources")
+        let snapshotText = try String(contentsOf: snapshotURL, encoding: .utf8)
+        try require(!snapshotText.contains(rawHash), "portable snapshot exposed a raw exact hash")
+        try require(!snapshotText.contains(rootA.path), "portable snapshot exposed an absolute root path")
+        try require(!snapshotText.contains(rootB.path), "portable snapshot exposed an absolute root path")
+        try require(
+            !snapshotText.contains("synthetic-not-a-real-photo"),
+            "portable snapshot exposed media bytes"
+        )
+        do {
+            _ = try CatalogSnapshotExporter.export(
+                catalogURL: temporary.appendingPathComponent("catalog.sqlite3"),
+                outputURL: snapshotURL
+            )
+            throw SelfTestFailure("snapshot export overwrote an existing output")
+        } catch CatalogSnapshotError.outputExists {
+            // Expected: portable snapshots are append-by-new-file, never overwrite-in-place.
+        }
+        let snapshotAgentJSON = String(
+            decoding: try encoder.encode(AgentSafeCatalogSnapshotReport(report: snapshotExport)),
+            as: UTF8.self
+        )
+        try require(!snapshotAgentJSON.contains(snapshotURL.path), "agent-safe snapshot report exposed snapshot path")
+        try require(!snapshotAgentJSON.contains(rootA.path), "agent-safe snapshot report exposed a root path")
+
+        let restoredCatalogURL = temporary.appendingPathComponent("restored-catalog.sqlite3")
+        let snapshotBindings = [
+            CatalogRootBinding(rootID: rootAID, url: rootA),
+            CatalogRootBinding(rootID: rootBID, url: rootB)
+        ]
+        let catalogRestoreDryRun = try CatalogSnapshotRestorer.preflight(
+            snapshotURL: snapshotURL,
+            destinationCatalogURL: restoredCatalogURL,
+            rootBindings: snapshotBindings
+        )
+        try require(catalogRestoreDryRun.dryRun, "catalog restore should default to a dry run")
+        try require(!fileManager.fileExists(atPath: restoredCatalogURL.path), "restore dry run created a catalog")
+        try require(catalogRestoreDryRun.unboundRootCount == 0, "all synthetic snapshot roots should be bound")
+
+        let restoreApplied = try CatalogSnapshotRestorer.apply(
+            snapshotURL: snapshotURL,
+            destinationCatalogURL: restoredCatalogURL,
+            rootBindings: snapshotBindings
+        )
+        try require(restoreApplied.filesModified, "catalog restore apply should create a new catalog")
+        try require(fileManager.fileExists(atPath: restoredCatalogURL.path), "restored catalog is missing")
+        do {
+            _ = try CatalogSnapshotRestorer.preflight(
+                snapshotURL: snapshotURL,
+                destinationCatalogURL: restoredCatalogURL,
+                rootBindings: snapshotBindings
+            )
+            throw SelfTestFailure("catalog restore accepted an existing destination catalog")
+        } catch CatalogSnapshotError.destinationExists {
+            // Expected: restore never merges into or overwrites an existing catalog.
+        }
+
+        let restoredScanner = try ArchiveScanner(catalogURL: restoredCatalogURL)
+        let restoredReport = try await restoredScanner.scan(roots: roots)
+        try require(
+            Set(restoredReport.roots.map(\.rootID)) == Set([rootAID, rootBID]),
+            "restored roots should retain their opaque IDs after a fresh scan"
+        )
+        try require(
+            Set(restoredReport.resources.map(\.resourceID)) == originalResourceIDs,
+            "restored resources should retain their opaque IDs after a fresh scan"
+        )
+        try require(
+            Set(restoredReport.resources.compactMap(\.assetID)) == Set([originalAssetID]),
+            "fresh evidence should rebind restored resources to the original opaque asset ID"
+        )
+        try require(
+            restoredReport.summary.exactDuplicateGroupCount == 1,
+            "restored catalog should rebuild exact duplicate evidence from media"
+        )
+
         let standalonePlan = ReconciliationPlanner.makePlan(from: first)
         try require(
             standalonePlan.summary.automaticRedundantResourceCount == 1,
@@ -720,6 +810,65 @@ struct PhotoArchiveSelfTest {
         try require(
             !semanticsAgentJSON.contains("YearBucket") && !semanticsAgentJSON.contains("AlbumBucket"),
             "agent-safe report exposed Takeout collection names"
+        )
+
+        let semanticsCatalogURL = temporary.appendingPathComponent("semantics-catalog.sqlite3")
+        let originalCollectionCount = try sqliteInt(
+            databaseURL: semanticsCatalogURL,
+            sql: "SELECT COUNT(*) FROM collections"
+        )
+        let originalMembershipCount = try sqliteInt(
+            databaseURL: semanticsCatalogURL,
+            sql: "SELECT COUNT(*) FROM memberships"
+        )
+        let semanticsSnapshotURL = temporary.appendingPathComponent("semantics-snapshot.jsonl")
+        _ = try CatalogSnapshotExporter.export(
+            catalogURL: semanticsCatalogURL,
+            outputURL: semanticsSnapshotURL
+        )
+        let semanticsSnapshotText = try String(contentsOf: semanticsSnapshotURL, encoding: .utf8)
+        try require(
+            !semanticsSnapshotText.contains(takeoutSemanticsRoot.path),
+            "portable semantics snapshot exposed an absolute root path"
+        )
+
+        guard let semanticsRootID = semanticsReport.roots.first?.rootID else {
+            throw SelfTestFailure("Takeout semantics root ID is missing")
+        }
+        let restoredSemanticsCatalogURL = temporary.appendingPathComponent("restored-semantics.sqlite3")
+        _ = try CatalogSnapshotRestorer.apply(
+            snapshotURL: semanticsSnapshotURL,
+            destinationCatalogURL: restoredSemanticsCatalogURL,
+            rootBindings: [CatalogRootBinding(rootID: semanticsRootID, url: takeoutSemanticsRoot)]
+        )
+        try require(
+            try sqliteInt(databaseURL: restoredSemanticsCatalogURL, sql: "SELECT COUNT(*) FROM collections")
+                == originalCollectionCount,
+            "catalog snapshot restore did not preserve collection hierarchy"
+        )
+        try require(
+            try sqliteInt(databaseURL: restoredSemanticsCatalogURL, sql: "SELECT COUNT(*) FROM memberships")
+                == originalMembershipCount,
+            "catalog snapshot restore did not preserve collection memberships"
+        )
+
+        let restoredSemanticsScanner = try ArchiveScanner(catalogURL: restoredSemanticsCatalogURL)
+        _ = try await restoredSemanticsScanner.scan(roots: [
+            ScanRoot(
+                url: takeoutSemanticsRoot,
+                kind: .importSource,
+                provenance: .googleTakeout
+            )
+        ])
+        try require(
+            try sqliteInt(databaseURL: restoredSemanticsCatalogURL, sql: "SELECT COUNT(*) FROM collections")
+                == originalCollectionCount,
+            "fresh scan after snapshot restore duplicated source collections"
+        )
+        try require(
+            try sqliteInt(databaseURL: restoredSemanticsCatalogURL, sql: "SELECT COUNT(*) FROM memberships")
+                == originalMembershipCount,
+            "fresh scan after snapshot restore changed source collection memberships"
         )
     }
 

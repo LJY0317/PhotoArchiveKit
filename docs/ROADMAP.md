@@ -19,8 +19,8 @@ Roadmap은 작고 검증 가능한 layer를 우선한다. 어느 phase도 existi
 - [x] five-path disposable ingest fixture validation
 - [x] official Google/Apple documentation 기반 dated provider capability matrix
 - [x] automatic-first event organization policy 및 prior-art boundary
-- [ ] Live Photo `still-image-time` timed metadata strict validation
-- [ ] versioned sanitized JSONL catalog export/restore test
+- [x] Live Photo `still-image-time` timed metadata strict validation
+- [x] versioned sanitized JSONL catalog export/restore test
 - [ ] stable file fact를 이용한 incremental scan optimization
 - [x] 한 root 안에서 반복되는 same-identifier resource를 directory/basename hint로 distinct Live Photo occurrence로 보수적으로 partition
 - [ ] duplicate-hashing mode와 무관하게 standalone logical asset identity 안정화

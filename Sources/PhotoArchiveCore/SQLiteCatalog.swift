@@ -352,10 +352,24 @@ final class SQLiteCatalog {
         sessionID: String,
         resources: inout [ProbedResource]
     ) throws -> [Data: String] {
+        var previousAssetIDByResourceID: [String: String] = [:]
         for resource in resources where resource.persistentResourceID != nil {
+            let resourceID = resource.persistentResourceID!
+            if let previousAssetID = try queryText(
+                """
+                SELECT ar.asset_id
+                FROM asset_resources ar
+                JOIN logical_assets la ON la.id = ar.asset_id
+                WHERE ar.resource_id = ? AND la.asset_key LIKE 'snapshot:%'
+                LIMIT 1
+                """,
+                bindings: [.text(resourceID)]
+            ) {
+                previousAssetIDByResourceID[resourceID] = previousAssetID
+            }
             try run(
                 "DELETE FROM asset_resources WHERE resource_id = ?",
-                bindings: [.text(resource.persistentResourceID!)]
+                bindings: [.text(resourceID)]
             )
         }
 
@@ -367,11 +381,16 @@ final class SQLiteCatalog {
 
         for (fingerprint, indices) in liveGroups {
             let assetKey = "live:\(fingerprint.base64EncodedString())"
+            let previousAssetIDs = Set(indices.compactMap { index -> String? in
+                guard let resourceID = resources[index].persistentResourceID else { return nil }
+                return previousAssetIDByResourceID[resourceID]
+            })
             let assetID = try ensureAsset(
                 assetKey: assetKey,
                 kind: "live_photo",
                 pairStatus: aggregatePairStatus(indices: indices, resources: resources).rawValue,
-                sessionID: sessionID
+                sessionID: sessionID,
+                preferredID: previousAssetIDs.count == 1 ? previousAssetIDs.first : nil
             )
             liveAssetIDs[fingerprint] = assetID
 
@@ -404,7 +423,8 @@ final class SQLiteCatalog {
                 assetKey: assetKey,
                 kind: kind,
                 pairStatus: nil,
-                sessionID: sessionID
+                sessionID: sessionID,
+                preferredID: previousAssetIDByResourceID[resourceID]
             )
             resources[index].persistentAssetID = assetID
             try link(
@@ -589,7 +609,8 @@ final class SQLiteCatalog {
         assetKey: String,
         kind: String,
         pairStatus: String?,
-        sessionID: String
+        sessionID: String,
+        preferredID: String? = nil
     ) throws -> String {
         if let existingID = try queryText(
             "SELECT id FROM logical_assets WHERE asset_key = ?",
@@ -605,6 +626,28 @@ final class SQLiteCatalog {
                 ]
             )
             return existingID
+        }
+
+        if let preferredID,
+           try queryText(
+               "SELECT id FROM logical_assets WHERE id = ?",
+               bindings: [.text(preferredID)]
+           ) != nil {
+            try run(
+                """
+                UPDATE logical_assets
+                SET asset_key = ?, kind = ?, pair_status = ?, last_seen_session = ?
+                WHERE id = ?
+                """,
+                bindings: [
+                    .text(assetKey),
+                    .text(kind),
+                    pairStatus.map(SQLiteBinding.text) ?? .null,
+                    .text(sessionID),
+                    .text(preferredID)
+                ]
+            )
+            return preferredID
         }
 
         let id = opaqueID(prefix: "A")

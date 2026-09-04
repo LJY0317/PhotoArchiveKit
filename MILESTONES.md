@@ -322,6 +322,45 @@ exact reconciliation AUTO/REVIEW    0 / 227
 
 따라서 strict validation은 현재 library에서 기존 valid Live Photo occurrence를 오탐으로 깨뜨리지 않았고 exact reconciliation 결과도 바꾸지 않았다. broader device/OS/codec/export variant coverage는 여전히 별도 validation 대상으로 남긴다.
 
+## 2026-09-05 — Portable catalog JSONL export/restore
+
+Working SQLite 전체를 복제하지 않고 disaster-recovery에 필요한 semantic subset만 versioned JSONL로 export/restore하는 `photoarchive catalog export`와 `photoarchive catalog restore`를 추가했다. restore는 기본 dry-run이며 기존 catalog를 덮어쓰지 않고 `--apply --to NEW_CATALOG`에서만 새 SQLite를 만든다.
+
+Snapshot에서 의도적으로 제외하는 값:
+
+```text
+absolute configured root path
+raw exact hash
+keyed Live Photo fingerprint / catalog HMAC key
+filesystem identifier
+capture timestamp / exact byte size / modification timestamp
+provider object or album ID
+generated scan/event cache
+```
+
+반면 portable reconstruction에 필요한 opaque root/resource/asset ID, root kind/provenance, optional stable root-marker binding, current/history relative path, original filename, asset-resource role, collection hierarchy/membership, Takeout source-folder mapping은 보존한다. 따라서 snapshot은 raw/cache 값을 제거한 sanitized representation이지만 relative path·filename·collection label을 포함하므로 **local-private backup**이며 agent-safe/share-safe report는 아니다. agent-safe catalog report에는 path 없이 record/root/resource/asset/collection count와 outcome만 노출한다.
+
+Synthetic round-trip validation:
+
+```text
+export JSONL                                   PASS
+absolute root path absent                      PASS
+known raw exact hash absent                    PASS
+known media bytes absent                       PASS
+restore default dry-run creates no catalog     PASS
+restore apply creates only a new catalog       PASS
+fresh scan preserves opaque root IDs           PASS
+fresh scan preserves opaque resource IDs       PASS
+fresh evidence rebinds original asset ID       PASS
+exact duplicate evidence rebuilt from files    PASS
+Takeout collection hierarchy/membership kept   PASS
+fresh scan creates no duplicate collections    PASS
+```
+
+Restored asset rebind는 `snapshot:` placeholder key가 있는 asset에만 허용해, 일반 working catalog에서 실제 file content/evidence가 바뀐 경우까지 과거 asset ID를 강제로 유지하지 않게 했다. unmarked root는 restore 시 `--bind-root ROOT_ID=PATH`로 현재 directory와 연결할 수 있고, stable marker가 있는 root는 snapshot에 marker binding을 보존해 이후 scan에서 relocation identity를 다시 사용할 수 있다.
+
+현재 DevSpace agent boundary에서는 실제 개인 catalog를 local-private JSONL 본문으로 펼쳐 agent가 검사하는 작업은 수행하지 않았다. real archive에서의 snapshot placement와 replica copy/check는 HDD archive destination/apply milestone에서 사용자 local path 안에서 검증한다.
+
 ## 2026-09-04 — Product North Star 고정
 
 최초 제품 목적을 `docs/PROJECT_NORTH_STAR.md`와 `AGENTS.md`의 explicit scope gate로 고정했다.
