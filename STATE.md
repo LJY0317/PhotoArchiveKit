@@ -70,7 +70,9 @@ scanner는 media에 대해 read-only다. 명시적으로 선택한 SQLite catalo
 - required metadata core는 ImageIO/AVFoundation과 최소 Takeout sidecar importer로 현재 archive workflow에 필요한 좁은 촬영시각·QuickTime·Live Photo linkage 역할을 수행한다. ExifTool 수준의 broad metadata coverage가 필요해지면 같은 범용 parser를 직접 확대하기보다 ExifTool을 우선 평가한다.
 - osxphotos는 required dependency가 아니다. Apple Photos library query/export/album/original-edited interoperability가 필요할 때 자체 구현과 비교해 더 완전하고 검증된 경로라면 optional bridge로 활용한다. 같은 기능을 공식 PhotoKit이 더 안전하고 완전하게 제공하면 PhotoKit을 우선한다.
 - AI agent는 media-processing trust boundary 밖에 둔다. 정상 agent workflow는 `--agent-json`을 사용하며 raw hash/identifier/GPS뿐 아니라 filename/path, capture timestamp, exact byte size 같은 file-level private detail도 agent에 전달하지 않는다.
-- Czkawka가 설치된 대규모 library에서는 exact candidate discovery accelerator와 perceptual similarity engine으로 활용하는 방향을 선호한다. final asset decision과 destructive-operation 재검증은 PhotoArchiveKit이 소유한다.
+- Google Photos Photo Stack/Top pick은 exact dedupe가 아니라 human-in-the-loop best-shot curation 단계로 취급한다. 사용자의 정상 루틴은 iPhone 촬영 -> Google Photos backup/Top-pick review -> Mac ingest -> 필요 시 Krokiet/Czkawka residual similarity review -> PhotoArchiveKit exact/Live Photo reconciliation -> archive 순서다.
+- Top pick을 사용했다고 batch가 similarity-free라고 가정하지 않는다. Google이 남긴 후보가 마음에 들지 않거나 여러 후보를 유지한 경우에만 Mac에서 Krokiet/Czkawka Similar Images/Videos를 추가 review 도구로 사용한다.
+- Czkawka exact mode는 현재 native engine보다 real-library benchmark상 빠르지 않았으므로 `automatic` exact engine은 native를 유지한다. Czkawka exact는 독립 cross-check, Czkawka의 주된 장기 가치는 byte가 다른 similar image/video review candidate 생성이다.
 
 ## 검증
 

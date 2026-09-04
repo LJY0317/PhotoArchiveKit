@@ -35,6 +35,34 @@ Apple Photos:     logical collection을 album membership으로 반영 가능
 
 추가 collection마다 filesystem copy를 만들지 않는다. many-to-many membership은 catalog data로 유지하고 이를 지원하는 provider에 나중에 projection할 수 있다.
 
+## 촬영 후 curation과 archive ingest의 경계
+
+PhotoArchiveKit은 "같은 촬영 장면에서 어느 한 장이 가장 잘 나왔는가"를 자체적으로 자동 판정하려고 하지 않는다. 이 문제는 exact duplicate 제거와 다르고, 잘못된 선택 비용이 높기 때문에 human-in-the-loop curation으로 취급한다.
+
+권장 순서는 다음과 같다.
+
+```text
+iPhone 촬영
+  -> Google Photos backup
+  -> Google Photos Photo Stack / Top pick을 사람이 검토
+     -> 마음에 들면 "Keep this, delete rest"로 근접 후보 정리
+     -> 마음에 들지 않거나 여러 후보를 남기고 싶으면 그대로 보존
+  -> Mac으로 살아남은 원본/후보 ingest
+  -> 필요할 때 Krokiet/Czkawka Similar Images/Videos로 잔여 유사 후보 검색
+     -> 사람이 최종 선택
+  -> PhotoArchiveKit exact reconciliation + Live Photo graph + archive plan
+```
+
+역할은 명확히 분리한다.
+
+- **exact byte-identical duplicate:** PhotoArchiveKit이 local hash/byte evidence와 Live Photo completeness를 이용해 agent-safe automatic decision을 만들 수 있다. 사람에게 사진 내용을 보여줄 필요가 없다.
+- **Google Photos Top pick:** 같은 subject를 짧은 시간에 찍은 nearly-identical stack의 대표 후보를 Google Photos가 제안하고, 사용자가 최종적으로 어떤 한 장을 남길지 승인하는 upstream curation 단계다. PhotoArchiveKit은 Google의 proprietary ranking을 재구현하거나 permanent truth로 취급하지 않는다.
+- **Krokiet/Czkawka similarity:** byte가 다른 residual near-duplicate image/video를 로컬에서 찾는 review 후보 생성기다. perceptual group 자체가 best-shot ranking이나 deletion authority가 아니다.
+
+Google Photos에서 culling을 끝낸 뒤 Mac ingest를 하는 현재 사용자 workflow는 바람직하다. archive가 처음부터 모든 burst-like 후보를 영구 보존할 필요가 줄어들고, PhotoArchiveKit은 살아남은 자산의 provenance·Live Photo 관계·exact copy reconciliation에 집중할 수 있다. 다만 Top pick을 사용했다고 해서 batch가 similarity-free라고 가정하지 않으며, 필요하면 Mac ingest 후 Krokiet/Czkawka review를 추가한다.
+
+Google Photos에서 사진을 실제 삭제하는 operation은 cloud view만 숨기는 작업이 아니므로 upstream app의 현재 deletion semantics를 사용자가 이해한 상태에서 수행해야 한다. PhotoArchiveKit은 이 curation 단계의 삭제를 자동으로 대신하지 않는다.
+
 ## Classification pipeline
 
 ### 1. Resource를 logical asset으로 정규화

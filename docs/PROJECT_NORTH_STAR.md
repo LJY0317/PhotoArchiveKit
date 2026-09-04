@@ -46,6 +46,16 @@ iPhone/Apple Photos에서 직접 추출한 원본 계열
 
 이 순위는 "Google 사본의 바이트가 더 나쁘다"는 뜻이 아니다. 바이트가 같아도 어느 경로에서 직접 보존했는지를 사용자가 선호한다는 정책이다. 파일 내용만으로 provenance를 증명할 수 없는 경우 provenance는 source root와 ingest session에서 기록한다.
 
+## Curation과 archive의 역할 분리
+
+PhotoArchiveKit은 exact duplicate 제거와 "가장 잘 나온 한 장" 선택을 같은 문제로 취급하지 않는다.
+
+- byte-identical exact duplicate는 local integrity evidence와 Live Photo asset completeness가 충분하면 AI agent가 media 내용을 보지 않고도 automatic plan으로 처리할 수 있어야 한다.
+- 같은 장면의 여러 근접 후보 중 best shot을 고르는 일은 human-in-the-loop curation이다. 사용자가 이미 Google Photos Photo Stack/Top pick을 적극적으로 쓰는 workflow에서는 그 단계를 archive ingest보다 앞에 둔다.
+- Google Photos가 제안한 Top pick은 사용자가 승인하는 upstream curation signal일 뿐 PhotoArchiveKit의 permanent asset identity나 deletion evidence가 아니다.
+- Google Photos에서 여러 후보를 남겼거나 stack이 잡지 못한 잔여 near-duplicate는 Mac ingest 후 Krokiet/Czkawka Similar Images/Videos 같은 local review 도구를 활용할 수 있다.
+- PhotoArchiveKit은 Google의 proprietary best-shot ranking이나 Czkawka의 perceptual engine을 재구현하지 않고, 그 결과 이후의 Live Photo-aware reconciliation과 archive safety를 소유한다.
+
 ## 완료 기준
 
 다음 항목이 실제 사진 라이브러리 규모에서 안정적으로 작동하기 전에는 핵심 목적이 완료된 것으로 보지 않는다.
