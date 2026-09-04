@@ -178,6 +178,34 @@ preflight는 각 candidate와 preferred counterpart가 현재 regular file인지
 
 Chat의 현재 DevSpace terminal surface는 사용자 media file move 실행을 허용하지 않으므로 이 milestone에서 real-library mutation은 의도적으로 수행하지 않았다. local CLI의 explicit `--apply` 경로가 다음 실전 단계다.
 
+## 2026-09-04 — 첫 real-library reversible quarantine 적용
+
+`~/Pictures`와 세 개의 Google Takeout root에서 planner가 `automatic_redundant`로 판정한 exact duplicate만 대상으로 첫 실제 quarantine을 수행했다. REVIEW, Takeout-only semantic duplicate, perceptual similarity 후보는 제외했다.
+
+검증 결과:
+
+```text
+automatic plan items                 2262
+moved resources                      4195
+manifest state                   complete
+source files still present              0
+missing quarantine destinations         0
+destination size mismatches              0
+```
+
+재scan 전후 비교:
+
+```text
+recognized resources      30240 -> 26045
+logical assets             8178 -> 8178
+logical Live Photos        2710 -> 2710
+local complete Live Photos 1604 -> 1604
+post-quarantine AUTO resources          0
+remaining review resources           7805
+```
+
+따라서 첫 실제 mutation은 계획한 4,195개 resource만 reversible quarantine으로 이동했고, local canonical Live Photo completeness와 logical asset graph는 변하지 않았다. restore manifest는 local quarantine에만 보존하며 repository에는 포함하지 않는다.
+
 ## 2026-09-04 — Product North Star 고정
 
 최초 제품 목적을 `docs/PROJECT_NORTH_STAR.md`와 `AGENTS.md`의 explicit scope gate로 고정했다.
