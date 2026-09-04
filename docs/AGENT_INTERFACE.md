@@ -24,10 +24,12 @@ agent는 opaque root/logical asset/group/plan ID, provenance category, resource 
 ```bash
 photoarchive scan --agent-json --inbox "/path/to/inbox"
 photoarchive plan --agent-json --local "/path/to/local" --takeout "/path/to/takeout"
+photoarchive organize-plan --agent-json --local "/path/to/local"
+photoarchive organize --agent-json --local "/path/to/local"
 photoarchive quarantine --agent-json --to "/local/quarantine" --local "/path/to/local" --takeout "/path/to/takeout"
 ```
 
-`plan`은 non-Takeout exact copy 우선 정책과 Live Photo canonical coverage를 적용해 `automatic_redundant`와 `review`를 opaque item으로 분리하지만 media를 변경하지 않는다. `quarantine` dry-run은 같은 plan을 fresh SHA-256으로 다시 검증한 뒤 item/resource count와 outcome만 agent에 반환한다. 현재 mutation gate는 사람이 local CLI에서 명시적으로 붙이는 `--apply`이며, 장기적으로는 short-lived approval token을 추가한다.
+`plan`은 exact/provenance evidence를 opaque reconciliation item으로 만들고, `organize-plan`은 camera-style filename의 rename/flat-move를 opaque organization item으로 만든다. `organize`와 `quarantine`은 기본 dry-run이며 agent-safe output에는 item/resource count와 outcome만 반환한다. 실제 mutation gate는 사람이 local CLI에서 명시적으로 붙이는 `--apply`이고, organization apply는 stable root marker도 요구한다. 장기적으로는 short-lived approval token을 추가한다.
 
 agent-safe JSON report에는 다음이 포함된다.
 

@@ -26,7 +26,8 @@ let package = Package(
         ),
         .executableTarget(
             name: "photoarchive-selftest",
-            dependencies: ["PhotoArchiveCore"]
+            dependencies: ["PhotoArchiveCore"],
+            linkerSettings: [.linkedLibrary("sqlite3")]
         )
     ]
 )

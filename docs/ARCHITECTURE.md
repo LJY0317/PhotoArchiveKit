@@ -120,7 +120,7 @@ data model은 simple UI가 default Inbox 하나로 시작하더라도 여러 roo
 
 의도한 model에서는 path를 identity가 아니라 configuration으로 취급한다. opaque root ID가 relative path를 소유하고 configured Inbox 또는 mount location은 바뀔 수 있다.
 
-현재 root identity는 canonical path로 existing root를 resolve하므로 configured root를 이동하면 새 root record가 생성된다. stable user-supplied root ID와 `.photoarchive-root` 같은 marker가 다음 root-identity milestone이다. 제한된 same-session quarantine은 현재 root를 같은 invocation에서 scan하고 fresh verification한 뒤 즉시 적용하므로 persisted root identity를 추론하지 않는다. offline/persisted plan replay, archive copy/rename 등 이후 mutating command는 absence를 해석하거나 plan을 적용하기 전에 stable marker를 verify해야 한다. unavailable root를 mass deletion으로 해석해서는 안 된다.
+현재 scanner는 path match를 유지하면서 optional `.photoarchive-root` marker key를 catalog root ID에 bind한다. marker가 있는 root directory가 다른 path로 이동하면 marker key로 기존 root ID를 찾아 canonical path만 갱신한다. marker가 없는 기존 root는 여전히 path 기반이므로 relocation 전에 `photoarchive root init --apply PATH`가 필요하다. unavailable root를 mass deletion으로 해석해서는 안 된다.
 
 ## Session model
 
@@ -140,7 +140,7 @@ scan
   -> close session
 ```
 
-현재 구현은 `scan`, `analyze`, `propose`, catalog persistence까지이며 media를 수정하지 않는다.
+현재 구현은 read-only scan/reconciliation/organization planning과 제한된 reversible mutation(`quarantine`, marker-gated `organize`)까지 포함한다. persisted/offline plan replay와 verified HDD archive copy는 아직 없다.
 
 future plan은 immutable document이며 다음을 포함한다.
 
@@ -240,7 +240,13 @@ apply precondition:
 
 이 quarantine은 오래된 persisted plan을 replay하지 않는다. session 도중 move가 실패하면 같은 quarantine session에서 이미 이동한 resource 전체를 reverse order로 원위치 rollback한다. successful apply는 quarantine target 안에 source/destination mapping을 가진 local restore manifest를 남긴다. permanent delete는 없다.
 
-stable movable root marker가 아직 없기 때문에 이 same-session path를 일반적인 persisted apply로 확장하지 않는다. archive copy/rename, offline plan replay, missing-root reconciliation 같은 이후 mutation에는 stable root identity가 선행되어야 한다.
+stable root marker 기능은 구현됐지만 existing root에는 자동으로 marker를 쓰지 않는다. persisted/offline plan replay, archive copy, missing-root reconciliation은 user-initialized marker와 immutable persisted plan/approval token을 함께 요구해야 한다.
+
+### Organization mutation boundary
+
+`photoarchive organize-plan`은 local/Apple-direct root의 `IMG_####` / `IMG_E####` camera-style resource만 대상으로 capture wall-clock 기반 flat rename proposal을 만든다. custom filename은 자동 변경하지 않는다. timezone이 빠진 EXIF `DateTimeOriginal`은 파일명에 local wall-clock을 쓰는 데는 충분하지만 filesystem creation fallback은 automatic rename authority가 아니다.
+
+`photoarchive organize`는 기본 dry-run이고 `--apply` 전에 stable root marker를 요구한다. same-volume filesystem resource identifier와 byte size를 pre/post move에서 확인하며, Live Photo는 complete still+paired-video 두 resource가 같은 destination basename을 공유해야 한다. 실패 시 session 전체를 reverse-order rollback하고 local operations manifest를 남긴다. 최초 filename과 old/new location은 SQLite history에 보존된다.
 
 ### Takeout source-folder semantics before physical collapse
 

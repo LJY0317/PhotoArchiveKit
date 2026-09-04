@@ -190,6 +190,43 @@ public struct LivePhotoAssetReport: Codable, Sendable, Equatable {
     }
 }
 
+public struct ScannedResourceReport: Codable, Sendable, Equatable {
+    public let resourceID: String
+    public let assetID: String?
+    public let rootID: String
+    public let rootLabel: String
+    public let relativePath: String
+    public let fileName: String
+    public let mediaKind: MediaKind
+    public let role: ResourceRole
+    public let byteSize: Int64
+    public let captureTime: CaptureTime?
+
+    public init(
+        resourceID: String,
+        assetID: String?,
+        rootID: String,
+        rootLabel: String,
+        relativePath: String,
+        fileName: String,
+        mediaKind: MediaKind,
+        role: ResourceRole,
+        byteSize: Int64,
+        captureTime: CaptureTime?
+    ) {
+        self.resourceID = resourceID
+        self.assetID = assetID
+        self.rootID = rootID
+        self.rootLabel = rootLabel
+        self.relativePath = relativePath
+        self.fileName = fileName
+        self.mediaKind = mediaKind
+        self.role = role
+        self.byteSize = byteSize
+        self.captureTime = captureTime
+    }
+}
+
 public struct ExactDuplicateGroupReport: Codable, Sendable, Equatable {
     public let groupID: String
     public let byteSize: Int64
@@ -439,6 +476,7 @@ public struct ScanReport: Codable, Sendable, Equatable {
     public let catalogPath: String
     public let summary: ScanSummary
     public let roots: [RootScanReport]
+    public let resources: [ScannedResourceReport]
     public let livePhotos: [LivePhotoAssetReport]
     public let exactDuplicateGroups: [ExactDuplicateGroupReport]
     public let eventSuggestions: [EventSuggestionReport]
@@ -453,6 +491,7 @@ public struct ScanReport: Codable, Sendable, Equatable {
         catalogPath: String,
         summary: ScanSummary,
         roots: [RootScanReport],
+        resources: [ScannedResourceReport] = [],
         livePhotos: [LivePhotoAssetReport],
         exactDuplicateGroups: [ExactDuplicateGroupReport],
         eventSuggestions: [EventSuggestionReport],
@@ -466,6 +505,7 @@ public struct ScanReport: Codable, Sendable, Equatable {
         self.catalogPath = catalogPath
         self.summary = summary
         self.roots = roots
+        self.resources = resources
         self.livePhotos = livePhotos
         self.exactDuplicateGroups = exactDuplicateGroups
         self.eventSuggestions = eventSuggestions

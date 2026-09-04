@@ -20,8 +20,14 @@ struct PhotoArchiveCLI {
                 try await runScan(arguments, mode: .scan)
             case "plan":
                 try await runScan(arguments, mode: .plan)
+            case "organize-plan":
+                try await runScan(arguments, mode: .organizePlan)
+            case "organize":
+                try await runScan(arguments, mode: .organize)
             case "quarantine":
                 try await runScan(arguments, mode: .quarantine)
+            case "root":
+                try runRoot(arguments)
             case "doctor":
                 runDoctor()
             case "version", "--version", "-v":
@@ -37,9 +43,57 @@ struct PhotoArchiveCLI {
         }
     }
 
+    private static func runRoot(_ arguments: [String]) throws {
+        guard let action = arguments.first else {
+            printRootHelp()
+            return
+        }
+        let rest = Array(arguments.dropFirst())
+        switch action {
+        case "inspect":
+            guard rest.count == 1 else { throw CLIError("Usage: photoarchive root inspect PATH") }
+            let rootURL = fileURL(rest[0])
+            if let marker = try RootMarkerStore.readIfPresent(at: rootURL) {
+                print("PhotoArchiveKit root marker: present")
+                print("Schema: \(marker.schemaVersion)")
+            } else {
+                print("PhotoArchiveKit root marker: absent")
+            }
+        case "init":
+            var apply = false
+            var paths: [String] = []
+            for argument in rest {
+                if argument == "--apply" { apply = true }
+                else if argument == "--help" || argument == "-h" { printRootHelp(); return }
+                else if argument.hasPrefix("-") { throw CLIError("Unknown root init option: \(argument)") }
+                else { paths.append(argument) }
+            }
+            guard paths.count == 1 else { throw CLIError("Usage: photoarchive root init [--apply] PATH") }
+            let rootURL = fileURL(paths[0])
+            if try RootMarkerStore.readIfPresent(at: rootURL) != nil {
+                print("PhotoArchiveKit root marker already present. No change needed.")
+                return
+            }
+            if !apply {
+                print("Dry run: a .photoarchive-root marker would be created in the supplied root.")
+                print("No files were modified. Re-run with --apply to create it.")
+                return
+            }
+            _ = try RootMarkerStore.create(at: rootURL)
+            print("Created .photoarchive-root marker.")
+            print("Media files were not modified.")
+        case "help", "--help", "-h":
+            printRootHelp()
+        default:
+            throw CLIError("Unknown root action: \(action)")
+        }
+    }
+
     private enum WorkflowMode {
         case scan
         case plan
+        case organizePlan
+        case organize
         case quarantine
     }
 
@@ -52,7 +106,7 @@ struct PhotoArchiveCLI {
         var eventGapHours = 6.0
         var maxConcurrency = min(max(ProcessInfo.processInfo.activeProcessorCount, 1), 8)
         var quarantineTargetURL: URL?
-        var applyQuarantine = false
+        var applyMutation = false
         var roots: [ScanRoot] = []
 
         var index = 0
@@ -91,10 +145,10 @@ struct PhotoArchiveCLI {
                 }
                 quarantineTargetURL = fileURL(try value(after: argument, at: &index, in: arguments))
             case "--apply":
-                guard mode == .quarantine else {
-                    throw CLIError("--apply is only valid with the quarantine command.")
+                guard mode == .quarantine || mode == .organize else {
+                    throw CLIError("--apply is only valid with the quarantine or organize command.")
                 }
-                applyQuarantine = true
+                applyMutation = true
             case "--inbox":
                 let path = try value(after: argument, at: &index, in: arguments)
                 roots.append(ScanRoot(url: fileURL(path), kind: .inbox))
@@ -140,6 +194,8 @@ struct PhotoArchiveCLI {
                 switch mode {
                 case .scan: command = "scan"
                 case .plan: command = "plan"
+                case .organizePlan: command = "organize-plan"
+                case .organize: command = "organize"
                 case .quarantine: command = "quarantine"
                 }
                 printScanHelp(command: command)
@@ -183,6 +239,33 @@ struct PhotoArchiveCLI {
             return
         }
 
+        if mode == .organizePlan {
+            let plan = OrganizationPlanner.makePlan(from: report)
+            if outputAgentJSON {
+                try printJSON(AgentSafeOrganizationPlan(plan: plan))
+            } else if outputJSON {
+                try printJSON(plan)
+            } else {
+                printOrganizationPlan(plan)
+            }
+            return
+        }
+
+        if mode == .organize {
+            let plan = OrganizationPlanner.makePlan(from: report)
+            let applyReport = applyMutation
+                ? try OrganizationExecutor.apply(report: report, plan: plan)
+                : try OrganizationExecutor.preflight(report: report, plan: plan)
+            if outputAgentJSON {
+                try printJSON(AgentSafeOrganizationApplyReport(report: applyReport))
+            } else if outputJSON {
+                try printJSON(applyReport)
+            } else {
+                printOrganizationApplyReport(applyReport)
+            }
+            return
+        }
+
         if mode == .quarantine {
             guard computeExactDuplicates else {
                 throw CLIError("quarantine requires exact duplicate comparison.")
@@ -192,7 +275,7 @@ struct PhotoArchiveCLI {
             }
             let plan = ReconciliationPlanner.makePlan(from: report)
             let quarantineReport: QuarantineReport
-            if applyQuarantine {
+            if applyMutation {
                 quarantineReport = try QuarantineExecutor.apply(
                     report: report,
                     plan: plan,
@@ -269,6 +352,44 @@ struct PhotoArchiveCLI {
         }
         print("")
         print("No media files were modified.")
+    }
+
+    private static func printOrganizationPlan(_ plan: OrganizationPlan) {
+        print("PhotoArchiveKit read-only organization plan")
+        print("Policy: \(plan.policy)")
+        print("Session: \(plan.sessionID)")
+        print("Automatic items: \(plan.summary.automaticItemCount)")
+        print("Automatic resources: \(plan.summary.automaticResourceCount)")
+        print("Review items: \(plan.summary.reviewItemCount)")
+        print("Review resources: \(plan.summary.reviewResourceCount)")
+        print("")
+        for item in plan.items.prefix(80) {
+            print("[\(item.itemID)] \(item.decision.rawValue) \(item.kind.rawValue) \(item.reason.rawValue)")
+            for move in item.moves.prefix(4) {
+                print("  \(move.sourceRelativePath) -> \(move.destinationRelativePath) [\(move.role.rawValue)]")
+            }
+        }
+        if plan.items.count > 80 {
+            print("... \(plan.items.count - 80) more items; use --json locally or --agent-json for an AI agent")
+        }
+        print("")
+        print("No media files were modified.")
+    }
+
+    private static func printOrganizationApplyReport(_ report: OrganizationApplyReport) {
+        print(report.dryRun ? "PhotoArchiveKit organization dry run" : "PhotoArchiveKit organization applied")
+        print("Session: \(report.sessionID)")
+        print("Items: \(report.itemCount)")
+        print("Resources: \(report.resourceCount)")
+        if let manifestPath = report.manifestPath {
+            print("Manifest: \(manifestPath)")
+        }
+        print("")
+        if report.dryRun {
+            print("No media files were modified. A stable root marker is required before this dry run can succeed.")
+        } else {
+            print("Only automatic organization items were moved. Review items and custom filenames were untouched.")
+        }
     }
 
     private static func printQuarantineReport(_ report: QuarantineReport) {
@@ -417,7 +538,11 @@ struct PhotoArchiveCLI {
             Usage:
               photoarchive scan [options] ROOT...
               photoarchive plan [options] ROOT...
+              photoarchive organize-plan [options] ROOT...
+              photoarchive organize [--apply] [options] ROOT...
               photoarchive quarantine --to PATH [--apply] [options] ROOT...
+              photoarchive root inspect PATH
+              photoarchive root init [--apply] PATH
               photoarchive doctor
               photoarchive version
 
@@ -425,16 +550,55 @@ struct PhotoArchiveCLI {
             only an explicit --apply moves automatic exact-duplicate candidates into a
             user-supplied local quarantine directory. It never permanently deletes media.
 
-            Run 'photoarchive scan --help', 'photoarchive plan --help', or
-            'photoarchive quarantine --help' for options.
+            Run 'photoarchive scan --help', 'photoarchive plan --help',
+            'photoarchive organize-plan --help', 'photoarchive organize --help',
+            or 'photoarchive quarantine --help' for options.
+            """
+        )
+    }
+
+    private static func printRootHelp() {
+        print(
+            """
+            Usage:
+              photoarchive root inspect PATH
+              photoarchive root init [--apply] PATH
+
+            root inspect reports whether PATH has a stable .photoarchive-root marker.
+            root init is a dry run by default. --apply creates only the hidden marker file
+            and never modifies media bytes. A later scan binds the marker to the catalog
+            so the same root can be recognized after it is moved.
             """
         )
     }
 
     private static func printScanHelp(command: String) {
-        let quarantineOptions = command == "quarantine"
-            ? "  --to PATH                  Existing quarantine directory (required)\n  --apply                    Move verified AUTO candidates; default is dry-run\n"
-            : ""
+        let mutationOptions: String
+        if command == "quarantine" {
+            mutationOptions = "  --to PATH                  Existing quarantine directory (required)\n  --apply                    Move verified AUTO candidates; default is dry-run\n"
+        } else if command == "organize" {
+            mutationOptions = "  --apply                    Rename/flatten verified AUTO organization items; default is dry-run\n"
+        } else {
+            mutationOptions = ""
+        }
+        let operationNotes: String
+        if command == "quarantine" {
+            operationNotes = """
+            quarantine never acts on REVIEW items. Before --apply it freshly re-hashes
+            every candidate against a preferred exact counterpart; Live Photo candidate
+            sets are fully verified before any resource in that item is moved. A local
+            restore manifest is written under the quarantine directory.
+            """
+        } else if command == "organize" {
+            operationNotes = """
+            organize never changes custom filenames or REVIEW items. Apply requires a
+            stable .photoarchive-root marker. Live Photo still+paired-video resources use
+            one destination basename, and post-move filesystem identity/size is verified.
+            A local restore manifest is written under Application Support.
+            """
+        } else {
+            operationNotes = ""
+        }
         print(
             """
             Usage:
@@ -464,12 +628,9 @@ struct PhotoArchiveCLI {
               --exact-engine ENGINE      automatic, native, or czkawka (default: automatic)
               --event-gap-hours NUMBER   Start a new event after this gap (default: 6)
               --jobs NUMBER              Concurrent metadata probes, 1-64
-            \(quarantineOptions)  --help                     Show this help
+            \(mutationOptions)  --help                     Show this help
 
-            quarantine never acts on REVIEW items. Before --apply it freshly re-hashes
-            every candidate against a preferred exact counterpart; Live Photo candidate
-            sets are fully verified before any resource in that item is moved. A local
-            restore manifest is written under the quarantine directory.
+            \(operationNotes)
 
             automatic exact mode currently uses the native SHA-256 path. The explicit
             czkawka engine uses Czkawka cache/prehash candidate discovery and then native

@@ -129,6 +129,7 @@ public final class ArchiveScanner {
                     catalogPath: catalog.url.path,
                     summary: summary,
                     roots: reportParts.roots,
+                    resources: reportParts.resources,
                     livePhotos: reportParts.livePhotos,
                     exactDuplicateGroups: reportParts.duplicates,
                     eventSuggestions: reportParts.events,
@@ -163,7 +164,8 @@ public final class ArchiveScanner {
             guard seenPaths.insert(url.path).inserted else {
                 throw ArchiveScannerError.duplicateRoot(url.path)
             }
-            roots.append(try catalog.resolveRoot(input))
+            let marker = try RootMarkerStore.readIfPresent(at: url)
+            roots.append(try catalog.resolveRoot(input, markerKey: marker?.markerKey))
         }
 
         return roots
@@ -178,7 +180,8 @@ public final class ArchiveScanner {
             .isSymbolicLinkKey,
             .fileSizeKey,
             .contentModificationDateKey,
-            .creationDateKey
+            .creationDateKey,
+            .fileResourceIdentifierKey
         ]
         var pending: [PendingFile] = []
         var warnings: [ScanWarning] = []
@@ -229,7 +232,8 @@ public final class ArchiveScanner {
                         type: type,
                         byteSize: Int64(values.fileSize ?? 0),
                         modifiedAt: values.contentModificationDate,
-                        createdAt: values.creationDate
+                        createdAt: values.creationDate,
+                        fileSystemIdentifier: values.fileResourceIdentifier.map { String(describing: $0) }
                     ))
                 } catch {
                     warnings.append(ScanWarning(
@@ -461,6 +465,7 @@ public final class ArchiveScanner {
 
     private struct ReportParts {
         let roots: [RootScanReport]
+        let resources: [ScannedResourceReport]
         let livePhotos: [LivePhotoAssetReport]
         let duplicates: [ExactDuplicateGroupReport]
         let events: [EventSuggestionReport]
@@ -589,8 +594,26 @@ public final class ArchiveScanner {
                 < ($1.code, $1.rootID ?? "", $1.relativePath ?? "")
         }
 
+        let resourceReports = resources.compactMap { resource -> ScannedResourceReport? in
+            guard let resourceID = resource.persistentResourceID else { return nil }
+            return ScannedResourceReport(
+                resourceID: resourceID,
+                assetID: resource.persistentAssetID,
+                rootID: resource.root.id,
+                rootLabel: resource.root.label,
+                relativePath: resource.relativePath,
+                fileName: resource.fileName,
+                mediaKind: resource.mediaKind,
+                role: AssetAssembler.role(for: resource),
+                byteSize: resource.byteSize,
+                captureTime: resource.captureTime
+            )
+        }
+        .sorted { ($0.rootLabel, $0.relativePath) < ($1.rootLabel, $1.relativePath) }
+
         return ReportParts(
             roots: rootReports,
+            resources: resourceReports,
             livePhotos: livePhotoReports,
             duplicates: duplicateReports,
             events: events,

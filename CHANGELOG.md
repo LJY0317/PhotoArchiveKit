@@ -29,10 +29,14 @@ PhotoArchiveKit의 중요한 변경 사항을 여기에 기록한다.
 - repeated same-identifier Live Photo export를 directory/basename boundary hint로 occurrence partitioning하되 embedded identifier를 identity authority로 유지
 - Google Takeout source-folder hierarchy와 asset membership을 local SQLite에 보존한 뒤 Takeout-only exact standalone duplicate를 한 physical copy로 collapse할 수 있는 reconciliation policy
 - Live Photo mutation은 touched occurrence/root의 complete resource set이 plan에 없으면 실행 전 거부하는 독립 atomicity guard; partial still/video plan을 허용하지 않음
+- same-volume filesystem resource identifier와 resource location/original-name history를 이용한 path-independent physical resource tracking
+- optional `.photoarchive-root` stable marker와 `photoarchive root inspect/init`; moved root를 기존 catalog root ID에 다시 bind
+- `photoarchive organize-plan`: iPhone camera-style `IMG_####` / `IMG_E####`만 capture wall-clock 기반 `YYYY-MM-DD_HH-mm-ss[_NN]`으로 rename/flat-move 제안하고 custom filename/incomplete Live Photo/multiple representation은 review
+- marker-gated `photoarchive organize`: 기본 dry-run, `--apply`에서 AUTO organization item만 이동하며 Live Photo 동일 basename, post-move filesystem ID/size verification, rollback, local restore manifest를 제공
 
 ### 보안
 
-- general-purpose media rename/move, upload, permanent delete command 없음; quarantine은 freshly verified AUTO exact candidate 전용의 제한된 reversible move만 허용
+- general-purpose arbitrary media move, upload, permanent delete command 없음; quarantine과 organize는 각각 exact-redundancy 및 deterministic camera-name organization에 제한된 reversible move만 허용
 - core에 background daemon 또는 network request 없음
 - raw hash와 raw Live Photo identifier는 agent-safe report 밖에 유지
 - agent-safe report는 filename/path, exact byte size, capture timestamp도 제거

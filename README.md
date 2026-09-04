@@ -16,7 +16,7 @@ PhotoArchiveKit is a local-first, session-based toolkit for preserving and organ
 
 The project is intentionally small. It does not run a background daemon, host a gallery server, or move media behind an opaque storage format. Media remains in ordinary filesystem folders; a local SQLite catalog records relationships and decisions that folders cannot express.
 
-> **Project status:** early safety-first prototype. `scan` and `plan` are read-only. A narrowly scoped `quarantine` command can move only freshly re-verified automatic exact-duplicate candidates into a user-supplied local quarantine directory; permanent deletion, archive rename/copy, and cloud upload are not implemented yet.
+> **Project status:** early safety-first prototype. `scan`, `plan`, and `organize-plan` are read-only. `quarantine` supports reversible exact-duplicate moves, while marker-gated `organize` can dry-run or apply only automatic iPhone-camera rename/flatten items. Permanent deletion, verified HDD archive copy, and cloud upload are not implemented yet.
 
 ## Why this exists
 
@@ -55,7 +55,10 @@ The initial CLI can:
 - expose duplicate groups as stable opaque IDs instead of raw hashes;
 - extract timezone-aware EXIF and QuickTime capture times when available;
 - suggest date-based event folders by clustering assets separated by a configurable time gap;
-- persist resources, logical assets, provenance, duplicate groups, future collection mappings, and scan sessions in SQLite;
+- persist resources, logical assets, provenance, duplicate groups, source collection mappings, original filenames, path history, and scan sessions in SQLite;
+- keep same-volume resource identity stable across rename/move and recognize a moved source root through an optional `.photoarchive-root` marker;
+- generate a read-only `organize-plan` for only `IMG_####` / `IMG_E####` camera-style names, using capture wall-clock names such as `YYYY-MM-DD_HH-mm-ss[_NN]` while preserving custom filenames;
+- require a stable root marker before `organize --apply`, keep Live Photo still+video on one destination basename, verify post-move filesystem identity/size, write a restore manifest, and roll back the session on failure;
 - produce a human-readable report or sanitized JSON;
 - detect optional user-installed interoperability tools without requiring or bundling them;
 - dry-run or apply a local quarantine of only `automatic_redundant` exact candidates after fresh SHA-256 verification against a preferred copy; Live Photo candidate sets are verified before any resource in the item moves;
@@ -118,7 +121,7 @@ swift run photoarchive plan \
   --takeout "~/Pictures/Takeout"
 ```
 
-For an AI agent, use `--agent-json` with `scan`, `plan`, or `quarantine`; local diagnostic `--json` can contain paths.
+For an AI agent, use `--agent-json` with `scan`, `plan`, `organize-plan`, `organize`, or `quarantine`; local diagnostic `--json` can contain paths.
 
 Preview a quarantine without moving anything:
 
@@ -130,6 +133,14 @@ swift run photoarchive quarantine \
 ```
 
 Only after reviewing the dry run, add `--apply` to move the freshly re-verified `automatic_redundant` resources. `REVIEW` items are never moved by this command. Applied sessions are stored under `PhotoArchiveKit/<session-id>/` inside the supplied quarantine directory together with a local restore manifest.
+
+Preview deterministic camera-name cleanup without moving media:
+
+```bash
+swift run photoarchive organize-plan --agent-json --local "~/Pictures"
+```
+
+Before any organization apply, initialize a stable root marker explicitly (`photoarchive root init --apply "~/Pictures"`). `photoarchive organize` then defaults to a marker-verified dry run; only an explicit `--apply` can rename/flatten automatic items. Custom filenames and review items stay untouched.
 
 Scan several sources together so exact copies, provenance, and cross-source Live Photo relationships can be reconciled without flattening the folders first:
 

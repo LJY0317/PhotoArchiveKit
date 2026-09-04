@@ -2,10 +2,17 @@ import Foundation
 import SQLite3
 
 public enum PhotoArchivePaths {
-    public static var defaultCatalogURL: URL {
+    public static var applicationSupportDirectoryURL: URL {
         FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Application Support/PhotoArchiveKit", isDirectory: true)
-            .appendingPathComponent("catalog.sqlite3", isDirectory: false)
+    }
+
+    public static var defaultCatalogURL: URL {
+        applicationSupportDirectoryURL.appendingPathComponent("catalog.sqlite3", isDirectory: false)
+    }
+
+    public static var defaultOperationsDirectoryURL: URL {
+        applicationSupportDirectoryURL.appendingPathComponent("operations", isDirectory: true)
     }
 }
 
@@ -94,9 +101,28 @@ final class SQLiteCatalog {
         return key
     }
 
-    func resolveRoot(_ input: ScanRoot) throws -> RootDescriptor {
+    func resolveRoot(_ input: ScanRoot, markerKey: String? = nil) throws -> RootDescriptor {
         let canonicalURL = input.url.resolvingSymlinksInPath().standardizedFileURL
         let path = canonicalURL.path
+
+        if let markerKey,
+           let markerRootID = try queryText(
+               "SELECT root_id FROM root_markers WHERE marker_key = ?",
+               bindings: [.text(markerKey)]
+           ) {
+            try run(
+                "UPDATE source_roots SET label = ?, kind = ?, canonical_path = ? WHERE id = ?",
+                bindings: [.text(input.label), .text(input.kind.rawValue), .text(path), .text(markerRootID)]
+            )
+            try upsertRootMetadata(rootID: markerRootID, provenance: input.provenance)
+            return RootDescriptor(
+                id: markerRootID,
+                label: input.label,
+                kind: input.kind,
+                provenance: input.provenance,
+                url: canonicalURL
+            )
+        }
 
         if let existingID = try queryText(
             "SELECT id FROM source_roots WHERE canonical_path = ?",
@@ -107,6 +133,9 @@ final class SQLiteCatalog {
                 bindings: [.text(input.label), .text(input.kind.rawValue), .text(existingID)]
             )
             try upsertRootMetadata(rootID: existingID, provenance: input.provenance)
+            if let markerKey {
+                try upsertRootMarker(markerKey: markerKey, rootID: existingID)
+            }
             return RootDescriptor(
                 id: existingID,
                 label: input.label,
@@ -128,12 +157,26 @@ final class SQLiteCatalog {
             ]
         )
         try upsertRootMetadata(rootID: id, provenance: input.provenance)
+        if let markerKey {
+            try upsertRootMarker(markerKey: markerKey, rootID: id)
+        }
         return RootDescriptor(
             id: id,
             label: input.label,
             kind: input.kind,
             provenance: input.provenance,
             url: canonicalURL
+        )
+    }
+
+    private func upsertRootMarker(markerKey: String, rootID: String) throws {
+        try run(
+            """
+            INSERT INTO root_markers (marker_key, root_id)
+            VALUES (?, ?)
+            ON CONFLICT(marker_key) DO UPDATE SET root_id = excluded.root_id
+            """,
+            bindings: [.text(markerKey), .text(rootID)]
         )
     }
 
@@ -197,13 +240,26 @@ final class SQLiteCatalog {
         resources: inout [ProbedResource]
     ) throws {
         for index in resources.indices {
-            let existingID = try queryText(
+            let pathMatch = try queryText(
                 "SELECT id FROM resources WHERE root_id = ? AND relative_path = ?",
                 bindings: [
                     .text(resources[index].root.id),
                     .text(resources[index].relativePath)
                 ]
             )
+            let fileSystemMatch: String?
+            if pathMatch == nil, let fileSystemIdentifier = resources[index].fileSystemIdentifier {
+                fileSystemMatch = try queryText(
+                    "SELECT resource_id FROM resource_file_ids WHERE root_id = ? AND filesystem_identifier = ?",
+                    bindings: [
+                        .text(resources[index].root.id),
+                        .text(fileSystemIdentifier)
+                    ]
+                )
+            } else {
+                fileSystemMatch = nil
+            }
+            let existingID = pathMatch ?? fileSystemMatch
             let resourceID = existingID ?? opaqueID(prefix: "F")
 
             if existingID == nil {
@@ -226,7 +282,7 @@ final class SQLiteCatalog {
                 try run(
                     """
                     UPDATE resources SET
-                        file_name = ?, file_extension = ?, media_kind = ?, byte_size = ?,
+                        relative_path = ?, file_name = ?, file_extension = ?, media_kind = ?, byte_size = ?,
                         modified_at = ?, capture_local_time = ?, capture_utc_offset = ?,
                         capture_instant = ?, capture_source = ?, capture_confidence = ?,
                         exact_hash = ?, live_identifier_fingerprint = ?, metadata_probe_failed = ?,
@@ -240,6 +296,53 @@ final class SQLiteCatalog {
                     )
                 )
             }
+
+            try run(
+                """
+                INSERT OR IGNORE INTO resource_original_names (resource_id, original_file_name, first_seen_session)
+                VALUES (?, ?, ?)
+                """,
+                bindings: [
+                    .text(resourceID),
+                    .text(resources[index].fileName),
+                    .text(sessionID)
+                ]
+            )
+
+            if let fileSystemIdentifier = resources[index].fileSystemIdentifier {
+                try run(
+                    """
+                    INSERT INTO resource_file_ids (resource_id, root_id, filesystem_identifier)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(resource_id) DO UPDATE SET
+                        root_id = excluded.root_id,
+                        filesystem_identifier = excluded.filesystem_identifier
+                    """,
+                    bindings: [
+                        .text(resourceID),
+                        .text(resources[index].root.id),
+                        .text(fileSystemIdentifier)
+                    ]
+                )
+            }
+            try run(
+                """
+                INSERT INTO resource_locations (
+                    resource_id, root_id, relative_path, first_seen_at, last_seen_at, last_seen_session
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(resource_id, root_id, relative_path) DO UPDATE SET
+                    last_seen_at = excluded.last_seen_at,
+                    last_seen_session = excluded.last_seen_session
+                """,
+                bindings: [
+                    .text(resourceID),
+                    .text(resources[index].root.id),
+                    .text(resources[index].relativePath),
+                    .double(Date().timeIntervalSince1970),
+                    .double(Date().timeIntervalSince1970),
+                    .text(sessionID)
+                ]
+            )
 
             resources[index].persistentResourceID = resourceID
         }
@@ -586,6 +689,7 @@ final class SQLiteCatalog {
         sessionID: String
     ) -> [SQLiteBinding] {
         [
+            .text(resource.relativePath),
             .text(resource.fileName),
             .text(resource.fileExtension),
             .text(resource.mediaKind.rawValue),
@@ -652,6 +756,11 @@ final class SQLiteCatalog {
                 created_at REAL NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS root_markers (
+                marker_key TEXT PRIMARY KEY,
+                root_id TEXT NOT NULL UNIQUE REFERENCES source_roots(id) ON DELETE CASCADE
+            );
+
             CREATE TABLE IF NOT EXISTS source_root_metadata (
                 root_id TEXT PRIMARY KEY REFERENCES source_roots(id) ON DELETE CASCADE,
                 provenance TEXT NOT NULL DEFAULT 'unknown'
@@ -687,6 +796,29 @@ final class SQLiteCatalog {
                 metadata_probe_failed INTEGER NOT NULL DEFAULT 0,
                 last_seen_session TEXT NOT NULL REFERENCES scan_sessions(id),
                 UNIQUE(root_id, relative_path)
+            );
+
+            CREATE TABLE IF NOT EXISTS resource_original_names (
+                resource_id TEXT PRIMARY KEY REFERENCES resources(id) ON DELETE CASCADE,
+                original_file_name TEXT NOT NULL,
+                first_seen_session TEXT NOT NULL REFERENCES scan_sessions(id)
+            );
+
+            CREATE TABLE IF NOT EXISTS resource_file_ids (
+                resource_id TEXT PRIMARY KEY REFERENCES resources(id) ON DELETE CASCADE,
+                root_id TEXT NOT NULL REFERENCES source_roots(id) ON DELETE CASCADE,
+                filesystem_identifier TEXT NOT NULL,
+                UNIQUE(root_id, filesystem_identifier)
+            );
+
+            CREATE TABLE IF NOT EXISTS resource_locations (
+                resource_id TEXT NOT NULL REFERENCES resources(id) ON DELETE CASCADE,
+                root_id TEXT NOT NULL REFERENCES source_roots(id) ON DELETE CASCADE,
+                relative_path TEXT NOT NULL,
+                first_seen_at REAL NOT NULL,
+                last_seen_at REAL NOT NULL,
+                last_seen_session TEXT NOT NULL REFERENCES scan_sessions(id),
+                PRIMARY KEY(resource_id, root_id, relative_path)
             );
 
             CREATE TABLE IF NOT EXISTS logical_assets (
@@ -786,6 +918,8 @@ final class SQLiteCatalog {
                 ON resources(byte_size);
             CREATE INDEX IF NOT EXISTS resources_live_fingerprint_idx
                 ON resources(live_identifier_fingerprint);
+            CREATE INDEX IF NOT EXISTS resource_locations_last_seen_idx
+                ON resource_locations(last_seen_session);
             CREATE INDEX IF NOT EXISTS provider_objects_asset_idx
                 ON provider_objects(asset_id);
             """

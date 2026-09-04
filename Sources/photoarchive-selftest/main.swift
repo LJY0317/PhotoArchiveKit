@@ -1,6 +1,7 @@
 import CryptoKit
 import Foundation
 import PhotoArchiveCore
+import SQLite3
 
 @main
 struct PhotoArchiveSelfTest {
@@ -132,6 +133,142 @@ struct PhotoArchiveSelfTest {
             throw SelfTestFailure("quarantine apply did not create a restore manifest")
         }
         try require(fileManager.fileExists(atPath: manifestPath), "quarantine restore manifest is missing")
+
+        let trackingRoot = temporary.appendingPathComponent("Tracking", isDirectory: true)
+        let trackingMovedRoot = temporary.appendingPathComponent("TrackingMoved", isDirectory: true)
+        let trackingCatalog = temporary.appendingPathComponent("tracking.sqlite3")
+        try fileManager.createDirectory(at: trackingRoot, withIntermediateDirectories: true)
+        let trackingOld = trackingRoot.appendingPathComponent("old-name.jpg")
+        try Data("synthetic-tracking-file".utf8).write(to: trackingOld)
+        _ = try RootMarkerStore.create(at: trackingRoot)
+        let trackingScanner = try ArchiveScanner(catalogURL: trackingCatalog)
+        let trackingFirst = try await trackingScanner.scan(roots: [
+            ScanRoot(url: trackingRoot, kind: .reference, provenance: .localLibrary)
+        ])
+        let firstRootID = trackingFirst.roots[0].rootID
+        guard let firstResourceID = try sqliteText(
+            databaseURL: trackingCatalog,
+            sql: "SELECT id FROM resources WHERE relative_path = 'old-name.jpg'"
+        ) else {
+            throw SelfTestFailure("tracking resource ID was not persisted")
+        }
+
+        let trackingNew = trackingRoot.appendingPathComponent("new-name.jpg")
+        try fileManager.moveItem(at: trackingOld, to: trackingNew)
+        _ = try await trackingScanner.scan(roots: [
+            ScanRoot(url: trackingRoot, kind: .reference, provenance: .localLibrary)
+        ])
+        let renamedResourceID = try sqliteText(
+            databaseURL: trackingCatalog,
+            sql: "SELECT id FROM resources WHERE relative_path = 'new-name.jpg'"
+        )
+        try require(
+            renamedResourceID == firstResourceID,
+            "a same-volume rename should preserve the physical resource ID"
+        )
+        try require(
+            try sqliteInt(
+                databaseURL: trackingCatalog,
+                sql: "SELECT COUNT(*) FROM resource_locations WHERE resource_id = '\(firstResourceID)'"
+            ) == 2,
+            "resource location history should retain both old and new paths"
+        )
+
+        try fileManager.moveItem(at: trackingRoot, to: trackingMovedRoot)
+        let trackingMoved = try await trackingScanner.scan(roots: [
+            ScanRoot(url: trackingMovedRoot, kind: .reference, provenance: .localLibrary)
+        ])
+        try require(
+            trackingMoved.roots[0].rootID == firstRootID,
+            "a marked root should preserve its root ID after the directory moves"
+        )
+
+        let organizationReport = syntheticOrganizationReport()
+        let organizationPlan = OrganizationPlanner.makePlan(from: organizationReport)
+        try require(
+            organizationPlan.summary.automaticItemCount == 2,
+            "expected one Live Photo and one standalone automatic organization item"
+        )
+        try require(
+            organizationPlan.summary.automaticResourceCount == 3,
+            "organization plan should move three synthetic resources"
+        )
+        guard let organizationLive = organizationPlan.items.first(where: { $0.kind == .livePhoto }) else {
+            throw SelfTestFailure("organization plan is missing the synthetic Live Photo")
+        }
+        try require(organizationLive.moves.count == 2, "Live Photo organization must contain both resources")
+        let liveDestinationStems = Set(organizationLive.moves.map {
+            ($0.destinationRelativePath as NSString).deletingPathExtension
+        })
+        try require(liveDestinationStems.count == 1, "Live Photo resources must receive the same destination basename")
+        try require(
+            organizationLive.moves.allSatisfy { ($0.destinationRelativePath as NSString).deletingLastPathComponent.isEmpty },
+            "automatic organization destinations should be flat within the local root"
+        )
+        let organizationAgentJSON = String(
+            decoding: try encoder.encode(AgentSafeOrganizationPlan(plan: organizationPlan)),
+            as: UTF8.self
+        )
+        try require(!organizationAgentJSON.contains("IMG_1234"), "agent-safe organization plan exposed an original filename")
+        try require(!organizationAgentJSON.contains("2026-08-14"), "agent-safe organization plan exposed a capture-time filename")
+        try require(!organizationAgentJSON.contains("ZIIl652B"), "agent-safe organization plan exposed a custom filename")
+
+        let organizationApplyRoot = temporary.appendingPathComponent("OrganizationApply", isDirectory: true)
+        let organizationOperations = temporary.appendingPathComponent("OrganizationOperations", isDirectory: true)
+        try fileManager.createDirectory(
+            at: organizationApplyRoot.appendingPathComponent("nested", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+        try fileManager.createDirectory(
+            at: organizationApplyRoot.appendingPathComponent("other", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+        let organizationSourcePhoto = organizationApplyRoot.appendingPathComponent("nested/IMG_1234.HEIC")
+        let organizationSourceVideo = organizationApplyRoot.appendingPathComponent("nested/IMG_1234.MOV")
+        let organizationSourceStandalone = organizationApplyRoot.appendingPathComponent("other/IMG_5678.JPG")
+        let organizationCustom = organizationApplyRoot.appendingPathComponent("other/ZIIl652B 2.jpg")
+        try Data(repeating: 1, count: 100).write(to: organizationSourcePhoto)
+        try Data(repeating: 2, count: 200).write(to: organizationSourceVideo)
+        try Data(repeating: 3, count: 80).write(to: organizationSourceStandalone)
+        try Data(repeating: 4, count: 70).write(to: organizationCustom)
+        _ = try RootMarkerStore.create(at: organizationApplyRoot)
+
+        let organizationApplyScan = syntheticOrganizationReport(localPath: organizationApplyRoot.path)
+        let organizationApplyPlan = OrganizationPlanner.makePlan(from: organizationApplyScan)
+        let organizationPreflight = try OrganizationExecutor.preflight(
+            report: organizationApplyScan,
+            plan: organizationApplyPlan
+        )
+        try require(organizationPreflight.dryRun, "organization preflight must be a dry run")
+        try require(organizationPreflight.resourceCount == 3, "organization preflight should contain three automatic resources")
+        try require(fileManager.fileExists(atPath: organizationSourcePhoto.path), "organization dry run moved the Live Photo still")
+        try require(fileManager.fileExists(atPath: organizationSourceVideo.path), "organization dry run moved the Live Photo video")
+
+        let organizationApplied = try OrganizationExecutor.apply(
+            report: organizationApplyScan,
+            plan: organizationApplyPlan,
+            manifestDirectoryURL: organizationOperations
+        )
+        try require(organizationApplied.filesModified, "organization apply should modify synthetic files")
+        try require(organizationApplied.resourceCount == 3, "organization apply should move three resources")
+        try require(!fileManager.fileExists(atPath: organizationSourcePhoto.path), "organization apply left the old Live Photo still path")
+        try require(!fileManager.fileExists(atPath: organizationSourceVideo.path), "organization apply left the old Live Photo video path")
+        try require(!fileManager.fileExists(atPath: organizationSourceStandalone.path), "organization apply left the old standalone path")
+        try require(fileManager.fileExists(atPath: organizationCustom.path), "organization apply must preserve custom filenames")
+        try require(
+            organizationApplied.moves.allSatisfy { fileManager.fileExists(atPath: $0.destinationPath) },
+            "an organization destination is missing"
+        )
+        guard let organizationManifest = organizationApplied.manifestPath else {
+            throw SelfTestFailure("organization apply did not create a manifest")
+        }
+        try require(fileManager.fileExists(atPath: organizationManifest), "organization manifest is missing")
+        let organizationApplyAgentJSON = String(
+            decoding: try encoder.encode(AgentSafeOrganizationApplyReport(report: organizationApplied)),
+            as: UTF8.self
+        )
+        try require(!organizationApplyAgentJSON.contains(organizationApplyRoot.path), "agent-safe organization apply output exposed a root path")
+        try require(!organizationApplyAgentJSON.contains("IMG_1234"), "agent-safe organization apply output exposed a filename")
 
         let coverageReport = syntheticCanonicalCoverageReport()
         let coveragePlan = ReconciliationPlanner.makePlan(from: coverageReport)
@@ -368,6 +505,123 @@ private func executableExists(_ name: String) -> Bool {
     }
 }
 
+private func syntheticOrganizationReport(localPath: String = "/synthetic/local") -> ScanReport {
+    let rootID = "RORG"
+    let capture = CaptureTime(
+        localTimestamp: "2026-08-14T17:42:31",
+        utcOffset: "+09:00",
+        instant: Date(timeIntervalSince1970: 1_776_000_000),
+        source: .exifDateTimeOriginal,
+        confidence: .trusted
+    )
+    let photo = ScannedResourceReport(
+        resourceID: "FORG1",
+        assetID: "AORG1",
+        rootID: rootID,
+        rootLabel: "Local",
+        relativePath: "nested/IMG_1234.HEIC",
+        fileName: "IMG_1234.HEIC",
+        mediaKind: .image,
+        role: .photo,
+        byteSize: 100,
+        captureTime: capture
+    )
+    let video = ScannedResourceReport(
+        resourceID: "FORG2",
+        assetID: "AORG1",
+        rootID: rootID,
+        rootLabel: "Local",
+        relativePath: "nested/IMG_1234.MOV",
+        fileName: "IMG_1234.MOV",
+        mediaKind: .video,
+        role: .pairedVideo,
+        byteSize: 200,
+        captureTime: capture
+    )
+    let standalone = ScannedResourceReport(
+        resourceID: "FORG3",
+        assetID: "AORG2",
+        rootID: rootID,
+        rootLabel: "Local",
+        relativePath: "other/IMG_5678.JPG",
+        fileName: "IMG_5678.JPG",
+        mediaKind: .image,
+        role: .standaloneImage,
+        byteSize: 80,
+        captureTime: capture
+    )
+    let custom = ScannedResourceReport(
+        resourceID: "FORG4",
+        assetID: "AORG3",
+        rootID: rootID,
+        rootLabel: "Local",
+        relativePath: "other/ZIIl652B 2.jpg",
+        fileName: "ZIIl652B 2.jpg",
+        mediaKind: .image,
+        role: .standaloneImage,
+        byteSize: 70,
+        captureTime: capture
+    )
+    let liveOccurrence = LivePhotoOccurrenceReport(
+        rootID: rootID,
+        rootLabel: "Local",
+        status: .complete,
+        stillCount: 1,
+        videoCount: 1,
+        resources: [
+            ResourceReference(rootID: rootID, rootLabel: "Local", relativePath: photo.relativePath, role: .photo, byteSize: photo.byteSize),
+            ResourceReference(rootID: rootID, rootLabel: "Local", relativePath: video.relativePath, role: .pairedVideo, byteSize: video.byteSize)
+        ]
+    )
+    let now = Date(timeIntervalSince1970: 1)
+    return ScanReport(
+        sessionID: "SORG",
+        startedAt: now,
+        completedAt: now,
+        catalogPath: "/synthetic/organization.sqlite3",
+        summary: ScanSummary(
+            rootCount: 1,
+            resourceCount: 4,
+            logicalAssetCount: 3,
+            livePhotoAssetCount: 1,
+            exactDuplicateGroupCount: 0,
+            eventSuggestionCount: 0,
+            warningCount: 0
+        ),
+        roots: [
+            RootScanReport(
+                rootID: rootID,
+                label: "Local",
+                kind: .inbox,
+                provenance: .localLibrary,
+                canonicalPath: localPath,
+                mediaFileCount: 4,
+                completeLivePhotos: 1,
+                stillOnlyLiveResources: 0,
+                videoOnlyLiveResources: 0,
+                standaloneImages: 2,
+                standaloneVideos: 0,
+                sidecars: 0,
+                metadataProbeFailures: 0
+            )
+        ],
+        resources: [photo, video, standalone, custom],
+        livePhotos: [
+            LivePhotoAssetReport(
+                assetID: "AORG1",
+                occurrenceCount: 1,
+                stillCopyCount: 1,
+                videoCopyCount: 1,
+                occurrences: [liveOccurrence]
+            )
+        ],
+        exactDuplicateGroups: [],
+        eventSuggestions: [],
+        warnings: [],
+        filesModified: false
+    )
+}
+
 private func syntheticCanonicalCoverageReport(
     localPath: String = "/synthetic/local",
     takeoutPath: String = "/synthetic/takeout"
@@ -507,6 +761,43 @@ private func syntheticCanonicalCoverageReport(
         warnings: [],
         filesModified: false
     )
+}
+
+private func sqliteText(databaseURL: URL, sql: String) throws -> String? {
+    var database: OpaquePointer?
+    guard sqlite3_open_v2(databaseURL.path, &database, SQLITE_OPEN_READONLY, nil) == SQLITE_OK,
+          let database else {
+        throw SelfTestFailure("could not open synthetic SQLite catalog")
+    }
+    defer { sqlite3_close(database) }
+    var statement: OpaquePointer?
+    guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
+          let statement else {
+        throw SelfTestFailure("could not prepare synthetic SQLite query")
+    }
+    defer { sqlite3_finalize(statement) }
+    guard sqlite3_step(statement) == SQLITE_ROW else { return nil }
+    guard let value = sqlite3_column_text(statement, 0) else { return nil }
+    return String(cString: value)
+}
+
+private func sqliteInt(databaseURL: URL, sql: String) throws -> Int64 {
+    var database: OpaquePointer?
+    guard sqlite3_open_v2(databaseURL.path, &database, SQLITE_OPEN_READONLY, nil) == SQLITE_OK,
+          let database else {
+        throw SelfTestFailure("could not open synthetic SQLite catalog")
+    }
+    defer { sqlite3_close(database) }
+    var statement: OpaquePointer?
+    guard sqlite3_prepare_v2(database, sql, -1, &statement, nil) == SQLITE_OK,
+          let statement else {
+        throw SelfTestFailure("could not prepare synthetic SQLite query")
+    }
+    defer { sqlite3_finalize(statement) }
+    guard sqlite3_step(statement) == SQLITE_ROW else {
+        throw SelfTestFailure("synthetic SQLite query returned no row")
+    }
+    return sqlite3_column_int64(statement, 0)
 }
 
 private struct SelfTestFailure: LocalizedError {

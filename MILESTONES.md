@@ -225,6 +225,27 @@ review items/resources            190 /  227
 
 3,813 AUTO resource는 fresh SHA-256 quarantine dry-run을 통과했고 `filesModified=false`였다. 남은 227 resource는 대부분 local과 Takeout 모두 paired video가 확인되지 않는 still-only Live Photo resource이므로 Live Photo atomicity 원칙상 자동 제거하지 않는다.
 
+## 2026-09-04 — Stable identity와 organization planning
+
+Path를 physical identity로 취급하지 않도록 same-volume filesystem resource identifier와 resource location/original-name history를 catalog에 추가했다. Synthetic regression에서 파일 rename 후 resource ID가 유지되고 old/new path history가 모두 남는 것을 확인했다.
+
+Optional `.photoarchive-root` marker와 catalog binding을 추가했다. Synthetic root를 다른 directory path로 이동한 뒤 재scan해도 같은 root ID가 유지됐다. Existing real root에는 marker를 자동 생성하지 않으며 explicit `photoarchive root init --apply PATH`가 필요하다.
+
+`photoarchive organize-plan`은 local/Apple-direct root의 `IMG_####` / `IMG_E####` camera-style filename만 capture wall-clock 기반 `YYYY-MM-DD_HH-mm-ss[_NN]` flat destination으로 제안한다. Live Photo는 complete still+paired-video를 동일 basename item으로 처리하고 custom filename, incomplete pair, multiple physical representation은 review에 남긴다. EXIF `DateTimeOriginal`의 timezone이 빠져도 local wall-clock 자체는 filename에 사용할 수 있지만 filesystem creation fallback은 automatic rename authority로 사용하지 않는다.
+
+Real-library agent-safe dry-run summary:
+
+```text
+automatic items/resources      2765 / 4292
+review items/resources          628 /  795
+  capture-time fallback          58 /   58
+  custom-name Live Photo         77 /  154
+  incomplete Live Photo         394 /  415
+  multiple representation        99 /  168
+```
+
+실제 media rename/move는 수행하지 않았다. `photoarchive organize` executor는 marker-gated dry-run/apply, Live Photo atomic same-basename move, post-move filesystem identity/size verification, session rollback, local restore manifest를 synthetic fixture에서 검증했다.
+
 ## 2026-09-04 — Product North Star 고정
 
 최초 제품 목적을 `docs/PROJECT_NORTH_STAR.md`와 `AGENTS.md`의 explicit scope gate로 고정했다.

@@ -34,6 +34,10 @@
 - filename/path, byte size, capture timestamp, catalog path 등을 제거하는 AI agent용 `--agent-json` privacy-minimized output
 - read-only `photoarchive plan` preferred-representation reconciliation: non-Takeout exact copy 우선, Live Photo canonical coverage, repeated same-identifier occurrence partitioning, Takeout source-folder semantics 보존 후 standalone Takeout-only exact collapse, unresolved Live Photo variant review
 - `photoarchive quarantine`: 기본 dry-run, `--apply`에서만 `automatic_redundant` exact 후보를 사용자 지정 local quarantine으로 이동. apply 직전 source/preferred의 regular-file·size·symlink boundary와 fresh SHA-256을 재검증하고, Live Photo item은 전체 resource가 검증된 뒤 이동하며, session 실패 시 이미 이동한 resource를 전체 rollback. 완료 session에는 local restore manifest를 남김
+- same-volume filesystem resource identifier + `resource_locations` history로 rename/move 후에도 physical resource ID를 유지하고, 최초 filename을 `resource_original_names`에 보존
+- `.photoarchive-root` stable marker 생성/인식과 marker key -> catalog root binding. marker가 유지되면 root directory 자체가 이동해도 기존 root ID를 재사용
+- `photoarchive organize-plan`: `IMG_####` / `IMG_E####` camera-style filename만 대상으로 local capture wall-clock 기반 `YYYY-MM-DD_HH-mm-ss[_NN]` flat rename/move proposal 생성. custom filename, incomplete Live Photo, multiple physical representation은 review
+- `photoarchive organize`: 기본 dry-run, `--apply`에서만 marker가 있는 local root의 AUTO organization item을 move. Live Photo still+paired-video는 동일 destination basename을 사용하고 post-move filesystem ID/size 확인, session rollback, local restore manifest를 제공
 - 선택적 `--exact-engine czkawka`: Czkawka cache/prehash candidate discovery 후 native SHA-256 재검증; 기본 `automatic`은 현재 native exact path
 - 필수 third-party binary 없이 optional tool 감지
 - mixed local, Apple-direct, Google Takeout, Google web root를 구분하는 explicit source provenance
@@ -52,11 +56,15 @@
 swift run photoarchive doctor
 swift run photoarchive scan [options] ROOT...
 swift run photoarchive plan [options] ROOT...
+swift run photoarchive organize-plan [options] ROOT...
+swift run photoarchive organize [--apply] [options] ROOT...
+swift run photoarchive root inspect PATH
+swift run photoarchive root init [--apply] PATH
 swift run photoarchive quarantine --to PATH [--apply] [options] ROOT...
 swift run photoarchive-selftest
 ```
 
-`scan`과 `plan`은 media에 대해 read-only다. `quarantine`은 기본 dry-run이며 명시적 `--apply`에서만 same-session scan/plan/fresh-verification을 통과한 AUTO exact 후보를 local quarantine으로 이동한다. 영구 삭제는 없다.
+`scan`, `plan`, `organize-plan`은 media에 대해 read-only다. `quarantine`과 `organize`는 기본 dry-run이며 명시적 `--apply`에서만 제한된 AUTO item을 이동한다. `organize --apply`는 stable root marker를 필수로 요구한다. 영구 삭제는 없다.
 
 ## 제품 결정
 
@@ -114,15 +122,18 @@ swift run photoarchive-selftest
 - 이후 same-identifier occurrence를 directory/basename boundary hint로 partition하되 embedded identifier를 identity authority로 유지하도록 개선했다. real-library에서 추가 22 Live Photo item / 44 resource가 canonical coverage AUTO로 승격했다.
 - Takeout source-folder semantics capture까지 적용한 최신 real-library plan은 `3,787` AUTO item / `3,813` resource와 `190` REVIEW item / `227` resource다. AUTO = source-folder semantics가 보존된 Takeout-only standalone exact excess `3,769` + 새로 partition된 Live Photo canonical coverage `44`. REVIEW = complete preferred Live Photo가 없는 `220` resource + uncovered Live Photo variant `7`. 이 3,813개는 fresh SHA-256 quarantine dry-run을 통과했고 `filesModified=false`였다.
 - synthetic self-test에서 standalone non-Takeout preferred copy를 유지하면서 exact Takeout copy만 quarantine으로 이동하고, 이동된 byte가 동일하며 restore manifest가 생성되고 agent-safe quarantine report에 path/filename이 노출되지 않음을 확인했다.
+- synthetic tracking test에서 같은 volume의 file rename 후 resource ID가 유지되고 old/new path가 location history로 남으며, `.photoarchive-root`가 있는 root directory 자체를 다른 path로 이동한 뒤에도 root ID가 유지됨을 확인했다.
+- organization synthetic apply test에서 `IMG_1234.HEIC + IMG_1234.MOV`가 같은 capture-time destination basename으로 함께 이동하고 custom filename은 보존되며 marker gate, post-move filesystem ID/size, restore manifest, agent-safe path redaction이 동작함을 확인했다.
+- real-library `organize-plan --agent-json` 최신 결과는 `2,765` AUTO item / `4,292` resource, `628` REVIEW item / `795` resource다. AUTO는 trusted timestamp 또는 timezone이 빠진 EXIF local wall-clock을 가진 iPhone camera-style filename이고, REVIEW는 filesystem fallback `58`, custom-name Live Photo `154 resource`, incomplete Live Photo `415 resource`, multiple physical representation `168 resource`다. 실제 rename/move는 아직 0개다.
 
 private fixture와 temporary catalog는 repository에 포함하지 않는다.
 
 ## 알려진 제한사항
 
-- archive copy, rename, permanent delete, cloud upload command는 아직 없다. `quarantine`은 same-session exact AUTO 후보만 local target으로 move하는 제한된 첫 mutation이며 persisted plan replay나 general-purpose move command가 아니다.
+- verified HDD archive copy, permanent delete, cloud upload는 아직 없다. `organize`는 same-session deterministic camera-name rename/flatten 전용이며 persisted plan replay나 general-purpose move command가 아니다.
 - Live Photo timed `still-image-time` metadata를 strict하게 parse하지 않는다.
 - still-side identifier extraction은 격리되어 있지만 현재 iPhone file에서 관찰한 ImageIO MakerApple entry를 따른다. 추가 format fixture가 필요하다.
-- source-root identity는 현재 canonical path를 따른다. stable movable ID와 root marker가 구현되기 전에는 Inbox/archive root를 이동하면 새 root record가 만들어진다.
+- stable root marker 기능은 구현됐지만 기존 real roots에는 자동으로 marker를 쓰지 않는다. 각 root는 사용자가 `photoarchive root init --apply PATH`를 명시적으로 실행한 뒤부터 relocation identity를 가진다.
 - versioned JSONL catalog export/restore가 없다.
 - SQLite persistence 외 incremental metadata/hash cache optimization이 없다.
 - event grouping은 time-based만 구현되어 있으며 archive-guided semantic folder prediction은 계획 단계다.
@@ -142,7 +153,7 @@ private fixture와 temporary catalog는 repository에 포함하지 않는다.
 - `--agent-json`은 filename/path, catalog path, exact byte size, capture timestamp, suggested folder name도 제거함
 - catalog-local keyed fingerprint를 만든 직후 in-memory probe record에서 raw Live Photo identifier를 제거함
 - private media extension과 runtime database는 Git에서 ignore됨
-- 현재 `quarantine`은 오래된 plan을 replay하지 않고 같은 invocation에서 현재 root를 scan한 뒤 fresh verification하고 즉시 적용하는 제한된 예외다. persisted plan/apply, archive copy/rename 등 미래 mutating command는 missing path를 해석하기 전에 stable root marker를 추가하고 검증해야 함
+- `quarantine`과 `organize`는 오래된 plan을 replay하지 않고 같은 invocation에서 current root를 scan한 뒤 precondition을 다시 검증하는 제한된 mutation이다. persisted/offline plan replay, archive copy, missing-root reconciliation은 user-initialized stable root marker와 immutable persisted plan/approval token을 함께 요구해야 함
 
 ## 다음 구체 작업
 
@@ -152,13 +163,14 @@ private fixture와 temporary catalog는 repository에 포함하지 않는다.
 4. Czkawka image/video similarity adapter를 추가해 byte가 다른 probable duplicate만 opaque review group으로 agent에 제공한다. raw pHash/frame/cache/path는 local adapter 안에 둔다.
 5. native incremental hash cache를 설계해 unchanged file의 full SHA-256 재계산을 줄인다. Czkawka exact accelerator는 이중 hashing을 피할 수 있을 때만 benchmark 후 `automatic` 후보로 재평가한다.
 6. preferred-representation plan을 immutable persisted plan으로 발전시키고 direct byte verification 옵션과 stable replay precondition을 추가한다.
-7. persisted mutation 전에 stable movable root ID와 archive-root marker 추가
-8. strict Live Photo timed-metadata validation 추가
-9. versioned sanitized JSONL catalog export/restore 추가
-10. canonical capture-time 및 reversible rename-plan rule 정의
-11. 기존 folder를 example로 사용하는 event-level archive-folder learning 추가
-12. immutable archive destination plan 및 verified copy path 추가
-13. North Star archive workflow가 real library에서 안정화되기 전에는 Google upload와 broader provider convenience를 보류
+7. 실제 `~/Pictures`와 향후 HDD archive root에 stable root marker를 사용자 승인 후 초기화하고 relocation fixture를 real filesystem에서 확인
+8. organization apply 전 persisted immutable plan/approval token 및 post-apply automatic re-scan/catalog commit을 추가
+9. verified empty-directory cleanup plan을 추가하되 unsupported/hidden/sidecar file이 하나라도 있으면 자동 삭제하지 않음
+10. strict Live Photo timed-metadata validation 추가
+11. versioned sanitized JSONL catalog export/restore 추가
+12. HDD archive destination plan, verified copy, rclone replica/check adapter 추가
+13. 기존 folder를 example로 사용하는 event-level archive-folder learning은 core archive flow 이후로 유지
+14. North Star archive workflow가 real library에서 안정화되기 전에는 Google upload와 broader provider convenience를 보류
 
 ## 재개 지점
 

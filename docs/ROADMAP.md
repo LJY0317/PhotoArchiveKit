@@ -33,10 +33,10 @@ Roadmap은 작고 검증 가능한 layer를 우선한다. 어느 phase도 existi
 - [ ] Homebrew 또는 동등한 일반 설치 경로, shell completion, agent/Skill integration 문서
 - [ ] documented source priority를 가진 canonical capture-time resolver
 - [ ] same-second 및 burst grouping
-- [ ] iPhone-style camera filename만 대상으로 하는 deterministic `YYYY-MM-DD_HH-mm-ss[_NN]` rename proposal; Live Photo still+paired video는 항상 동일 basename으로 atomic rename
-- [ ] original-name, representation/provenance 및 reversible rename history를 catalog에 영구 보존
-- [ ] rename/move 전 stable resource/root identity를 도입해 path 변경이 새 asset으로 누적되지 않게 함
-- [ ] canonical iPhone-capture asset을 flat archive root로 이동하는 immutable move proposal; 의미 없는 empty directory는 verified cleanup 대상으로만 처리
+- [x] iPhone-style camera filename만 대상으로 하는 deterministic `YYYY-MM-DD_HH-mm-ss[_NN]` rename proposal; Live Photo still+paired video는 항상 동일 basename으로 atomic rename
+- [x] 최초 filename과 resource location history를 catalog에 영구 보존하고 기존 provenance/representation 관계와 함께 추적
+- [x] same-volume filesystem resource identity + `.photoarchive-root` marker를 이용해 rename/move 및 root relocation이 단순 path 누적으로 변하지 않게 함
+- [x] canonical iPhone-camera candidate를 local root 최상위로 옮기는 deterministic read-only move proposal; 의미 없는 empty directory 삭제는 아직 verified cleanup 단계로 분리
 - [ ] existing archive folder를 collection example로 import
 - [ ] event-level collection proposal
 - [ ] confidence band 및 policy preset
@@ -48,11 +48,11 @@ Roadmap은 작고 검증 가능한 layer를 우선한다. 어느 phase도 existi
 
 ## v0.3 — Safe archive application
 
-- [ ] verified root marker
+- [x] verified root marker 생성/인식과 marker-gated organization apply
 - [ ] staging copy, local byte verification, atomic finalization
-- [ ] Live Photo resource-set transaction
+- [x] quarantine/organization mutation에서 Live Photo resource-set transaction + session rollback
 - [ ] checkpoint에서 interrupted session resume
-- [ ] permanent deletion 대신 quarantine
+- [x] permanent deletion 대신 reversible quarantine
 - [ ] archive metadata directory에 catalog snapshot
 - [ ] replica policy 및 verification record
 - [ ] user-installed `rclone`을 사용하는 optional rclone adapter

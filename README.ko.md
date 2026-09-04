@@ -16,7 +16,7 @@ PhotoArchiveKit은 iPhone 사진·동영상·Live Photo를 특정 사진 클라�
 
 프로젝트는 의도적으로 가볍게 유지합니다. 백그라운드 daemon을 실행하거나 별도 gallery server를 운영하지 않으며, 미디어를 불투명한 전용 저장 형식 안으로 옮기지 않습니다. 사진과 동영상은 일반 파일시스템 폴더에 남고, 폴더만으로 표현할 수 없는 관계와 결정만 로컬 SQLite catalog에 기록합니다.
 
-> **현재 상태:** 초기 safety-first prototype입니다. `scan`과 `plan`은 읽기 전용입니다. 제한된 `quarantine` 명령은 fresh verification을 다시 통과한 automatic exact-duplicate 후보만 사용자가 지정한 local quarantine 폴더로 이동할 수 있습니다. 영구 삭제, archive rename/copy, cloud upload는 아직 구현하지 않았습니다.
+> **현재 상태:** 초기 safety-first prototype입니다. `scan`, `plan`, `organize-plan`은 읽기 전용입니다. `quarantine`은 reversible exact-duplicate 이동을 지원하고, marker-gated `organize`는 automatic iPhone-camera rename/flatten item만 dry-run/apply할 수 있습니다. 영구 삭제, 검증된 HDD archive copy, cloud upload는 아직 구현하지 않았습니다.
 
 ## 왜 필요한가
 
@@ -55,7 +55,10 @@ byte 보존 복제본          provenance와 이력
 - 실제 hash 대신 재사용 가능한 opaque duplicate group ID 출력
 - 가능한 경우 timezone을 포함한 EXIF·QuickTime 촬영시각 추출
 - 설정 가능한 시간 간격을 기준으로 날짜형 event folder 자동 제안
-- resource, 논리 asset, provenance, duplicate group, 향후 collection mapping, scan session을 SQLite에 저장
+- resource, 논리 asset, provenance, duplicate group, source collection mapping, 최초 filename, path history, scan session을 SQLite에 저장
+- 같은 volume 안의 rename/move에서는 physical resource identity를 유지하고, optional `.photoarchive-root` marker로 이동된 source root도 동일 root로 다시 인식
+- `IMG_####` / `IMG_E####` camera-style 이름만 대상으로 `YYYY-MM-DD_HH-mm-ss[_NN]` 촬영시각 기반 flat rename `organize-plan` 생성; custom filename은 보존
+- `organize --apply`에는 stable root marker를 요구하고, Live Photo still+video를 같은 destination basename으로 유지하며 post-move filesystem identity/size를 검증하고 restore manifest/rollback 제공
 - 사람이 읽는 report와 privacy-safe JSON report 제공
 - 선택적 외부 도구의 설치 여부만 감지하며 필수 의존성으로 만들지 않음
 - `automatic_redundant` exact 후보만 fresh SHA-256으로 preferred copy와 다시 검증한 뒤 local quarantine dry-run/apply 가능; Live Photo candidate set은 해당 item의 모든 resource 검증이 끝난 뒤에만 이동
@@ -118,7 +121,7 @@ swift run photoarchive plan \
   --takeout "~/Pictures/Takeout"
 ```
 
-AI agent는 `scan`, `plan`, `quarantine`에서 `--agent-json`을 사용해야 하며, path를 포함할 수 있는 local diagnostic `--json`은 agent에 전달하지 않습니다.
+AI agent는 `scan`, `plan`, `organize-plan`, `organize`, `quarantine`에서 `--agent-json`을 사용해야 하며, path를 포함할 수 있는 local diagnostic `--json`은 agent에 전달하지 않습니다.
 
 아무 파일도 이동하지 않고 quarantine 후보를 먼저 검증합니다.
 
@@ -130,6 +133,14 @@ swift run photoarchive quarantine \
 ```
 
 Dry-run을 확인한 뒤에만 `--apply`를 붙이면 fresh verification을 다시 통과한 `automatic_redundant` resource만 이동합니다. `REVIEW` 항목은 이 명령이 절대 이동하지 않습니다. 적용된 session은 quarantine 폴더 안의 `PhotoArchiveKit/<session-id>/` 아래에 원래 위치를 복원할 수 있는 local manifest와 함께 보존됩니다.
+
+실제 media를 움직이지 않고 camera-style filename 정리 계획을 볼 수 있습니다.
+
+```bash
+swift run photoarchive organize-plan --agent-json --local "~/Pictures"
+```
+
+organization apply 전에는 stable root marker를 명시적으로 초기화합니다(`photoarchive root init --apply "~/Pictures"`). `photoarchive organize`는 marker를 확인하는 dry-run이 기본이며, `--apply`에서만 automatic item을 rename/flat move합니다. custom filename과 review item은 그대로 둡니다.
 
 폴더를 먼저 한곳에 섞지 않고 여러 source를 함께 scan하면 exact copy, provenance, source 간 Live Photo 관계를 통합할 수 있습니다.
 
