@@ -8,9 +8,17 @@ struct FileHasher {
 
         var hasher = SHA256()
         while true {
-            let data = try handle.read(upToCount: chunkSize) ?? Data()
-            if data.isEmpty { break }
-            hasher.update(data: data)
+            // Large archive plans may hash thousands of files back-to-back without
+            // returning to an outer run loop. Drain Foundation's temporary read
+            // objects per chunk so resident memory stays bounded by the chunk size
+            // instead of accumulating across the whole planning pass.
+            let reachedEOF = try autoreleasepool { () -> Bool in
+                let data = try handle.read(upToCount: chunkSize) ?? Data()
+                guard !data.isEmpty else { return true }
+                hasher.update(data: data)
+                return false
+            }
+            if reachedEOF { break }
         }
         return Data(hasher.finalize())
     }

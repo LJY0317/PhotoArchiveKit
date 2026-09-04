@@ -465,7 +465,7 @@ Git worktree remained clean                                                  PAS
 
 이로써 synthetic -> 실제 외장 HDD 1-resource smoke -> 실제 working catalog 전체 preflight -> real-library 10-item/15-resource bounded apply의 단계적 검증을 완료했다. 전체 `4,947` AUTO resource apply는 아직 수행하지 않는다. 다음 판단은 Takeout 3개 root에 stable marker를 부여해 현재 `source_root_marker_missing` 3,964 item을 자동 권한 대상으로 재평가할지, 현재 marker 상태를 유지한 채 local-authoritative AUTO만 batch로 확장할지 결정하는 것이다.
 
-## 2026-09-05 — Takeout stable marker 승격 검증과 full-plan blocker 발견
+## 2026-09-05 — Takeout stable marker 승격과 full-plan memory blocker 해결
 
 사용자 승인 후 기존 Google Takeout source root 3개에 `.photoarchive-root` stable marker를 초기화했다. media byte는 수정하지 않았으며 subsequent scan에서 working catalog의 Takeout marker binding이 `3/3`으로 연결된 것을 확인했다.
 
@@ -494,7 +494,29 @@ REVIEW after marker                  895 item / 1,576 resource
   conflicting variants                 3 item
 ```
 
-이 수치는 새 immutable plan 파일이 실제 완성됐다는 뜻은 아니다. source evidence와 planner gate를 독립 검증해 계산한 정확한 승격 결과이며, **다음 blocker는 post-marker full archive-plan을 정상 종료시켜 같은 수치를 실제 persisted plan으로 재현하는 것**이다. 그 전에는 9,098 resource 전체 apply를 수행하지 않는다.
+초기에는 이 수치가 source evidence와 planner gate를 독립 검증해 계산한 값이었고 새 immutable plan 파일은 완성되지 않았다. 이어 `exit 137`을 application/process level에서 계측했다. 원래 real source 4개만 사용한 `scan --jobs 1`은 정상 종료했지만, pre-fix full `archive-plan --jobs 1`은 main process RSS가 `8,779,184 KiB`까지 상승한 뒤 stderr 없이 `exit 137`로 종료됐다. DevSpace process manager에는 해당 시간을 기준으로 command를 kill하는 timeout이 없었고, scan 단독은 정상 동작했으므로 planner의 장시간 fresh-hash pass를 분리해 조사했다.
+
+`FileHasher.sha256`은 이미 4 MiB streaming read였지만, 수천 file을 하나의 synchronous planning pass에서 연속 처리할 때 Foundation `FileHandle.read(upToCount:)`가 만드는 temporary object를 chunk 단위로 drain하는 autorelease boundary가 없었다. 각 4 MiB read/update를 `autoreleasepool`로 감싸 byte/hash semantics는 그대로 유지하면서 resident temporary memory를 즉시 회수하도록 수정했다.
+
+수정 후 동일 real-library 검증:
+
+```text
+swift build / photoarchive-selftest / public-tree check                       PASS
+pre-fix full archive-plan peak RSS                                8,779,184 KiB
+pre-fix full archive-plan exit                                              137
+post-fix full archive-plan --jobs 1 peak RSS                       185,648 KiB
+post-fix full archive-plan --jobs 1 exit                                      0
+post-fix persisted plan schema                                                2
+post-fix default-concurrency full archive-plan                              PASS
+persisted AUTO                                            7,283 item / 9,098 resource
+persisted REVIEW                                            895 item / 1,576 resource
+  incomplete_live_photo                                      892 item
+  conflicting_complete_live_photo_variants                     3 item
+archive-copy full-plan dry-run copy-required                          9,098
+archive-copy full-plan dry-run filesModified                           false
+```
+
+따라서 marker-gated lightweight verifier로 계산했던 `AUTO 7,283 / 9,098 resource`가 실제 immutable schema-v2 plan으로 그대로 재현됐고, archive-copy의 독립 current-catalog/source-byte preflight도 9,098 resource 전부 통과했다. `exit 137`은 DevSpace workspace/session 문제나 media evidence 불일치가 아니라 PhotoArchiveKit hashing loop의 resident-memory accumulation으로 닫는다. 전체 9,098-resource apply는 아직 수행하지 않고 다음 real mutation도 logical-item bounded batch로 확대한다.
 
 ## 2026-09-04 — Product North Star 고정
 
