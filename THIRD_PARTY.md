@@ -44,6 +44,16 @@ similarity output은 review signal이다. PhotoArchiveKit이 이를 직접 delet
 
 초기 설계에서는 ExifTool을 read-only로 취급한다. Live Photo identifier 또는 source metadata rewrite는 초기 release 범위 밖이다.
 
+## osxphotos
+
+- 목적: optional Apple Photos library query/export, album interoperability, original/edited representation 조사, future import bridge 검증
+- integration model: user-installed `osxphotos` executable 호출 또는 사용자가 독립적으로 실행한 결과 import
+- Upstream: <https://github.com/RhetTbull/osxphotos>
+- Upstream license: MIT
+- PhotoArchiveKit에 bundle: 아니오
+
+osxphotos는 현재 required scanner dependency가 아니다. 초기 adapter가 생기더라도 read/query/export를 우선하고 Photos를 변경하는 operation은 별도 test library에서 검증한다. 장기적인 공식 Apple Photos projection은 PhotoKit을 우선한다.
+
 ## FFmpeg / ffprobe
 
 - 목적: optional video stream/container diagnostic

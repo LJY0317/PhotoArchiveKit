@@ -16,6 +16,20 @@ PhotoArchiveKit은 optional binary를 조용히 download하거나 release 안으
 
 연동 프로그램의 이름을 정확히 쓰는 것은 일반적인 open-source practice다. documentation은 official name과 project link를 사용하고 optional/separately licensed임을 명시하며 endorsement를 암시하지 않는다.
 
+## Required core와 optional tool의 경계
+
+PhotoArchiveKit은 ExifTool이나 osxphotos가 없어도 핵심 archive scanner가 동작해야 한다. 다만 이것은 외부 도구의 전체 기능을 자체 구현한다는 뜻이 아니다.
+
+| 기능 | required core | optional tool의 추가 가치 |
+| --- | --- | --- |
+| HEIC/JPEG 촬영시각·timezone | ImageIO의 EXIF metadata probe | ExifTool로 더 넓은 vendor/format metadata 진단 |
+| MOV/MP4 creation metadata | AVFoundation QuickTime metadata probe | ExifTool/ffprobe로 container·stream·이상 metadata 진단 |
+| Live Photo embedded linkage | ImageIO + AVFoundation으로 identifier를 로컬 비교하고 catalog에는 keyed fingerprint만 저장 | 외부 도구는 cross-check/diagnostic일 뿐 pairing authority가 아님 |
+| Google Takeout 기본 촬영시각 | native sidecar importer가 `title`과 `photoTakenTime`만 읽음 | 향후 migration diagnostic에 ExifTool 사용 가능 |
+| Apple Photos library query·album·edited/original·export/import | 현재 required core에는 없음 | osxphotos 또는 향후 공식 PhotoKit adapter가 담당 가능 |
+
+따라서 **ExifTool은 현재 core가 필요로 하는 좁은 metadata 역할에는 필수가 아니지만, ExifTool 수준의 폭넓은 metadata coverage를 PhotoArchiveKit이 대체한 것은 아니다.** 마찬가지로 **osxphotos는 현재 scanner에 필요하지 않지만, Apple Photos library 자체를 조회·내보내기·album 조작하는 역할은 아직 PhotoArchiveKit core가 제공하지 않는다.**
+
 ## rclone
 
 계획된 용도:
@@ -61,6 +75,17 @@ upstream repository의 component는 distribution boundary가 다르다. CLI/core
 ## ffprobe
 
 user-installed `ffprobe`는 optional container, stream, duration, audio, timed-metadata diagnostic에 사용할 수 있다. applicable license가 build configuration에 따라 달라지므로 PhotoArchiveKit은 generic FFmpeg build를 redistribute하지 않는다.
+
+## osxphotos
+
+osxphotos는 required dependency가 아니다. future adapter 또는 수동 interoperability 경로로 다음 역할을 시험할 수 있다.
+
+- Apple Photos library query/export
+- Photos album membership 읽기 및 일부 album update
+- original/edited representation 조사
+- filesystem archive에서 Photos로 import하는 실험적 bridge
+
+초기 integration은 read/query/export를 우선하고, Photos를 변경하는 operation은 별도 test library에서 검증한 뒤에만 사용한다. 장기적으로 Apple Photos에 쓰는 공식 projection path는 여전히 PhotoKit을 우선한다. osxphotos를 사용하더라도 PhotoArchiveKit의 filesystem archive와 SQLite semantic catalog가 authoritative state를 유지한다.
 
 ## Apple PhotoKit
 

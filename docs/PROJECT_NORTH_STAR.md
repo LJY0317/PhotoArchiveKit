@@ -85,6 +85,17 @@ PhotoArchiveKit은 이미 잘하는 도구를 다시 만들지 않는다.
 
 그러나 외부 도구는 핵심 semantic truth를 소유하지 않는다. 최종 관계도와 사용자 결정은 portable filesystem + SQLite에 남긴다.
 
+특히 duplicate cleanup에서는 다음 경계를 지킨다.
+
+- Czkawka/Krokiet의 exact-duplicate 결과는 강한 resource-level evidence지만 곧바로 deletion authority가 되지 않는다.
+- non-Takeout과 Google Takeout에 byte-identical resource가 함께 있으면 사용자 정책상 non-Takeout representation을 우선한다.
+- standalone asset은 non-Takeout exact copy가 검증되면 Takeout occurrence를 redundant candidate로 자동 제안할 수 있다.
+- Live Photo는 still과 paired video가 모두 complete하고 role별 exact copy가 non-Takeout에 존재할 때만 Takeout occurrence 전체를 automatic redundant candidate로 올린다.
+- 한쪽 resource만 exact duplicate이거나 occurrence가 incomplete/ambiguous하면 review 대상으로 남긴다.
+- Takeout 내부에서 동일 media가 연도 folder와 album folder 등에 반복되어도 collection/album 의미를 catalog로 옮기기 전에는 단순히 한 파일만 남기고 제거하지 않는다.
+
+ExifTool은 broad metadata diagnostic의 optional 도구다. required core가 사용하는 촬영시각·QuickTime·Live Photo linkage의 좁은 범위는 Apple system framework로 처리하되, ExifTool 전체 기능을 재구현하지 않는다. osxphotos도 required dependency가 아니라 Apple Photos library query/export/album interoperability를 위한 optional bridge이며, 장기적인 공식 write path는 PhotoKit을 우선한다.
+
 ## 기능 추가 질문
 
 새 기능을 제안할 때마다 먼저 다음을 묻는다.

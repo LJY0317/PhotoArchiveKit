@@ -82,6 +82,44 @@ filename collision groups        289
 
 이 validation에서는 media file을 수정하지 않았다.
 
+### Czkawka/Krokiet exact-duplicate 교차검증
+
+같은 real library를 Krokiet/Czkawka 12.0.1의 기존 cache와 `czkawka_cli`로 다시 검사하고 PhotoArchiveKit catalog 결과와 비교했다. GUI cache는 hash/perceptual 계산을 재사용하기 위한 binary cache였고 durable duplicate-group 목록 자체는 아니었지만, CLI 재실행으로 결과를 빠르게 재현할 수 있었다.
+
+PhotoArchiveKit이 지원하는 주요 photo/video extension 집합으로 제한한 Czkawka exact scan의 sanitized 결과:
+
+```text
+exact duplicate groups              8269
+redundant media occurrences         8739
+estimated redundant bytes       76.66 GiB
+local + Takeout mixed groups         4052
+Takeout occurrences in mixed groups 4466
+```
+
+가장 중요한 교차검증은 **local + Takeout mixed exact group 4,052개와 그 안의 Takeout resource 4,466개가 PhotoArchiveKit의 independent exact-resource catalog 결과와 정확히 일치했다**는 점이다. total group 수의 작은 차이는 두 tool의 전체 scan/support semantics 차이로 남아 있지만, 현재 provenance cleanup의 핵심 집합은 일치했다.
+
+사용자 정책 `non-Takeout > Google Takeout`을 바로 적용했을 때의 asset-level 안전성은 다음과 같았다.
+
+```text
+standalone assets with local + Takeout exact copies     685
+Takeout standalone resources redundant to local         739
+complete Takeout Live Photo occurrences safely matched 1346
+Takeout Live Photo resources in those occurrences      2692
+minimum asset-safe Takeout resources                    3431
+```
+
+따라서 Czkawka가 local exact copy를 확인한 Takeout media resource 4,466개 전부를 즉시 지우면 안 된다. 최소 3,431개는 현재 asset model에서도 자동 redundant candidate로 승격할 수 있지만, 나머지 1,035개는 incomplete/ambiguous Live Photo occurrence 또는 asset-level 조건 때문에 review/occurrence partitioning이 필요하다.
+
+또한 Takeout 내부끼리만 byte-identical인 media group도 대규모로 존재했다.
+
+```text
+Takeout-only exact groups              4189
+Takeout-only redundant occurrences     4193
+estimated redundant bytes          35.19 GiB
+```
+
+이 집합은 같은 media가 연도 folder와 album folder 등에 반복된 경우를 포함할 수 있으므로 collection/album semantics를 catalog로 옮긴 뒤 한 physical representation으로 collapse해야 한다. 이 validation에서도 media file은 수정하지 않았다.
+
 ## 2026-09-04 — Product North Star 고정
 
 최초 제품 목적을 `docs/PROJECT_NORTH_STAR.md`와 `AGENTS.md`의 explicit scope gate로 고정했다.
