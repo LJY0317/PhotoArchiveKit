@@ -248,7 +248,7 @@ stable root marker 기능은 구현됐지만 existing root에는 자동으로 ma
 
 `photoarchive organize-plan`은 local/Apple-direct root의 `IMG_####` / `IMG_E####` camera-style resource만 대상으로 capture wall-clock 기반 flat rename proposal을 만든다. custom filename은 자동 변경하지 않는다. timezone이 빠진 EXIF `DateTimeOriginal`은 파일명에 local wall-clock을 쓰는 데는 충분하지만 filesystem creation fallback은 automatic rename authority가 아니다.
 
-`photoarchive organize`는 기본 dry-run이고 `--apply` 전에 stable root marker를 요구한다. same-volume filesystem resource identifier와 byte size를 pre/post move에서 확인하며, Live Photo는 complete still+paired-video 두 resource가 같은 destination basename을 공유해야 한다. 실패 시 session 전체를 reverse-order rollback하고 local operations manifest를 남긴다. 최초 filename과 old/new location은 SQLite history에 보존된다.
+`photoarchive organize`는 기본 dry-run이고 `--apply` 전에 stable root marker를 요구한다. same-volume filesystem resource identifier와 byte size를 pre/post move에서 확인하며, Live Photo는 complete still+paired-video 두 resource가 같은 destination basename을 공유해야 한다. 모든 move 검증이 끝나면 stable resource ID를 기준으로 `resources.relative_path`와 `resource_locations` history를 SQLite transaction으로 직접 commit하므로 두 번째 full media scan/hash pass가 필요 없다. catalog commit까지 성공해야 operation이 완료되며, commit 실패 시 filesystem move 전체를 reverse-order rollback하고 final manifest도 제거한다. 최초 filename과 old/new location은 SQLite history에 보존된다.
 
 ### Takeout source-folder semantics before physical collapse
 

@@ -132,7 +132,8 @@ public enum OrganizationExecutor {
     public static func apply(
         report: ScanReport,
         plan: OrganizationPlan,
-        manifestDirectoryURL: URL = PhotoArchivePaths.defaultOperationsDirectoryURL
+        manifestDirectoryURL: URL = PhotoArchivePaths.defaultOperationsDirectoryURL,
+        commitCatalog: () throws -> Void
     ) throws -> OrganizationApplyReport {
         let verifiedItems = try verify(report: report, plan: plan)
         let allMoves = verifiedItems.flatMap(\.moves)
@@ -185,6 +186,7 @@ public enum OrganizationExecutor {
                 ),
                 to: finalURL
             )
+            try commitCatalog()
             try? fileManager.removeItem(at: pendingURL)
             return OrganizationApplyReport(
                 schemaVersion: 1,
@@ -212,6 +214,7 @@ public enum OrganizationExecutor {
                 }
             }
             try? fileManager.removeItem(at: pendingURL)
+            try? fileManager.removeItem(at: finalURL)
             throw error
         }
     }

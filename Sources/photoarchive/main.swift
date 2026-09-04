@@ -308,7 +308,11 @@ struct PhotoArchiveCLI {
         if mode == .organize {
             let plan = OrganizationPlanner.makePlan(from: report)
             let applyReport = applyMutation
-                ? try OrganizationExecutor.apply(report: report, plan: plan)
+                ? try OrganizationExecutor.apply(
+                    report: report,
+                    plan: plan,
+                    commitCatalog: { try scanner.commitAppliedOrganizationPlan(plan) }
+                )
                 : try OrganizationExecutor.preflight(report: report, plan: plan)
             if outputAgentJSON {
                 try printJSON(AgentSafeOrganizationApplyReport(report: applyReport))

@@ -33,7 +33,7 @@ PhotoArchiveKit의 중요한 변경 사항을 여기에 기록한다.
 - same-volume filesystem resource identifier와 resource location/original-name history를 이용한 path-independent physical resource tracking
 - optional `.photoarchive-root` stable marker와 `photoarchive root inspect/init`; moved root를 기존 catalog root ID에 다시 bind
 - `photoarchive organize-plan`: iPhone camera-style `IMG_####` / `IMG_E####`만 capture wall-clock 기반 `YYYY-MM-DD_HH-mm-ss[_NN]`으로 rename/flat-move 제안하고 custom filename/incomplete Live Photo/multiple representation은 review
-- marker-gated `photoarchive organize`: 기본 dry-run, `--apply`에서 AUTO organization item만 이동하며 Live Photo 동일 basename, post-move filesystem ID/size verification, rollback, local restore manifest를 제공
+- marker-gated `photoarchive organize`: 기본 dry-run, `--apply`에서 AUTO organization item만 이동하며 Live Photo 동일 basename, post-move filesystem ID/size verification 뒤 stable resource path/location history를 SQLite transaction으로 즉시 commit. catalog commit 실패 시 filesystem rollback, local restore manifest 제공
 
 ### 보안
 

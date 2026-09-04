@@ -30,6 +30,12 @@ public final class ArchiveScanner {
         self.catalog = try SQLiteCatalog(url: catalogURL)
     }
 
+    public func commitAppliedOrganizationPlan(_ plan: OrganizationPlan) throws {
+        try catalog.withTransaction {
+            try catalog.commitAppliedOrganizationPlan(plan)
+        }
+    }
+
     public func scan(
         roots inputs: [ScanRoot],
         options: ScanOptions = ScanOptions()

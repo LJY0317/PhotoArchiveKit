@@ -957,6 +957,85 @@ final class SQLiteCatalog {
         }
     }
 
+    func commitAppliedOrganizationPlan(_ plan: OrganizationPlan) throws {
+        var seenResourceIDs = Set<String>()
+        let now = Date().timeIntervalSince1970
+        let moves = plan.items
+            .filter { $0.decision == .automatic }
+            .flatMap(\.moves)
+
+        for move in moves {
+            guard seenResourceIDs.insert(move.resourceID).inserted,
+                  !move.sourceRelativePath.isEmpty,
+                  !move.destinationRelativePath.isEmpty,
+                  !move.sourceRelativePath.hasPrefix("/"),
+                  !move.destinationRelativePath.hasPrefix("/"),
+                  !move.sourceRelativePath.split(separator: "/").contains(".."),
+                  !move.destinationRelativePath.split(separator: "/").contains("..")
+            else {
+                throw CatalogError.invalidCatalogValue("Organization plan contains an invalid resource move.")
+            }
+
+            let currentRootID = try queryText(
+                "SELECT root_id FROM resources WHERE id = ?",
+                bindings: [.text(move.resourceID)]
+            )
+            let currentRelativePath = try queryText(
+                "SELECT relative_path FROM resources WHERE id = ?",
+                bindings: [.text(move.resourceID)]
+            )
+            guard currentRootID == move.rootID,
+                  currentRelativePath == move.sourceRelativePath
+            else {
+                throw CatalogError.invalidCatalogValue("Organization plan no longer matches the catalog resource location.")
+            }
+
+            if let occupied = try queryText(
+                "SELECT id FROM resources WHERE root_id = ? AND relative_path = ? AND id <> ?",
+                bindings: [
+                    .text(move.rootID),
+                    .text(move.destinationRelativePath),
+                    .text(move.resourceID)
+                ]
+            ), !occupied.isEmpty {
+                throw CatalogError.invalidCatalogValue("Organization destination is already represented by another catalog resource.")
+            }
+
+            let destinationURL = URL(fileURLWithPath: move.destinationRelativePath)
+            try run(
+                """
+                UPDATE resources
+                SET relative_path = ?, file_name = ?, file_extension = ?
+                WHERE id = ?
+                """,
+                bindings: [
+                    .text(move.destinationRelativePath),
+                    .text(destinationURL.lastPathComponent),
+                    .text(destinationURL.pathExtension.lowercased()),
+                    .text(move.resourceID)
+                ]
+            )
+            try run(
+                """
+                INSERT INTO resource_locations (
+                    resource_id, root_id, relative_path, first_seen_at, last_seen_at, last_seen_session
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                ON CONFLICT(resource_id, root_id, relative_path) DO UPDATE SET
+                    last_seen_at = excluded.last_seen_at,
+                    last_seen_session = excluded.last_seen_session
+                """,
+                bindings: [
+                    .text(move.resourceID),
+                    .text(move.rootID),
+                    .text(move.destinationRelativePath),
+                    .double(now),
+                    .double(now),
+                    .text(plan.sessionID)
+                ]
+            )
+        }
+    }
+
     func quarantineRestoreRootPath(rootID: String) throws -> String? {
         try queryText(
             "SELECT canonical_path FROM source_roots WHERE id = ?",

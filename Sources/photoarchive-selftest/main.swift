@@ -220,6 +220,65 @@ struct PhotoArchiveSelfTest {
             "a marked root should preserve its root ID after the directory moves"
         )
 
+        guard let trackedResource = trackingMoved.resources.first,
+              let trackedAssetID = trackedResource.assetID
+        else {
+            throw SelfTestFailure("tracking scan did not expose a persisted resource/asset")
+        }
+        let catalogCommitPlanObject: [String: Any] = [
+            "schemaVersion": 1,
+            "policy": "selftest_catalog_commit",
+            "sessionID": trackingMoved.sessionID,
+            "summary": [
+                "automaticItemCount": 1,
+                "reviewItemCount": 0,
+                "automaticResourceCount": 1,
+                "reviewResourceCount": 0
+            ],
+            "items": [[
+                "itemID": "O-CATALOG-COMMIT",
+                "assetID": trackedAssetID,
+                "kind": "standalone",
+                "decision": "automatic",
+                "reason": "camera_name_and_capture_wall_clock",
+                "moves": [[
+                    "resourceID": trackedResource.resourceID,
+                    "rootID": trackedResource.rootID,
+                    "role": trackedResource.role.rawValue,
+                    "sourceRelativePath": trackedResource.relativePath,
+                    "destinationRelativePath": "committed-name.jpg"
+                ]]
+            ]],
+            "filesModified": false
+        ]
+        let catalogCommitPlan = try JSONDecoder().decode(
+            OrganizationPlan.self,
+            from: JSONSerialization.data(withJSONObject: catalogCommitPlanObject)
+        )
+        let catalogCommitOperations = temporary.appendingPathComponent("CatalogCommitOperations", isDirectory: true)
+        _ = try OrganizationExecutor.apply(
+            report: trackingMoved,
+            plan: catalogCommitPlan,
+            manifestDirectoryURL: catalogCommitOperations,
+            commitCatalog: { try trackingScanner.commitAppliedOrganizationPlan(catalogCommitPlan) }
+        )
+        let committedPath = trackingMovedRoot.appendingPathComponent("committed-name.jpg")
+        try require(fileManager.fileExists(atPath: committedPath.path), "catalog-committed organization move is missing")
+        try require(
+            try sqliteText(
+                databaseURL: trackingCatalog,
+                sql: "SELECT id FROM resources WHERE relative_path = 'committed-name.jpg'"
+            ) == firstResourceID,
+            "organization catalog commit must preserve the stable resource ID"
+        )
+        try require(
+            try sqliteInt(
+                databaseURL: trackingCatalog,
+                sql: "SELECT COUNT(*) FROM resource_locations WHERE resource_id = '\(firstResourceID)'"
+            ) == 3,
+            "organization catalog commit should append the destination to location history without a full rescan"
+        )
+
         let organizationReport = syntheticOrganizationReport()
         let organizationPlan = OrganizationPlanner.makePlan(from: organizationReport)
         try require(
@@ -281,10 +340,26 @@ struct PhotoArchiveSelfTest {
         try require(fileManager.fileExists(atPath: organizationSourcePhoto.path), "organization dry run moved the Live Photo still")
         try require(fileManager.fileExists(atPath: organizationSourceVideo.path), "organization dry run moved the Live Photo video")
 
+        do {
+            _ = try OrganizationExecutor.apply(
+                report: organizationApplyScan,
+                plan: organizationApplyPlan,
+                manifestDirectoryURL: organizationOperations,
+                commitCatalog: { throw SelfTestFailure("synthetic catalog commit failure") }
+            )
+            throw SelfTestFailure("organization apply should rollback when catalog commit fails")
+        } catch let error as SelfTestFailure where error.message == "synthetic catalog commit failure" {
+            // Expected: the executor must roll filesystem moves back when catalog commit fails.
+        }
+        try require(fileManager.fileExists(atPath: organizationSourcePhoto.path), "catalog failure rollback lost the Live Photo still")
+        try require(fileManager.fileExists(atPath: organizationSourceVideo.path), "catalog failure rollback lost the Live Photo video")
+        try require(fileManager.fileExists(atPath: organizationSourceStandalone.path), "catalog failure rollback lost the standalone resource")
+
         let organizationApplied = try OrganizationExecutor.apply(
             report: organizationApplyScan,
             plan: organizationApplyPlan,
-            manifestDirectoryURL: organizationOperations
+            manifestDirectoryURL: organizationOperations,
+            commitCatalog: {}
         )
         try require(organizationApplied.filesModified, "organization apply should modify synthetic files")
         try require(organizationApplied.resourceCount == 3, "organization apply should move three resources")

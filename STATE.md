@@ -38,7 +38,7 @@
 - same-volume filesystem resource identifier + `resource_locations` history로 rename/move 후에도 physical resource ID를 유지하고, 최초 filename을 `resource_original_names`에 보존
 - `.photoarchive-root` stable marker 생성/인식과 marker key -> catalog root binding. marker가 유지되면 root directory 자체가 이동해도 기존 root ID를 재사용
 - `photoarchive organize-plan`: `IMG_####` / `IMG_E####` camera-style filename만 대상으로 local capture wall-clock 기반 `YYYY-MM-DD_HH-mm-ss[_NN]` flat rename/move proposal 생성. custom filename, incomplete Live Photo, multiple physical representation은 review
-- `photoarchive organize`: 기본 dry-run, `--apply`에서만 marker가 있는 local root의 AUTO organization item을 move. Live Photo still+paired-video는 동일 destination basename을 사용하고 post-move filesystem ID/size 확인, session rollback, local restore manifest를 제공
+- `photoarchive organize`: 기본 dry-run, `--apply`에서만 marker가 있는 local root의 AUTO organization item을 move. Live Photo still+paired-video는 동일 destination basename을 사용하고 post-move filesystem ID/size 확인 뒤 stable resource path/location history를 SQLite에 transaction commit한다. catalog commit 실패 시 filesystem move 전체 rollback, local restore manifest를 제공하며 별도 full rescan은 필요하지 않음
 - 선택적 `--exact-engine czkawka`: Czkawka cache/prehash candidate discovery 후 native SHA-256 재검증; 기본 `automatic`은 현재 native exact path
 - 필수 third-party binary 없이 optional tool 감지
 - mixed local, Apple-direct, Google Takeout, Google web root를 구분하는 explicit source provenance
@@ -126,7 +126,7 @@ swift run photoarchive-selftest
 - synthetic self-test에서 standalone non-Takeout preferred copy를 유지하면서 exact Takeout copy만 quarantine으로 이동하고, 이동된 byte가 동일하며 restore manifest가 생성되고 agent-safe quarantine report에 path/filename이 노출되지 않음을 확인했다. 같은 fixture에서 restore dry-run/apply, tampered quarantined byte 거부, source 원위치 복원, restore-state 생성, agent-safe path redaction도 검증했다.
 - 두 real quarantine의 기존 v1 manifest도 `restore-quarantine --agent-json` dry-run을 통과했다: 첫 session `2,262 item / 4,195 resource`, 둘째 `3,787 item / 3,813 resource`, 둘 다 `filesModified=false`. 첫 legacy manifest의 과거 `photo` 단독 item 24개는 manifest 전체를 session 단위로 역복구하는 compatibility 경로로 취급하고, 새 manifest는 source-relative path와 strict Live Photo item completeness를 요구한다.
 - synthetic tracking test에서 같은 volume의 file rename 후 resource ID가 유지되고 old/new path가 location history로 남으며, `.photoarchive-root`가 있는 root directory 자체를 다른 path로 이동한 뒤에도 root ID가 유지됨을 확인했다.
-- organization synthetic apply test에서 `IMG_1234.HEIC + IMG_1234.MOV`가 같은 capture-time destination basename으로 함께 이동하고 custom filename은 보존되며 marker gate, post-move filesystem ID/size, restore manifest, agent-safe path redaction이 동작함을 확인했다.
+- organization synthetic apply test에서 `IMG_1234.HEIC + IMG_1234.MOV`가 같은 capture-time destination basename으로 함께 이동하고 custom filename은 보존되며 marker gate, post-move filesystem ID/size, restore manifest, agent-safe path redaction이 동작함을 확인했다. 별도 tracking fixture에서는 full rescan 없이 catalog resource path가 즉시 갱신되고 stable resource ID와 old/new location history가 유지되는 것, synthetic catalog commit failure 시 모든 filesystem move가 원위치 rollback되는 것도 검증했다.
 - real-library `organize-plan --agent-json` 최신 결과는 `2,765` AUTO item / `4,292` resource, `628` REVIEW item / `795` resource다. AUTO는 trusted timestamp 또는 timezone이 빠진 EXIF local wall-clock을 가진 iPhone camera-style filename이고, REVIEW는 filesystem fallback `58`, custom-name Live Photo `154 resource`, incomplete Live Photo `415 resource`, multiple physical representation `168 resource`다. 실제 rename/move는 아직 0개다.
 
 private fixture와 temporary catalog는 repository에 포함하지 않는다.
@@ -167,7 +167,7 @@ private fixture와 temporary catalog는 repository에 포함하지 않는다.
 5. native incremental hash cache를 설계해 unchanged file의 full SHA-256 재계산을 줄인다. Czkawka exact accelerator는 이중 hashing을 피할 수 있을 때만 benchmark 후 `automatic` 후보로 재평가한다.
 6. preferred-representation plan을 immutable persisted plan으로 발전시키고 direct byte verification 옵션과 stable replay precondition을 추가한다.
 7. 실제 `~/Pictures`와 향후 HDD archive root에 stable root marker를 사용자 승인 후 초기화하고 relocation fixture를 real filesystem에서 확인
-8. organization apply 전 persisted immutable plan/approval token 및 post-apply automatic re-scan/catalog commit을 추가
+8. organization apply 전 persisted immutable plan/approval token은 향후 offline/replay mutation에 필요할 때 추가한다. same-session organize는 post-move catalog transaction까지 이미 완료됨
 9. verified empty-directory cleanup plan을 추가하되 unsupported/hidden/sidecar file이 하나라도 있으면 자동 삭제하지 않음
 10. strict Live Photo timed-metadata validation 추가
 11. versioned sanitized JSONL catalog export/restore 추가

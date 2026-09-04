@@ -277,7 +277,7 @@ review items/resources          628 /  795
   multiple representation        99 /  168
 ```
 
-실제 media rename/move는 수행하지 않았다. `photoarchive organize` executor는 marker-gated dry-run/apply, Live Photo atomic same-basename move, post-move filesystem identity/size verification, session rollback, local restore manifest를 synthetic fixture에서 검증했다.
+실제 media rename/move는 수행하지 않았다. `photoarchive organize` executor는 marker-gated dry-run/apply, Live Photo atomic same-basename move, post-move filesystem identity/size verification, session rollback, local restore manifest를 synthetic fixture에서 검증했다. 이후 apply의 마지막 단계로 stable resource ID 기반 SQLite path/location-history transaction을 추가해 full media re-scan 없이 catalog를 즉시 갱신하도록 했다. 별도 tracking fixture에서 resource ID 유지와 location history 추가를 검증했고, synthetic catalog commit failure는 filesystem move 전체를 원위치 rollback했다.
 
 ## 2026-09-04 — Product North Star 고정
 

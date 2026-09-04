@@ -51,6 +51,7 @@ Roadmap은 작고 검증 가능한 layer를 우선한다. 어느 phase도 existi
 - [x] verified root marker 생성/인식과 marker-gated organization apply
 - [ ] staging copy, local byte verification, atomic finalization
 - [x] quarantine/organization mutation에서 Live Photo resource-set transaction + session rollback
+- [x] same-session organization apply의 verified filesystem move -> stable resource path/location-history SQLite transaction; commit failure 시 filesystem rollback
 - [ ] checkpoint에서 interrupted session resume
 - [x] permanent deletion 대신 reversible quarantine + catalog SHA-256 재검증을 거치는 dry-run/apply `restore-quarantine`
 - [ ] archive metadata directory에 catalog snapshot
