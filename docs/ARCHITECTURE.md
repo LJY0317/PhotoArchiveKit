@@ -10,9 +10,10 @@ PhotoArchiveKit은 iPhone을 주 카메라로 사용하고 cloud backup은 상�
 2. PhotoArchiveKit 없이도 media가 ordinary file로 사용 가능하게 유지한다.
 3. Google Photos, Apple Photos 등 provider와 독립적으로 organization을 보존한다.
 4. deterministic 및 local machine-learning stage로 manual classification을 최소화한다.
-5. media-derived secret은 로컬에 유지한다.
-6. future mutation은 모두 reviewable, resumable, reversible하게 만든다.
-7. background CPU, battery, filesystem cost를 피한다.
+5. media-derived secret과 file-level private detail은 로컬에 유지하고, AI agent에는 opaque semantic result만 제공한다.
+6. 정상 agent workflow는 filename/path, raw hash/identifier, GPS, capture timestamp, thumbnail/frame/audio를 AI service에 전달하지 않는다.
+7. future mutation은 모두 reviewable, resumable, reversible하게 만든다.
+8. background CPU, battery, filesystem cost를 피한다.
 
 ## 세 가지 truth layer
 
@@ -85,9 +86,13 @@ PhotoArchiveKit은 raw value를 로컬에서 비교하고 catalog-local random k
 pairing은 두 level에서 평가한다.
 
 - **Logical asset:** 같은 protected identifier를 가진 모든 known copy
-- **Occurrence:** 한 source root 안에서의 completeness
+- **Occurrence:** 한 source root 안에서 실제 한 번의 still + paired-video representation을 이루는 resource set
 
-이 구분이 중요하다. Image Capture root에 complete copy가 있어도 ordinary AirDrop root가 still image만 가진 사실을 숨겨서는 안 된다.
+같은 identifier가 한 Takeout root의 연도 folder와 album folder 등에 반복되면 `2 still + 2 video`를 하나의 ambiguous occurrence로 뭉개지 않고 여러 physical occurrence로 partition해야 한다. partitioning은 embedded identifier를 authority로 유지하면서 directory/co-location, basename, source/export structure, exact-resource equivalence 같은 신호를 **경계 추정용 hint**로만 사용한다.
+
+다만 외부 non-Takeout root에 complete canonical Live Photo가 있고, 특정 Takeout logical asset의 모든 resource가 role별로 그 canonical pair의 exact copy임이 증명되면 어느 반복 copy가 어느 occurrence인지 먼저 확정하지 않아도 Takeout 전체를 redundant로 판단할 수 있다. 이를 **canonical coverage**라고 한다.
+
+이 구분이 중요하다. Image Capture root에 complete copy가 있어도 ordinary AirDrop root가 still image만 가진 사실을 숨겨서는 안 되며, 반대로 여러 export folder의 반복 copy를 하나의 손상된 Live Photo로 오해해서도 안 된다.
 
 matching linkage metadata 없이 basename만 같으면 warning candidate일 뿐 자동 pair하지 않는다.
 
@@ -201,11 +206,15 @@ classifier result는 deletion을 authorize하지 않는다.
 
 ### Exact resource duplicate
 
-candidate file은 먼저 size로 group한다. matching size group에 한해 local process에서 SHA-256을 계산한다. report에는 digest 대신 `D000017` 같은 stable ID를 노출한다.
+native fallback은 candidate file을 먼저 size로 group한 뒤 matching size group에 대해 full-file SHA-256을 계산한다. 이 신호는 perceptual similarity가 아니라 exact file-content identity다. agent-safe report에는 digest 대신 `D000017` 같은 opaque ID만 노출한다.
+
+대규모 library에서 `czkawka_cli`가 설치되어 있으면 향후 adapter는 Czkawka의 size -> prehash -> cached full-hash pipeline을 **candidate discovery accelerator**로 우선 사용할 수 있다. PhotoArchiveKit은 외부 raw hash를 agent에 노출하지 않고 candidate path를 local process 안에서 받아 asset graph로 승격한다. destructive plan/apply 직전에는 PhotoArchiveKit이 자체 fresh integrity check 또는 direct byte comparison으로 다시 검증한다. 외부 tool 부재 시 native SHA-256 path가 fallback이 된다.
 
 ### Exact logical Live Photo duplicate
 
-두 resource role이 모두 있어야 한다. identical still이 있어도 paired video가 missing/different하면 exact duplicate Live Photo occurrence가 아니다.
+일반적인 occurrence 비교에서는 두 resource role이 모두 있어야 한다. identical still이 있어도 paired video가 missing/different하면 exact duplicate Live Photo occurrence가 아니다.
+
+예외적으로 canonical coverage가 성립하면 repeated Takeout occurrence의 내부 pairing ambiguity를 먼저 풀지 않아도 된다. non-Takeout complete pair가 보존되고, 제거하려는 Takeout asset의 모든 still/video resource가 역할별 exact copy로 완전히 cover될 때만 해당 Takeout set 전체를 automatic redundant candidate로 만들 수 있다.
 
 ### Similar/derived copy
 
@@ -216,7 +225,7 @@ perceptual similarity, matching capture time, provider provenance는 review cand
 required core는 Apple system framework와 SQLite만 사용한다. optional subprocess adapter는 user-installed mature tool을 재사용할 수 있다.
 
 - rclone: remote file replication/verification
-- Czkawka CLI: additional duplicate/similarity candidate
+- Czkawka CLI: large-library exact candidate acceleration/cross-check 및 perceptual image/video similarity candidate
 - ExifTool: broad metadata diagnostic
 - ffprobe: optional video diagnostic
 

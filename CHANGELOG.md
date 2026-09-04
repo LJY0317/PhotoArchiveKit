@@ -21,9 +21,12 @@ PhotoArchiveKit의 중요한 변경 사항을 여기에 기록한다.
 - embedded timestamp가 충분하지 않을 때 Google Takeout sidecar의 `title`과 `photoTakenTime`만 사용하는 최소 capture-time import
 - 프로젝트 최초 목적을 개발 우선순위의 gate로 고정하는 `docs/PROJECT_NORTH_STAR.md`
 - 영어/한국어 문서, CI, repository privacy check, optional-tool licensing guidance
+- AI agent용 `--agent-json`: filename/path, catalog path, exact byte size, capture timestamp, raw fingerprint를 제거하고 opaque ID/status만 출력
+- repeated Takeout Live Photo를 non-Takeout complete pair가 역할별 exact copy로 완전히 cover할 때 occurrence partitioning 전에도 redundant로 판단할 수 있는 canonical-coverage 정책
 
 ### 보안
 
 - media rename, move, upload, quarantine, delete command 없음
 - core에 background daemon 또는 network request 없음
-- raw hash와 raw Live Photo identifier는 일반 report 밖에 유지
+- raw hash와 raw Live Photo identifier는 agent-safe report 밖에 유지
+- agent-safe report는 filename/path, exact byte size, capture timestamp도 제거

@@ -303,6 +303,120 @@ public struct ScanSummary: Codable, Sendable, Equatable {
     }
 }
 
+public struct AgentSafeRootReport: Codable, Sendable, Equatable {
+    public let rootID: String
+    public let kind: SourceRootKind
+    public let provenance: SourceProvenance
+    public let mediaFileCount: Int
+    public let completeLivePhotos: Int
+    public let stillOnlyLiveResources: Int
+    public let videoOnlyLiveResources: Int
+    public let standaloneImages: Int
+    public let standaloneVideos: Int
+    public let sidecars: Int
+    public let metadataProbeFailures: Int
+}
+
+public struct AgentSafeLivePhotoOccurrenceReport: Codable, Sendable, Equatable {
+    public let rootID: String
+    public let status: LivePhotoOccurrenceStatus
+    public let stillCount: Int
+    public let videoCount: Int
+}
+
+public struct AgentSafeLivePhotoAssetReport: Codable, Sendable, Equatable {
+    public let assetID: String
+    public let occurrenceCount: Int
+    public let stillCopyCount: Int
+    public let videoCopyCount: Int
+    public let occurrences: [AgentSafeLivePhotoOccurrenceReport]
+}
+
+public struct AgentSafeExactDuplicateGroupReport: Codable, Sendable, Equatable {
+    public let groupID: String
+    public let memberCount: Int
+    public let rootIDs: [String]
+    public let roles: [ResourceRole]
+}
+
+public struct AgentSafeEventSuggestionReport: Codable, Sendable, Equatable {
+    public let eventID: String
+    public let assetIDs: [String]
+}
+
+public struct AgentSafeWarning: Codable, Sendable, Equatable {
+    public let code: String
+    public let rootID: String?
+}
+
+public struct AgentSafeScanReport: Codable, Sendable, Equatable {
+    public let schemaVersion: Int
+    public let privacyMode: String
+    public let sessionID: String
+    public let summary: ScanSummary
+    public let roots: [AgentSafeRootReport]
+    public let livePhotos: [AgentSafeLivePhotoAssetReport]
+    public let exactDuplicateGroups: [AgentSafeExactDuplicateGroupReport]
+    public let eventSuggestions: [AgentSafeEventSuggestionReport]
+    public let warnings: [AgentSafeWarning]
+    public let filesModified: Bool
+
+    public init(report: ScanReport) {
+        schemaVersion = report.schemaVersion
+        privacyMode = "agent_safe"
+        sessionID = report.sessionID
+        summary = report.summary
+        roots = report.roots.map { root in
+            AgentSafeRootReport(
+                rootID: root.rootID,
+                kind: root.kind,
+                provenance: root.provenance,
+                mediaFileCount: root.mediaFileCount,
+                completeLivePhotos: root.completeLivePhotos,
+                stillOnlyLiveResources: root.stillOnlyLiveResources,
+                videoOnlyLiveResources: root.videoOnlyLiveResources,
+                standaloneImages: root.standaloneImages,
+                standaloneVideos: root.standaloneVideos,
+                sidecars: root.sidecars,
+                metadataProbeFailures: root.metadataProbeFailures
+            )
+        }
+        livePhotos = report.livePhotos.map { asset in
+            AgentSafeLivePhotoAssetReport(
+                assetID: asset.assetID,
+                occurrenceCount: asset.occurrenceCount,
+                stillCopyCount: asset.stillCopyCount,
+                videoCopyCount: asset.videoCopyCount,
+                occurrences: asset.occurrences.map { occurrence in
+                    AgentSafeLivePhotoOccurrenceReport(
+                        rootID: occurrence.rootID,
+                        status: occurrence.status,
+                        stillCount: occurrence.stillCount,
+                        videoCount: occurrence.videoCount
+                    )
+                }
+            )
+        }
+        exactDuplicateGroups = report.exactDuplicateGroups.map { group in
+            AgentSafeExactDuplicateGroupReport(
+                groupID: group.groupID,
+                memberCount: group.members.count,
+                rootIDs: Array(Set(group.members.map(\.rootID))).sorted(),
+                roles: Array(Set(group.members.map { $0.role.rawValue }))
+                    .sorted()
+                    .compactMap(ResourceRole.init(rawValue:))
+            )
+        }
+        eventSuggestions = report.eventSuggestions.map { event in
+            AgentSafeEventSuggestionReport(eventID: event.eventID, assetIDs: event.assetIDs)
+        }
+        warnings = report.warnings.map { warning in
+            AgentSafeWarning(code: warning.code, rootID: warning.rootID)
+        }
+        filesModified = report.filesModified
+    }
+}
+
 public struct ScanReport: Codable, Sendable, Equatable {
     public let schemaVersion: Int
     public let sessionID: String

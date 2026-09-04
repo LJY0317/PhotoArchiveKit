@@ -1,6 +1,6 @@
 # 보안 정책
 
-PhotoArchiveKit은 초기 prototype이다. 현재 fix는 최신 `main` branch에 적용한다.
+PhotoArchiveKit은 초기 prototype이다. 평소 fix와 개발은 `dev` branch에서 진행하고, 검증된 checkpoint만 `main`으로 승격한다.
 
 ## 취약점 보고
 
@@ -20,7 +20,7 @@ PhotoArchiveKit은 초기 prototype이다. 현재 fix는 최신 `main` branch에
 - Live Photo operation이 필요한 resource 중 한쪽만 변경
 - source file이 바뀐 뒤에도 plan이 적용됨
 - interruption 중 corruption 또는 partial commit
-- media, path, hash, GPS, identifier, credential leakage
+- media, filename/path, capture timestamp, byte size, hash, GPS, identifier, credential이 agent-safe interface나 외부 AI service로 leakage
 - optional subprocess adapter를 통한 command injection
 - malicious Takeout/sidecar filename
 - 잘못된 provider account에 upload/delete 수행
@@ -32,7 +32,8 @@ PhotoArchiveKit은 초기 prototype이다. 현재 fix는 최신 `main` branch에
 - network request를 하지 않는다.
 - scan한 media를 수정하지 않는다.
 - working catalog를 로컬에 저장한다.
-- raw hash와 Live Photo identifier를 report에서 제외한다.
+- raw hash와 Live Photo identifier를 모든 agent-safe report에서 제외한다.
+- `--agent-json`에서 filename/path, catalog path, exact byte size, capture timestamp 같은 file-level private detail도 제외한다.
 - permanent-delete command가 없다.
 - third-party executable을 bundle하지 않는다.
 

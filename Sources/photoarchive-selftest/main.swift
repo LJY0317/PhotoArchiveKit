@@ -55,7 +55,18 @@ struct PhotoArchiveSelfTest {
         let encoder = JSONEncoder()
         let json = String(decoding: try encoder.encode(first), as: UTF8.self)
         let rawHash = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
-        try require(!json.contains(rawHash), "sanitized report exposed a raw content hash")
+        try require(!json.contains(rawHash), "local diagnostic report exposed a raw content hash")
+
+        let agentJSON = String(
+            decoding: try encoder.encode(AgentSafeScanReport(report: first)),
+            as: UTF8.self
+        )
+        try require(!agentJSON.contains(rawHash), "agent-safe report exposed a raw content hash")
+        try require(!agentJSON.contains(rootA.path), "agent-safe report exposed a root path")
+        try require(!agentJSON.contains(rootB.path), "agent-safe report exposed a root path")
+        try require(!agentJSON.contains("one.jpg"), "agent-safe report exposed a filename")
+        try require(!agentJSON.contains("copy.jpg"), "agent-safe report exposed a filename")
+        try require(!agentJSON.contains("catalog.sqlite3"), "agent-safe report exposed a catalog path")
 
         let parentRoot = temporary.appendingPathComponent("Pictures", isDirectory: true)
         let takeoutRoot = parentRoot.appendingPathComponent("Takeout", isDirectory: true)
@@ -105,6 +116,19 @@ struct PhotoArchiveSelfTest {
         try require(
             nestedReport.summary.eventSuggestionCount == 1,
             "a Google Takeout photoTakenTime sidecar should provide event-time evidence"
+        )
+
+        let nestedAgentJSON = String(
+            decoding: try encoder.encode(AgentSafeScanReport(report: nestedReport)),
+            as: UTF8.self
+        )
+        try require(
+            !nestedAgentJSON.contains("same-name.jpg"),
+            "agent-safe report exposed a nested filename"
+        )
+        try require(
+            !nestedAgentJSON.contains(takeoutRoot.path),
+            "agent-safe report exposed a nested source path"
         )
     }
 

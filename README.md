@@ -51,7 +51,7 @@ The initial CLI can:
 - detect optional user-installed interoperability tools without requiring or bundling them;
 - complete all current work without modifying media files or contacting a network service.
 
-The catalog stores local integrity data, including raw exact-file hashes, because it needs them for reliable comparison. Normal CLI and agent-facing reports never expose those hashes or raw Live Photo content identifiers.
+The catalog stores local integrity data, including raw exact-file hashes, because it needs them for reliable comparison. Human diagnostics and AI-agent output are deliberately separated: `--json` may include local paths for troubleshooting, while `--agent-json` omits paths, filenames, byte sizes, capture timestamps, raw hashes, Live Photo identifiers, GPS, previews, and other file-level private data. AI agents should use only the agent-safe surface.
 
 ## Verified ingest behavior
 
@@ -110,11 +110,19 @@ swift run photoarchive scan \
 
 Registered nested roots belong to the most specific root, so the Takeout directories above are not scanned a second time through `~/Pictures`. This preserves source provenance even when byte-identical copies cannot be distinguished from file content alone.
 
-Print the full sanitized report:
+Print a local human diagnostic report, which may contain paths:
 
 ```bash
 swift run photoarchive scan --json --inbox "~/Photo Inbox"
 ```
+
+For AI-agent workflows, use the privacy-minimized report instead:
+
+```bash
+swift run photoarchive scan --agent-json --inbox "~/Photo Inbox"
+```
+
+The agent-safe report exposes opaque IDs, provenance/status/counts, and relationships without filenames, paths, raw fingerprints, media content, capture timestamps, or exact byte sizes.
 
 Use a disposable catalog during experiments:
 
@@ -158,7 +166,8 @@ Bare paths are treated as Inbox roots.
 Other options:
 
 - `--catalog PATH` — choose a SQLite catalog.
-- `--json` — print sanitized JSON.
+- `--json` — print local diagnostic JSON; may include paths and filenames.
+- `--agent-json` — print privacy-minimized JSON intended for AI agents.
 - `--no-exact-duplicates` — skip local SHA-256 comparison.
 - `--event-gap-hours NUMBER` — begin a new automatic event after this gap; default is six hours.
 - `--jobs NUMBER` — limit concurrent metadata probes.
@@ -190,6 +199,12 @@ Apple PhotoKit is the stronger future projection target for Live Photos and user
 The current Google Photos Library API can upload compatible ordinary media without assigning an album, which is useful even when album synchronization is unavailable. Existing-library reads and album operations are generally limited to app-created content, and the public upload model does not document a composite Live Photo creation operation. The planned Google adapter will therefore support flat upload for eligible ordinary media while blocking any workflow that would split a validated Live Photo and misreport it as preserved.
 
 See [Provider Capabilities](docs/PROVIDER_CAPABILITIES.md) for the dated capability matrix and official references.
+
+## Privacy-safe AI agent boundary
+
+A core reason for PhotoArchiveKit to exist is to let an AI agent reason about duplicate groups, Live Photo completeness, provenance, and archive plans **without receiving the user's media or private file-level metadata**. Hashes, content identifiers, broad metadata dumps, filenames/paths, previews, and timestamps stay inside the local process. The agent receives opaque asset/group/plan IDs and semantic decisions only.
+
+This guarantee applies to PhotoArchiveKit's agent-safe interface; giving a general-purpose AI shell direct access to personal media would bypass that boundary. See [Privacy model](docs/PRIVACY.md) and [Agent interface](docs/AGENT_INTERFACE.md).
 
 ## Live Photo safety model
 

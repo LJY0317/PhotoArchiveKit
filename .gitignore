@@ -49,6 +49,8 @@ test-output/
 local-reports/
 integration-output/
 integration-cache/
+agent-reports/
+*.agent-report.json
 
 # Never commit personal media or provider exports
 Photo Inbox/

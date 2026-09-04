@@ -126,6 +126,8 @@ candidate resources with no complete non-Takeout occurrence       3
 
 즉 파일 하나의 byte equality는 확인됐어도 scanner가 같은 Live Photo identifier의 반복 export를 아직 안전한 1쌍 occurrence로 partition하지 못하는 경우가 대부분이다. 이 집합은 filename이나 visual similarity 때문이 아니라 **logical asset의 resource 경계를 확정하기 전 한쪽 resource만 제거하지 않기 위한 보수적 hold**다.
 
+후속 real-library 분석에서 **canonical coverage** rule도 검증했다. non-Takeout에 complete canonical Live Photo가 있고 같은 logical asset의 모든 Takeout still/video resource가 역할별 exact copy로 완전히 cover되면, `2 photos + 2 paired videos`처럼 반복 export의 내부 pairing을 먼저 확정하지 않아도 Takeout set 전체를 redundant로 볼 수 있다. 이 rule을 적용하면 mixed exact Takeout resource 4,466개 중 약 4,245개를 automatic candidate로 설명할 수 있고 약 221개만 occurrence partitioning/review 대상으로 남는다.
+
 또한 Takeout 내부끼리만 byte-identical인 media group도 대규모로 존재했다.
 
 ```text
@@ -142,7 +144,9 @@ estimated redundant bytes          35.19 GiB
 
 Core completion은 iPhone/Apple, Mac, Google Photos/Takeout, HDD에 흩어진 같은 촬영물을 reconcile하고 Live Photo resource 관계를 보존하며, 사용자 provenance preference를 적용하고, 사람이 읽을 수 있는 folder archive를 만들고, copy를 검증하며, portable provider-neutral semantic state를 유지하는 것을 의미한다.
 
-이 완료 기준이 real library에서 안정적으로 동작하기 전에는 직접 기여하지 않는 기능을 보류한다. Czkawka/Krokiet, rclone, ExifTool, ffprobe, 공식 provider framework처럼 성숙한 외부 도구가 재구현보다 강한 영역은 재사용하고 PhotoArchiveKit은 provider-neutral asset relationship과 archive decision을 소유한다.
+이 완료 기준이 real library에서 안정적으로 동작하기 전에는 직접 기여하지 않는 기능을 보류한다. 공식 framework가 충분하면 공식 경로를 우선하고, Czkawka/Krokiet, rclone, ExifTool, osxphotos, ffprobe처럼 성숙한 외부 도구가 재구현보다 강한 영역은 재사용한다. PhotoArchiveKit은 provider-neutral asset relationship, Live Photo safety, provenance preference, canonical coverage와 archive decision을 소유한다.
+
+AI-agent privacy도 North Star에 포함한다. agent-safe CLI/API에서는 media byte, raw fingerprint, filename/path, capture timestamp 같은 file-level private detail을 제거하고 opaque ID/status만 전달한다.
 
 ## 아직 필요한 Validation
 

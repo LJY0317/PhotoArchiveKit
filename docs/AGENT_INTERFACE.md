@@ -1,6 +1,6 @@
 # 개인정보 보호형 Agent Interface
 
-PhotoArchiveKit은 AI agent와 함께 사용할 수 있지만, agent는 media-processing trust boundary 바깥에 있어야 한다.
+PhotoArchiveKit은 AI agent와 함께 사용할 수 있지만, agent는 media-processing trust boundary 바깥에 있어야 한다. **정상 agent workflow에서 개인 media byte, raw fingerprint, filename/path, capture timestamp 같은 file-level private detail이 AI service로 전달되지 않는 것**을 제품 invariant로 삼는다.
 
 ## 경계
 
@@ -13,26 +13,26 @@ personal media
              -> agent
 ```
 
-agent는 사용자가 허용한 경우 path, logical asset ID, status, confidence, opaque group ID를 받는다. media content나 raw fingerprint는 받지 않는다.
+agent는 opaque root/logical asset/group/plan ID, provenance category, resource role, status, count, confidence만 받는다. filename/path, media content, raw fingerprint, capture timestamp는 받지 않는다.
 
 ## 현재 interface
 
 현재 CLI는 read-only agent usage에 적합하다.
 
 ```bash
-photoarchive scan --json --inbox "/path/to/inbox"
+photoarchive scan --agent-json --inbox "/path/to/inbox"
 ```
 
-JSON report에는 다음이 포함된다.
+agent-safe JSON report에는 다음이 포함된다.
 
-- scan/session identifier
-- configured root label/path
-- file-relative path와 resource role
+- opaque scan/session/root identifier
+- root kind와 provenance category
+- resource role 및 count
 - logical Live Photo asset
 - root별 completeness
 - opaque exact duplicate group
-- automatic event proposal
-- warning
+- opaque event/asset relation
+- warning code
 
 다음은 제외된다.
 
@@ -43,6 +43,9 @@ JSON report에는 다음이 포함된다.
 - GPS coordinate
 - visual embedding
 - provider credential
+- filename/relative path/canonical path/catalog path
+- exact byte size
+- capture timestamp와 suggested folder name
 
 ## 권장 future local tool surface
 
@@ -74,7 +77,7 @@ quarantine_assets(plan_id, approval_token)
 project_to_apple(plan_id, approval_token)
 ```
 
-agent surface에는 general-purpose file deletion, shell execution, hash printing, metadata dumping, media-reading method를 두지 않는다.
+agent surface에는 general-purpose file deletion, shell execution, hash printing, metadata dumping, media-reading, filename/path printing method를 두지 않는다. 사람이 로컬에서 보는 `--json` diagnostic output은 agent input으로 사용하지 않는다.
 
 ## Secret 대신 status
 

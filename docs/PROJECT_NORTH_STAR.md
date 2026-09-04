@@ -20,6 +20,7 @@ PhotoArchiveKit을 만드는 이유는 새로운 사진 갤러리나 범용 사�
 8. 사용자의 수작업은 개별 사진 수가 아니라 정말 애매한 event/duplicate group 수에 비례하도록 만든다.
 9. 백업된 파일은 특정 앱이 없어도 Finder와 일반 파일 도구로 읽을 수 있어야 한다.
 10. 모든 파괴적 작업은 검증 가능한 plan과 안전한 복사본을 전제로 한다.
+11. AI agent가 CLI/API로 archive를 다룰 때 개인 media byte, raw hash/identifier, filename/path, GPS, capture timestamp 같은 file-level private detail을 AI service에 보내지 않고 opaque asset/group/plan ID와 상태만으로 작업할 수 있어야 한다.
 
 ## 기본 provenance 우선순위
 
@@ -86,22 +87,24 @@ PhotoArchiveKit은 이미 잘 해결된 문제를 다시 구현하지 않는다.
 
 현재 역할 분담:
 
-- PhotoArchiveKit core의 exact comparison은 catalog identity와 안전한 archive 판단에 필요한 작고 결정론적인 기능으로 유지한다. 같은 byte-size 후보의 파일 전체 SHA-256이 일치할 때만 exact duplicate로 본다.
-- Czkawka/Krokiet은 특히 perceptual image/video similarity 후보와 독립적인 exact cross-check에 활용한다. similarity는 deletion authority가 아니다.
+- PhotoArchiveKit core의 exact comparison은 dependency-free fallback과 destructive-operation 재검증을 위해 유지한다. 같은 byte-size 후보의 파일 전체 SHA-256이 일치할 때만 exact duplicate로 본다.
+- 대규모 library에서 `czkawka_cli`가 설치되어 있으면 size/prehash/cached full-hash pipeline을 exact candidate discovery accelerator로 우선 활용할 수 있다. PhotoArchiveKit은 candidate를 local에서 자체 검증하고 asset graph로 승격한다.
+- Czkawka/Krokiet의 가장 중요한 장기 역할은 perceptual image/video similarity다. similarity는 deletion authority가 아니다.
 - off-site file replica와 검증에는 rclone 같은 검증된 도구를 우선한다.
 - broad/obscure metadata 진단이 필요해지면 ExifTool/ffprobe를 우선 평가하고 범용 parser를 새로 만들지 않는다.
 - Apple media metadata와 Photos 연동은 공식 ImageIO/AVFoundation/PhotoKit이 요구를 충분히 충족하는 범위에서 공식 경로를 우선한다.
 - osxphotos가 Apple Photos query/export/album 작업에서 자체 구현보다 더 완전하고 안정적인 경로를 제공하면 optional adapter로 활용할 수 있다. 같은 기능을 공식 PhotoKit이 더 잘 제공하면 PhotoKit이 우선이다.
 
-그러나 외부 도구는 핵심 semantic truth를 소유하지 않는다. 최종 관계도와 사용자 결정은 portable filesystem + SQLite에 남긴다.
+그러나 외부 도구는 핵심 semantic truth를 소유하지 않는다. 최종 관계도, Live Photo atomicity, provenance preference, canonical coverage, archive plan과 사용자 결정은 portable filesystem + SQLite에 남긴다. 외부 tool의 raw hash/cache/metadata output은 local adapter 안에서만 처리하고 agent-safe output에는 전달하지 않는다.
 
 특히 duplicate cleanup에서는 다음 경계를 지킨다.
 
 - Czkawka/Krokiet의 exact-duplicate 결과는 강한 resource-level evidence지만 곧바로 deletion authority가 되지 않는다.
 - non-Takeout과 Google Takeout에 byte-identical resource가 함께 있으면 사용자 정책상 non-Takeout representation을 우선한다.
 - standalone asset은 non-Takeout exact copy가 검증되면 Takeout occurrence를 redundant candidate로 자동 제안할 수 있다.
-- Live Photo는 still과 paired video가 모두 complete하고 role별 exact copy가 non-Takeout에 존재할 때만 Takeout occurrence 전체를 automatic redundant candidate로 올린다.
-- 한쪽 resource만 exact duplicate이거나 occurrence가 incomplete/ambiguous하면 review 대상으로 남긴다.
+- 일반적인 Live Photo occurrence 비교에서는 still과 paired video가 모두 complete하고 role별 exact copy가 non-Takeout에 존재할 때 occurrence 전체를 automatic redundant candidate로 올린다.
+- 같은 identifier가 한 Takeout root 안에 여러 번 반복되더라도 non-Takeout에 complete canonical pair가 있고 **그 logical asset의 모든 Takeout resource가 역할별 exact copy로 완전히 cover**되면 내부 occurrence pairing을 먼저 확정하지 않아도 Takeout set 전체를 automatic redundant candidate로 올릴 수 있다. 이를 canonical coverage라고 한다.
+- canonical coverage가 성립하지 않고 한쪽 resource만 exact duplicate이거나 occurrence가 incomplete/ambiguous하면 review 대상으로 남긴다.
 - Takeout 내부에서 동일 media가 연도 folder와 album folder 등에 반복되어도 collection/album 의미를 catalog로 옮기기 전에는 단순히 한 파일만 남기고 제거하지 않는다.
 
 ExifTool은 broad metadata diagnostic의 optional 도구다. required core가 사용하는 촬영시각·QuickTime·Live Photo linkage의 좁은 범위는 Apple system framework로 처리하되, ExifTool 전체 기능을 재구현하지 않는다. osxphotos도 required dependency가 아니라 Apple Photos library query/export/album interoperability를 위한 optional bridge이며, 장기적인 공식 write path는 PhotoKit을 우선한다.

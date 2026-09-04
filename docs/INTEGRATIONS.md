@@ -26,7 +26,7 @@ normal integration pattern:
 2. PhotoArchiveKit이 `PATH` 또는 explicit configuration으로 executable을 찾는다.
 3. small adapter가 argument array를 사용해 별도 process로 호출한다.
 4. adapter는 필요한 최소 result만 parse한다.
-5. agent-facing output에는 path, boolean, confidence, opaque group ID만 포함하고 raw hash, frame, feature data는 포함하지 않는다.
+5. local adapter는 raw output을 필요한 만큼 parse할 수 있지만 agent-safe output에는 opaque ID, provenance/status/count/confidence만 포함한다. raw hash, cache entry, metadata dump, frame/feature뿐 아니라 filename/path도 전달하지 않는다.
 
 PhotoArchiveKit은 optional binary를 조용히 download하거나 release 안으로 copy하지 않는다.
 
@@ -70,15 +70,15 @@ PhotoArchiveKit은 catalog identity와 archive safety에 필요한 local exact-r
 
 future `czkawka_cli` adapter의 주 역할은 다음과 같다.
 
+- large-library exact duplicate **candidate discovery accelerator**
+- 초기 real-library audit나 release validation에서 PhotoArchiveKit exact 결과를 독립적으로 cross-check
 - perceptually similar image candidate
 - similar-video candidate
-- 초기 real-library audit나 release validation에서 PhotoArchiveKit exact 결과를 독립적으로 cross-check
-- 성능상 이득이 검증될 경우 optional candidate-generation/acceleration
 - 지원되는 경우 추가 broken-file diagnostic
 
-정상적인 매 scan마다 Czkawka exact scan을 반드시 한 번 더 돌릴 필요는 없다. PhotoArchiveKit exact engine이 안정화된 뒤에는 Czkawka exact mode를 독립 검증·회귀 점검에 사용하고, 평상시 가장 큰 추가 가치는 **byte가 다르지만 같은 촬영물일 가능성이 있는 image/video similarity 후보**를 찾는 것이다.
+Czkawka는 size -> prehash -> cached full-hash pipeline과 mature cache를 제공하므로, 사용자의 Mac처럼 이미 설치되어 있고 대규모 root를 반복 scan하는 환경에서는 **평상시 exact candidate discovery에도 우선 사용하는 것이 합리적**이다. 다만 Czkawka가 final deletion authority가 되지는 않는다. PhotoArchiveKit은 candidate를 local process 안에서 받아 Live Photo/provenance/canonical-coverage graph에 결합하고, destructive plan/apply 직전에는 자체 fresh SHA-256 또는 direct byte comparison으로 다시 검증한다. Czkawka가 없으면 native SHA-256 scanner가 정상 fallback이다.
 
-similarity는 review signal이며 automatic deletion authority가 아니다. raw perceptual hash, frame, cache는 로컬에 유지한다.
+perceptual similarity는 Czkawka/Krokiet이 장기적으로 맡을 전문 영역이며 review signal이지 automatic deletion authority가 아니다. raw exact/perceptual hash, frame, cache는 로컬에 유지한다.
 
 upstream repository의 component는 distribution boundary가 다르다. CLI/core는 optional subprocess target으로 적합하며 Krokiet은 PhotoArchiveKit에 embed/redistribute하지 않는다. 사용자는 GUI를 독립적으로 사용할 수 있다.
 

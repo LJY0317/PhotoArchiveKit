@@ -2,6 +2,13 @@
 
 PhotoArchiveKit은 의도적으로 작고 safety-first인 프로젝트다. contribution도 이 성격을 유지해야 한다.
 
+## Branch와 commit workflow
+
+- 기본 개발 branch는 `dev`다. 평소 작업은 `dev`에서 하고 안정화된 checkpoint만 `main`으로 승격한다.
+- 의미 있는 작은 단위마다 local commit을 남기고, 모든 commit을 자동으로 push하지 않는다. remote 공유·CI·backup 가치가 있는 굵직한 checkpoint 또는 명시적 요청이 있을 때 `dev`를 push한다.
+- commit message는 작은 PR 수준으로 작성한다. 제목 뒤 본문에 **문제/변경 내용/검증/privacy·safety 영향/남은 작업**을 적는다.
+- `main`으로 올리기 전에는 최소 `swift build`, self-test, public-tree check를 통과하고 관련 real-library validation이 있으면 재확인한다.
+
 ## 변경 전 확인
 
 1. `AGENTS.md`, `STATE.md`, 관련 design document를 읽는다.
@@ -25,7 +32,8 @@ scanner 변경 시에는 disposable directory에서도 테스트하고 input byt
 
 - Live Photo resource를 하나의 logical asset으로 취급한다.
 - basename만이 아니라 embedded linkage로 pair한다.
-- raw hash와 media-derived identifier를 일반 report에 넣지 않는다.
+- raw hash와 media-derived identifier를 agent-safe report에 넣지 않는다.
+- AI agent에는 `--agent-json` 같은 privacy-minimized interface만 사용하고 filename/path, capture timestamp, byte size 등 file-level private detail도 보내지 않는다.
 - scan, plan, apply를 분리한다.
 - 사용할 수 없는 external root를 deletion으로 해석하지 않는다.
 - similarity는 review signal이지 deletion authority가 아니다.

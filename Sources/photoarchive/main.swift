@@ -36,6 +36,7 @@ struct PhotoArchiveCLI {
     private static func runScan(_ arguments: [String]) async throws {
         var catalogURL = PhotoArchivePaths.defaultCatalogURL
         var outputJSON = false
+        var outputAgentJSON = false
         var computeExactDuplicates = true
         var eventGapHours = 6.0
         var maxConcurrency = min(max(ProcessInfo.processInfo.activeProcessorCount, 1), 8)
@@ -49,6 +50,8 @@ struct PhotoArchiveCLI {
                 catalogURL = fileURL(try value(after: argument, at: &index, in: arguments))
             case "--json":
                 outputJSON = true
+            case "--agent-json":
+                outputAgentJSON = true
             case "--no-exact-duplicates":
                 computeExactDuplicates = false
             case "--event-gap-hours":
@@ -118,6 +121,9 @@ struct PhotoArchiveCLI {
         guard !roots.isEmpty else {
             throw CLIError("No source roots were supplied. Run 'photoarchive scan --help'.")
         }
+        if outputJSON && outputAgentJSON {
+            throw CLIError("Use either --json or --agent-json, not both.")
+        }
 
         let scanner = try ArchiveScanner(catalogURL: catalogURL)
         let report = try await scanner.scan(
@@ -129,7 +135,12 @@ struct PhotoArchiveCLI {
             )
         )
 
-        if outputJSON {
+        if outputAgentJSON {
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+            let data = try encoder.encode(AgentSafeScanReport(report: report))
+            print(String(decoding: data, as: UTF8.self))
+        } else if outputJSON {
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
             encoder.dateEncodingStrategy = .iso8601
@@ -303,14 +314,16 @@ struct PhotoArchiveCLI {
 
             Other options:
               --catalog PATH             SQLite catalog path
-              --json                     Print the full sanitized JSON report
+              --json                     Print the full local diagnostic JSON report
+              --agent-json               Print path-free, metadata-minimized JSON for AI agents
               --no-exact-duplicates      Skip local SHA-256 duplicate comparisons
               --event-gap-hours NUMBER   Start a new event after this gap (default: 6)
               --jobs NUMBER              Concurrent metadata probes, 1-64
               --help                     Show this help
 
-            The JSON report includes file paths and opaque group IDs, but never raw
-            hashes or Live Photo content identifiers.
+            --json is for local human diagnostics and includes paths. AI agents should
+            use --agent-json, which omits catalog/root/file paths, filenames, byte sizes,
+            capture timestamps, folder suggestions, raw hashes, and Live Photo identifiers.
             """
         )
     }

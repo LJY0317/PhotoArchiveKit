@@ -51,7 +51,7 @@ byte 보존 복제본          provenance와 이력
 - 선택적 외부 도구의 설치 여부만 감지하며 필수 의존성으로 만들지 않음
 - 현재 모든 작업에서 media 파일을 변경하지 않고 network에 접속하지 않음
 
-정확한 중복 판정을 위해 catalog 내부에는 raw exact-file hash가 저장됩니다. 하지만 일반 CLI 및 agent용 report에는 raw hash와 Live Photo content identifier가 절대로 포함되지 않습니다.
+정확한 중복 판정을 위해 catalog 내부에는 raw exact-file hash가 저장됩니다. 사람용 local diagnostic과 AI agent용 output은 분리합니다. `--json`은 troubleshooting을 위해 local path를 포함할 수 있지만, `--agent-json`은 path·filename·byte size·capture timestamp·raw hash·Live Photo identifier·GPS·preview 등 file-level private data를 제거합니다. AI agent는 agent-safe surface만 사용합니다.
 
 ## 실제 ingest 검증 결과
 
@@ -110,11 +110,19 @@ swift run photoarchive scan \
 
 등록한 root가 서로 중첩되어 있으면 가장 구체적인 root가 해당 파일을 소유합니다. 따라서 위 예시의 Takeout folder는 `~/Pictures`를 통해 다시 scan되지 않으며, 파일 byte만으로 출처를 구분할 수 없는 exact copy도 Google Takeout provenance를 유지할 수 있습니다.
 
-전체 privacy-safe JSON report를 출력합니다.
+사람이 로컬에서 확인하는 diagnostic JSON을 출력합니다. 이 mode는 path를 포함할 수 있습니다.
 
 ```bash
 swift run photoarchive scan --json --inbox "~/Photo Inbox"
 ```
+
+AI agent workflow에서는 privacy-minimized report를 사용합니다.
+
+```bash
+swift run photoarchive scan --agent-json --inbox "~/Photo Inbox"
+```
+
+agent-safe report는 opaque ID, provenance/status/count, 관계만 제공하며 filename/path, raw fingerprint, media content, capture timestamp, exact byte size를 노출하지 않습니다.
 
 실험에서는 별도 임시 catalog를 사용할 수 있습니다.
 
@@ -158,7 +166,8 @@ option 없이 입력한 path는 Inbox로 처리합니다.
 그 밖의 option:
 
 - `--catalog PATH` — SQLite catalog 경로 지정
-- `--json` — privacy-safe JSON 출력
+- `--json` — 사람용 local diagnostic JSON; path/filename을 포함할 수 있음
+- `--agent-json` — AI agent용 privacy-minimized JSON
 - `--no-exact-duplicates` — 로컬 SHA-256 비교 생략
 - `--event-gap-hours NUMBER` — 이 시간보다 긴 공백이 있으면 새 event로 분리, 기본값 6시간
 - `--jobs NUMBER` — 동시에 실행할 metadata probe 수 제한
@@ -190,6 +199,12 @@ Apple PhotoKit은 사용자 승인을 받은 로컬 macOS client가 Photos asset
 현재 Google Photos Library API는 지원되는 일반 media를 album 지정 없이 library에 올릴 수 있으므로, album 자동 동기화가 불가능하더라도 평면 업로드 기능 자체는 유용합니다. 반면 기존 library 읽기와 album 작업은 대부분 app-created content로 제한되며, public upload model에는 still과 paired video를 하나의 composite Live Photo로 만드는 문서화된 operation이 없습니다. 따라서 향후 Google adapter는 가능한 일반 media의 평면 업로드를 지원하되, 검증된 Live Photo를 두 개의 독립 항목으로 나누어 올리고 보존에 성공했다고 표시하지 않습니다.
 
 날짜가 명시된 기능 matrix와 공식 문서 링크는 [Provider 기능](docs/PROVIDER_CAPABILITIES.md)에 있습니다.
+
+## Privacy-safe AI agent 경계
+
+PhotoArchiveKit이 존재하는 핵심 이유 중 하나는 AI agent가 사용자의 media나 private file-level metadata를 받지 않고도 duplicate group, Live Photo completeness, provenance, archive plan을 다룰 수 있게 하는 것입니다. hash, content identifier, broad metadata dump, filename/path, preview, timestamp는 local process 안에 남고 agent는 opaque asset/group/plan ID와 semantic decision만 받습니다.
+
+이 보장은 PhotoArchiveKit의 agent-safe interface에 적용됩니다. general-purpose AI shell에 개인 media를 직접 노출하면 이 경계를 우회할 수 있습니다. 자세한 내용은 [Privacy model](docs/PRIVACY.md)과 [Agent interface](docs/AGENT_INTERFACE.md)를 참고하십시오.
 
 ## Live Photo 안전 모델
 

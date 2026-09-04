@@ -1,5 +1,11 @@
 # PhotoArchiveKit 프로젝트 지침
 
+## 개발 브랜치와 commit
+- 기본 개발 브랜치는 `dev`다. 새 작업을 시작할 때 먼저 `dev`를 확인하고, 안정화된 checkpoint만 `main`으로 올린다.
+- 평소에는 remote push보다 local commit을 우선한다. 의미 있는 단위마다 commit하되, push는 공유·CI·backup 가치가 있는 굵직한 checkpoint 또는 사용자의 명시적 요청이 있을 때만 한다.
+- commit message는 작은 PR 설명 수준으로 남긴다. 한 줄 제목만 쓰지 말고 문제/변경/검증/privacy·safety 영향/남은 작업을 본문에 기록한다.
+- `main`은 안정화 branch다. `dev`에서 build, self-test, public-tree check와 관련 real-library validation이 통과한 뒤에만 merge/fast-forward 대상으로 삼는다.
+
 ## 제품 범위
 - `docs/PROJECT_NORTH_STAR.md`를 제품 범위의 최우선 gate로 사용한다. 새 기능을 제안하거나 구현하기 전에 반드시 읽는다.
 - real library에서 duplicate reconciliation, Live Photo 보존, preferred representation 선택, folder archive plan, verified copy, portable semantic state의 완료 기준을 충족하기 전에는 주변 기능을 우선하지 않는다.
@@ -15,7 +21,9 @@
 
 ## 개인정보 보호
 - 개인 media, Takeout export, sidecar, catalog database, credential, provider token, raw hash, perceptual hash, feature vector, GPS coordinate, Live Photo content identifier, 개인 absolute path를 절대 commit하지 않는다.
-- raw hash와 media-derived identifier는 로컬에서 처리할 수 있지만, 일반 report와 agent-facing output에는 boolean, confidence level, opaque group ID만 노출한다.
+- AI agent는 local media-processing trust boundary 밖에 둔다. 정상 agent workflow에서 raw hash, raw identifier, GPS, MakerNote, thumbnail/frame/audio, filename, relative path, canonical path, catalog path, exact byte size, capture timestamp 같은 개인 media/file detail을 읽거나 전달할 필요가 없도록 interface를 설계한다.
+- local process는 필요한 민감 값을 계산할 수 있지만 agent에는 opaque root/asset/group/plan ID, provenance category, role, status, count, confidence, warning code 같은 최소 semantic result만 제공한다. AI service로 개인 media byte나 media-derived fingerprint를 보내는 기능은 core에 두지 않는다.
+- 사람이 로컬에서 보는 diagnostic output과 agent-safe output을 구분한다. AI agent에는 `--agent-json` 같은 privacy-minimized surface를 사용하고 path를 포함하는 일반 diagnostic output을 전달하지 않는다.
 - repository fixture는 synthetic/generated data이거나 공개를 명시적으로 승인받은 자료만 사용한다.
 
 ## 의존성과 라이선스
