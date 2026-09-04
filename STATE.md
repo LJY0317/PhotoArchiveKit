@@ -130,7 +130,7 @@ swift run photoarchive-selftest
 - synthetic tracking test에서 같은 volume의 file rename 후 resource ID가 유지되고 old/new path가 location history로 남으며, `.photoarchive-root`가 있는 root directory 자체를 다른 path로 이동한 뒤에도 root ID가 유지됨을 확인했다.
 - organization synthetic apply test에서 `IMG_1234.HEIC + IMG_1234.MOV`가 같은 capture-time destination basename으로 함께 이동하고 custom filename은 보존되며 marker gate, post-move filesystem ID/size, restore manifest, agent-safe path redaction이 동작함을 확인했다. 별도 tracking fixture에서는 full rescan 없이 catalog resource path가 즉시 갱신되고 stable resource ID와 old/new location history가 유지되는 것, synthetic catalog commit failure 시 모든 filesystem move가 원위치 rollback되는 것도 검증했다.
 - real-library `organize`를 stable root marker 초기화 후 실제 적용했다. `2,765` AUTO item / `4,292` resource가 capture-time flat name으로 이동됐고 manifest `complete`, old source 잔존 0, destination 누락 0, size mismatch 0을 확인했다. resource `22,232`, logical asset `8,178`, logical Live Photo `2,710`, exact reconciliation `AUTO 0 / REVIEW 227`은 유지됐다. 적용 후 이미 정리된 1,527 Live Photo를 custom-name REVIEW로 다시 표시하던 idempotence 문제를 수정해 현재 organization plan은 `AUTO 0`, 실제 보류만 `628 item / 795 resource`다: filesystem fallback `58`, custom-name Live Photo `154 resource`, incomplete Live Photo `415 resource`, multiple physical representation `168 resource`.
-- 위 real organization manifest를 대상으로 `cleanup-empty-dirs --agent-json` dry-run을 수행해 removal candidate 412개를 확인했다. 후보는 organization source history로 제한되며 count-only local diagnostic에서 `.photoslibrary` 내부 0, Takeout 0, `Pictures` root 자체 0이었다. 실제 directory 삭제는 아직 수행하지 않았다.
+- 위 real organization manifest를 대상으로 `cleanup-empty-dirs --agent-json` dry-run을 수행해 removal candidate 412개를 확인했다. 후보는 organization source history로 제한되며 count-only local diagnostic에서 `.photoslibrary` 내부 0, Takeout 0, `Pictures` root 자체 0이었다. 이후 같은 manifest에 `--apply`를 수행해 412개 directory를 제거했고, 즉시 다시 dry-run하여 잔여 후보 0을 확인했다.
 
 private fixture와 temporary catalog는 repository에 포함하지 않는다.
 
@@ -171,7 +171,7 @@ private fixture와 temporary catalog는 repository에 포함하지 않는다.
 6. preferred-representation plan을 immutable persisted plan으로 발전시키고 direct byte verification 옵션과 stable replay precondition을 추가한다.
 7. 실제 `~/Pictures`와 향후 HDD archive root에 stable root marker를 사용자 승인 후 초기화하고 relocation fixture를 real filesystem에서 확인
 8. organization apply 전 persisted immutable plan/approval token은 향후 offline/replay mutation에 필요할 때 추가한다. same-session organize는 post-move catalog transaction까지 이미 완료됨
-9. verified `cleanup-empty-dirs` 구현과 real dry-run 412개 검증은 완료됐다. 사용자 local `--apply` 후 removed-count/manifest/postcondition만 확인하면 이 단계도 완료로 닫는다.
+9. `cleanup-empty-dirs`는 real library apply와 postcondition까지 완료로 닫는다. 같은 organization manifest 기준 412 directory 제거 후 잔여 후보 0을 확인했다.
 10. strict Live Photo timed-metadata validation 추가
 11. versioned sanitized JSONL catalog export/restore 추가
 12. HDD archive destination plan, verified copy, rclone replica/check adapter 추가
