@@ -131,6 +131,7 @@ struct PhotoArchiveSelfTest {
             from: archiveReport,
             destinationURL: archiveDestination
         )
+        try require(archivePlan.schemaVersion == 2, "archive plan should use replay schema v2")
         try require(archivePlan.mediaFilesModified == false, "archive planning must not modify media")
         try require(archivePlan.summary.automaticItemCount == 1, "expected one canonical archive item")
         try require(archivePlan.summary.automaticResourceCount == 1, "expected one canonical archive resource")
@@ -171,9 +172,185 @@ struct PhotoArchiveSelfTest {
         try require(!archiveAgentJSON.contains(archiveDestination.path), "agent-safe archive plan exposed destination path")
         try require(!archiveAgentJSON.contains("one.jpg"), "agent-safe archive plan exposed a filename")
         try require(
+            !archiveAgentJSON.contains(archiveReport.catalogPath),
+            "agent-safe archive plan exposed a catalog path"
+        )
+        try require(
             !archiveAgentJSON.contains(archiveDestinationMarker.markerKey),
             "agent-safe archive plan exposed a destination marker key"
         )
+
+        let archiveCopySourceA = temporary.appendingPathComponent("ArchiveCopySourceA", isDirectory: true)
+        let archiveCopySourceB = temporary.appendingPathComponent("ArchiveCopySourceB", isDirectory: true)
+        try fileManager.createDirectory(at: archiveCopySourceA, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: archiveCopySourceB, withIntermediateDirectories: true)
+        _ = try RootMarkerStore.create(at: archiveCopySourceA)
+        _ = try RootMarkerStore.create(at: archiveCopySourceB)
+        let archiveCopySourceFileA = archiveCopySourceA.appendingPathComponent("one.jpg")
+        let archiveCopySourceFileB = archiveCopySourceB.appendingPathComponent("copy.jpg")
+        try bytes.write(to: archiveCopySourceFileA)
+        try bytes.write(to: archiveCopySourceFileB)
+        let archiveCopyCatalogURL = temporary.appendingPathComponent("archive-copy-catalog.sqlite3")
+        let archiveCopyScanner = try ArchiveScanner(catalogURL: archiveCopyCatalogURL)
+        let archiveCopyReport = try await archiveCopyScanner.scan(roots: [
+            ScanRoot(url: archiveCopySourceA, kind: .reference, provenance: .localLibrary),
+            ScanRoot(url: archiveCopySourceB, kind: .reference, provenance: .googleTakeout)
+        ])
+
+        let archiveCopyDestination = temporary.appendingPathComponent("ArchiveCopyDestination", isDirectory: true)
+        try fileManager.createDirectory(at: archiveCopyDestination, withIntermediateDirectories: true)
+        let archiveCopyDestinationMarker = try RootMarkerStore.create(at: archiveCopyDestination)
+        let archiveCopyPlan = try archiveCopyScanner.makeArchivePlan(
+            from: archiveCopyReport,
+            destinationURL: archiveCopyDestination
+        )
+        let archiveCopyPlanURL = temporary.appendingPathComponent("archive-copy-plan.json")
+        try ArchivePlanStore.write(archiveCopyPlan, to: archiveCopyPlanURL)
+        let archiveCopyDryRun = try ArchiveCopyExecutor.preflight(planURL: archiveCopyPlanURL)
+        try require(archiveCopyDryRun.dryRun, "archive-copy should default to dry-run")
+        try require(
+            archiveCopyDryRun.copyRequiredResourceCount == 1
+                && archiveCopyDryRun.automaticResourceCount == 1,
+            "archive-copy dry-run should require exactly one canonical synthetic resource"
+        )
+        let archiveDryRunSourceA = try Data(contentsOf: archiveCopySourceFileA)
+        let archiveDryRunSourceB = try Data(contentsOf: archiveCopySourceFileB)
+        try require(
+            archiveDryRunSourceA == beforeA && archiveDryRunSourceB == beforeB,
+            "archive-copy dry-run modified source media"
+        )
+        let archiveCopyAgentJSON = String(
+            decoding: try encoder.encode(AgentSafeArchiveCopyReport(report: archiveCopyDryRun)),
+            as: UTF8.self
+        )
+        try require(
+            !archiveCopyAgentJSON.contains(archiveCopySourceA.path),
+            "agent-safe archive-copy exposed a source path"
+        )
+        try require(
+            !archiveCopyAgentJSON.contains(archiveCopyDestination.path),
+            "agent-safe archive-copy exposed a destination path"
+        )
+        try require(!archiveCopyAgentJSON.contains("one.jpg"), "agent-safe archive-copy exposed a filename")
+        try require(!archiveCopyAgentJSON.contains(rawHash), "agent-safe archive-copy exposed SHA-256")
+        try require(
+            !archiveCopyAgentJSON.contains(archiveCopyDestinationMarker.markerKey),
+            "agent-safe archive-copy exposed a destination marker key"
+        )
+
+        let archiveCopyApplied = try await ArchiveCopyExecutor.apply(planURL: archiveCopyPlanURL)
+        try require(archiveCopyApplied.filesModified, "archive-copy apply should create verified archive files")
+        try require(archiveCopyApplied.catalogCommitted, "archive-copy should commit the destination scan to catalog")
+        try require(archiveCopyApplied.snapshotWritten, "archive-copy should write a portable catalog snapshot")
+        guard let copiedRelativePath = archiveCopyPlan.items.first?.resources.first?.destinationRelativePath else {
+            throw SelfTestFailure("archive-copy plan is missing its destination")
+        }
+        let copiedURL = archiveCopyDestination.appendingPathComponent(copiedRelativePath)
+        try require(fileManager.fileExists(atPath: copiedURL.path), "archive-copy final resource is missing")
+        try require(try Data(contentsOf: copiedURL) == beforeA, "archive-copy changed canonical source bytes")
+        let archiveAppliedSourceA = try Data(contentsOf: archiveCopySourceFileA)
+        let archiveAppliedSourceB = try Data(contentsOf: archiveCopySourceFileB)
+        try require(
+            archiveAppliedSourceA == beforeA && archiveAppliedSourceB == beforeB,
+            "archive-copy apply moved or changed source media"
+        )
+        try require(
+            fileManager.fileExists(atPath: archiveCopyApplied.manifestPath),
+            "archive-copy complete manifest is missing"
+        )
+        try require(
+            fileManager.fileExists(atPath: archiveCopyApplied.snapshotPath),
+            "archive-copy portable catalog snapshot is missing"
+        )
+        try require(
+            try sqliteInt(
+                databaseURL: archiveCopyCatalogURL,
+                sql: "SELECT COUNT(*) FROM source_roots WHERE kind = 'archive'"
+            ) == 1,
+            "archive-copy destination scan should register one archive root"
+        )
+        try require(
+            try sqliteInt(
+                databaseURL: archiveCopyCatalogURL,
+                sql: "SELECT COUNT(*) FROM resources r JOIN source_roots sr ON sr.id = r.root_id WHERE sr.kind = 'archive' AND r.relative_path = '\(copiedRelativePath)'"
+            ) == 1,
+            "archive-copy destination resource was not committed to the catalog"
+        )
+
+        let archiveCopyReplay = try await ArchiveCopyExecutor.apply(planURL: archiveCopyPlanURL)
+        try require(!archiveCopyReplay.filesModified, "completed archive-copy replay should be idempotent")
+        try require(
+            archiveCopyReplay.alreadyFinalResourceCount == 1
+                && archiveCopyReplay.copyRequiredResourceCount == 0,
+            "completed archive-copy replay should reuse the verified final resource"
+        )
+
+        let archiveSnapshotBytes = try Data(contentsOf: URL(fileURLWithPath: archiveCopyReplay.snapshotPath))
+        try Data("tampered-archive-snapshot".utf8)
+            .write(to: URL(fileURLWithPath: archiveCopyReplay.snapshotPath))
+        do {
+            _ = try ArchiveCopyExecutor.preflight(planURL: archiveCopyPlanURL)
+            throw SelfTestFailure("archive-copy accepted a changed completed catalog snapshot")
+        } catch ArchiveCopyError.snapshotConflict {
+            // Expected: completed operation checkpoints re-verify their snapshot hash.
+        }
+        try archiveSnapshotBytes.write(to: URL(fileURLWithPath: archiveCopyReplay.snapshotPath))
+
+        let archiveCopyTamperDestination = temporary
+            .appendingPathComponent("ArchiveCopyTamperDestination", isDirectory: true)
+        try fileManager.createDirectory(at: archiveCopyTamperDestination, withIntermediateDirectories: true)
+        _ = try RootMarkerStore.create(at: archiveCopyTamperDestination)
+        let archiveCopyTamperPlan = try archiveCopyScanner.makeArchivePlan(
+            from: archiveCopyReport,
+            destinationURL: archiveCopyTamperDestination
+        )
+        let archiveCopyTamperPlanURL = temporary.appendingPathComponent("archive-copy-tamper-plan.json")
+        try ArchivePlanStore.write(archiveCopyTamperPlan, to: archiveCopyTamperPlanURL)
+        let archiveCopySameSizeTamper = Data(repeating: 0x5A, count: beforeA.count)
+        try archiveCopySameSizeTamper.write(to: archiveCopySourceFileA)
+        do {
+            _ = try ArchiveCopyExecutor.preflight(planURL: archiveCopyTamperPlanURL)
+            throw SelfTestFailure("archive-copy accepted source bytes changed after immutable planning")
+        } catch ArchiveCopyError.sourcePreconditionFailed {
+            // Expected: apply independently verifies the planned source bytes.
+        }
+        try bytes.write(to: archiveCopySourceFileA)
+
+        let archiveCopyPlanObject = try JSONSerialization.jsonObject(
+            with: Data(contentsOf: archiveCopyTamperPlanURL)
+        )
+        guard var archiveCopyPlanDictionary = archiveCopyPlanObject as? [String: Any],
+              var archiveCopyItems = archiveCopyPlanDictionary["items"] as? [[String: Any]],
+              !archiveCopyItems.isEmpty
+        else {
+            throw SelfTestFailure("could not decode archive-copy plan for tamper regression")
+        }
+        archiveCopyItems[0]["assetID"] = "A-TAMPERED"
+        archiveCopyPlanDictionary["items"] = archiveCopyItems
+        let catalogTamperedPlanURL = temporary.appendingPathComponent("archive-copy-catalog-tampered.json")
+        try JSONSerialization.data(withJSONObject: archiveCopyPlanDictionary, options: [.sortedKeys])
+            .write(to: catalogTamperedPlanURL)
+        do {
+            _ = try ArchiveCopyExecutor.preflight(planURL: catalogTamperedPlanURL)
+            throw SelfTestFailure("archive-copy accepted plan semantics that no longer match catalog evidence")
+        } catch ArchiveCopyError.catalogEvidenceMismatch {
+            // Expected: plan bytes alone are not sufficient authority for copying.
+        }
+
+        var nonAtomicPlanDictionary = archiveCopyPlanDictionary
+        var nonAtomicItems = archiveCopyItems
+        nonAtomicItems[0]["assetID"] = archiveCopyTamperPlan.items[0].assetID
+        nonAtomicItems[0]["kind"] = "live_photo"
+        nonAtomicPlanDictionary["items"] = nonAtomicItems
+        let nonAtomicPlanURL = temporary.appendingPathComponent("archive-copy-non-atomic.json")
+        try JSONSerialization.data(withJSONObject: nonAtomicPlanDictionary, options: [.sortedKeys])
+            .write(to: nonAtomicPlanURL)
+        do {
+            _ = try ArchiveCopyExecutor.preflight(planURL: nonAtomicPlanURL)
+            throw SelfTestFailure("archive-copy accepted a one-resource Live Photo item")
+        } catch ArchiveCopyError.invalidPlan {
+            // Expected: Live Photo copy authority always covers both roles.
+        }
 
         let sameSizeTamper = Data(repeating: 0x5A, count: beforeA.count)
         try sameSizeTamper.write(to: fileA)

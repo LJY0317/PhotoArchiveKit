@@ -24,6 +24,8 @@ struct PhotoArchiveCLI {
                 try await runScan(arguments, mode: .organizePlan)
             case "archive-plan":
                 try await runScan(arguments, mode: .archivePlan)
+            case "archive-copy":
+                try await runArchiveCopy(arguments)
             case "organize":
                 try await runScan(arguments, mode: .organize)
             case "quarantine":
@@ -48,6 +50,79 @@ struct PhotoArchiveCLI {
         } catch {
             writeStandardError("error: \(error.localizedDescription)\n")
             exit(1)
+        }
+    }
+
+    private static func runArchiveCopy(_ arguments: [String]) async throws {
+        var catalogURL: URL?
+        var destinationURL: URL?
+        var rootBindings: [ArchiveCopyRootBinding] = []
+        var apply = false
+        var outputJSON = false
+        var outputAgentJSON = false
+        var planPaths: [String] = []
+
+        var index = 0
+        while index < arguments.count {
+            let argument = arguments[index]
+            switch argument {
+            case "--catalog":
+                catalogURL = fileURL(try value(after: argument, at: &index, in: arguments))
+            case "--to":
+                destinationURL = fileURL(try value(after: argument, at: &index, in: arguments))
+            case "--bind-root":
+                rootBindings.append(try parseArchiveCopyRootBinding(
+                    try value(after: argument, at: &index, in: arguments)
+                ))
+            case "--apply":
+                apply = true
+            case "--json":
+                outputJSON = true
+            case "--agent-json":
+                outputAgentJSON = true
+            case "--help", "-h":
+                printArchiveCopyHelp()
+                return
+            default:
+                if argument.hasPrefix("-") {
+                    throw CLIError("Unknown archive-copy option: \(argument)")
+                }
+                planPaths.append(argument)
+            }
+            index += 1
+        }
+
+        guard planPaths.count == 1 else {
+            throw CLIError("archive-copy requires exactly one immutable archive plan path.")
+        }
+        if outputJSON && outputAgentJSON {
+            throw CLIError("Use either --json or --agent-json, not both.")
+        }
+
+        let planURL = fileURL(planPaths[0])
+        let report: ArchiveCopyReport
+        if apply {
+            report = try await ArchiveCopyExecutor.apply(
+                planURL: planURL,
+                rootBindings: rootBindings,
+                destinationURL: destinationURL,
+                catalogURL: catalogURL
+            )
+        } else {
+            report = try ArchiveCopyExecutor.preflight(
+                planURL: planURL,
+                rootBindings: rootBindings,
+                destinationURL: destinationURL,
+                catalogURL: catalogURL
+            )
+        }
+
+        if outputAgentJSON {
+            try printJSON(AgentSafeArchiveCopyReport(report: report))
+        } else if outputJSON {
+            try printJSON(report)
+        } else {
+            printArchiveCopyReport(report)
         }
     }
 
@@ -669,6 +744,29 @@ struct PhotoArchiveCLI {
         print("No media files were modified.")
     }
 
+    private static func printArchiveCopyReport(_ report: ArchiveCopyReport) {
+        print(report.dryRun ? "PhotoArchiveKit archive copy dry run" : "PhotoArchiveKit archive copy")
+        print("Plan: \(report.planID)")
+        print("Automatic items: \(report.automaticItemCount)")
+        print("Automatic resources: \(report.automaticResourceCount)")
+        print("Review items skipped: \(report.reviewItemCount)")
+        print("Already final: \(report.alreadyFinalResourceCount)")
+        print("Verified staging: \(report.stagedResourceCount)")
+        print("Copy required: \(report.copyRequiredResourceCount)")
+        print("Catalog committed: \(report.catalogCommitted)")
+        print("Portable snapshot written: \(report.snapshotWritten)")
+        print("Manifest: \(report.manifestPath)")
+        print("Snapshot: \(report.snapshotPath)")
+        print("")
+        if report.dryRun {
+            print("No archive media files were created. Re-run with --apply only after reviewing this preflight.")
+        } else if report.filesModified {
+            print("AUTO resources were copied and byte-verified; source media was not moved or deleted.")
+        } else {
+            print("The recorded archive copy was already complete and verified; no files changed.")
+        }
+    }
+
     private static func printOrganizationApplyReport(_ report: OrganizationApplyReport) {
         print(report.dryRun ? "PhotoArchiveKit organization dry run" : "PhotoArchiveKit organization applied")
         print("Session: \(report.sessionID)")
@@ -887,6 +985,18 @@ struct PhotoArchiveCLI {
         return CatalogRootBinding(rootID: rootID, url: fileURL(path))
     }
 
+    private static func parseArchiveCopyRootBinding(_ value: String) throws -> ArchiveCopyRootBinding {
+        guard let separator = value.firstIndex(of: "="), separator != value.startIndex else {
+            throw CLIError("--bind-root must use ROOT_ID=PATH.")
+        }
+        let rootID = String(value[..<separator])
+        let path = String(value[value.index(after: separator)...])
+        guard !path.isEmpty else {
+            throw CLIError("--bind-root must use ROOT_ID=PATH.")
+        }
+        return ArchiveCopyRootBinding(rootID: rootID, url: fileURL(path))
+    }
+
     private static func value(
         after option: String,
         at index: inout Int,
@@ -911,6 +1021,7 @@ struct PhotoArchiveCLI {
               photoarchive plan [options] ROOT...
               photoarchive organize-plan [options] ROOT...
               photoarchive archive-plan --to PATH --output PLAN [options] ROOT...
+              photoarchive archive-copy [--apply] [--to PATH] [--bind-root ROOT_ID=PATH] PLAN
               photoarchive organize [--apply] [options] ROOT...
               photoarchive quarantine --to PATH [--apply] [options] ROOT...
               photoarchive restore-quarantine [--apply] [--catalog PATH] MANIFEST
@@ -928,10 +1039,36 @@ struct PhotoArchiveCLI {
 
             Run 'photoarchive scan --help', 'photoarchive plan --help',
             'photoarchive organize-plan --help', 'photoarchive archive-plan --help',
+            'photoarchive archive-copy --help',
             'photoarchive organize --help',
             'photoarchive quarantine --help', 'photoarchive restore-quarantine --help',
             'photoarchive cleanup-empty-dirs --help', or 'photoarchive catalog --help'
             for options.
+            """
+        )
+    }
+
+    private static func printArchiveCopyHelp() {
+        print(
+            """
+            Usage:
+              photoarchive archive-copy [options] PLAN
+
+            Options:
+              --catalog PATH             Override the SQLite catalog recorded by the plan
+              --to PATH                  Rebind a moved archive destination with the same marker
+              --bind-root ROOT_ID=PATH   Rebind a moved source root with the same marker; repeatable
+              --apply                    Copy, verify, finalize, catalog, and snapshot; default is dry-run
+              --json                     Print local diagnostic JSON including private state paths
+              --agent-json               Print privacy-minimized counts/status without paths or hashes
+              --help                     Show this help
+
+            archive-copy accepts only AUTO items from an immutable archive plan. It verifies
+            current catalog evidence, source root markers, source bytes, destination marker,
+            destination/staging bytes, and Live Photo item completeness. Apply copies through
+            .photoarchive staging, supports idempotent resume, then scans the verified archive
+            destination into the catalog and writes a portable catalog snapshot. Source media
+            is never deleted or moved.
             """
         )
     }

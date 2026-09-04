@@ -49,12 +49,12 @@ Roadmap은 작고 검증 가능한 layer를 우선한다. 어느 phase도 existi
 ## v0.3 — Safe archive application
 
 - [x] verified root marker 생성/인식과 marker-gated organization apply
-- [ ] staging copy, local byte verification, atomic finalization
+- [x] staging copy, local byte verification, Live Photo full-item pre-finalization verification, complete manifest 전 full destination verify
 - [x] quarantine/organization mutation에서 Live Photo resource-set transaction + session rollback
 - [x] same-session organization apply의 verified filesystem move -> stable resource path/location-history SQLite transaction; commit failure 시 filesystem rollback
-- [ ] checkpoint에서 interrupted session resume
+- [x] immutable plan hash + pending manifest + verified staging/final state를 이용한 interrupted archive-copy idempotent resume
 - [x] permanent deletion 대신 reversible quarantine + catalog SHA-256 재검증을 거치는 dry-run/apply `restore-quarantine`
-- [ ] archive metadata directory에 catalog snapshot
+- [x] verified destination scan 뒤 archive `.photoarchive/catalog`에 portable catalog snapshot 기록
 - [ ] replica policy 및 verification record
 - [ ] user-installed `rclone`을 사용하는 optional rclone adapter
 - [ ] 초기 default로 `rclone sync` 사용 금지

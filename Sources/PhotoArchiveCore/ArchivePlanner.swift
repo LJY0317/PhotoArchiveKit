@@ -63,6 +63,7 @@ public struct ArchivePlan: Codable, Sendable, Equatable {
     public let policy: String
     public let createdAt: Date
     public let scanSessionID: String
+    public let catalogPath: String
     public let sourceRoots: [ArchivePlanRoot]
     public let destination: ArchivePlanDestination
     public let summary: ArchivePlanSummary
@@ -380,11 +381,12 @@ public enum ArchivePlanner {
         let automatic = items.filter { $0.decision == .automatic }
         let review = items.filter { $0.decision == .review }
         return ArchivePlan(
-            schemaVersion: 1,
+            schemaVersion: 2,
             planID: "AP" + UUID().uuidString.replacingOccurrences(of: "-", with: ""),
             policy: "canonical_representation_year_folder_v1",
             createdAt: Date(timeIntervalSince1970: floor(Date().timeIntervalSince1970)),
             scanSessionID: report.sessionID,
+            catalogPath: report.catalogPath,
             sourceRoots: sourceRoots.sorted { $0.rootID < $1.rootID },
             destination: ArchivePlanDestination(
                 canonicalPath: destinationURL.path,

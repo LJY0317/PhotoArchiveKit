@@ -382,9 +382,39 @@ agent-safe output omits path/filename/marker key/byte size/SHA-256              
 end-to-end synthetic archive-plan CLI smoke                                      PASS
 ```
 
-Destination folder policy는 현재 `Media/YYYY`이고 trusted/available local capture year가 없으면 `Media/Undated`를 사용한다. 이 단계는 media를 copy하거나 delete하지 않는다. persisted plan은 source/destination path, marker key, relative path, exact byte size, expected SHA-256을 포함하므로 agent-safe/share-safe가 아닌 local-private replay authority다.
+Destination folder policy는 현재 `Media/YYYY`이고 trusted/available local capture year가 없으면 `Media/Undated`를 사용한다. 이 단계는 media를 copy하거나 delete하지 않는다. archive-copy replay까지 필요한 plan schema v2는 working catalog path, source/destination path, marker key, relative path, exact byte size, expected SHA-256을 포함하므로 agent-safe/share-safe가 아닌 local-private replay authority다.
 
-다음 archive milestone은 이 plan을 독립적으로 다시 검증하는 staging copy -> byte verify -> atomic finalization -> catalog commit이다. 실제 HDD root marker는 사용자 명시 승인 없이 자동 생성하지 않는다.
+## 2026-09-05 — Verified resumable archive copy executor
+
+`photoarchive archive-copy`를 추가해 immutable plan schema v2의 AUTO item만 실제 archive destination으로 copy할 수 있게 했다. 기본은 dry-run이고 `--apply`에서만 destination에 파일을 만든다. source media는 어떤 경우에도 move/delete하지 않는다.
+
+Copy authority는 plan 파일만 신뢰하지 않는다. apply/preflight가 working catalog의 현재 source resource ID, root ID, relative path, logical asset ID, role, byte size, exact SHA-256 evidence를 plan과 다시 비교하고, source/destination `.photoarchive-root` marker와 fresh source full-file SHA-256도 재검증한다. source root 또는 destination이 이동한 경우 같은 marker를 가진 path만 explicit rebind할 수 있다.
+
+Apply는 archive의 hidden `.photoarchive/staging/<plan-id>`를 사용한다. 각 AUTO item의 copy를 staging에서 byte-verify하고, Live Photo는 still+paired-video 전체가 staging/final에서 검증되어 있어야 missing member를 final path로 보낸다. plan byte 자체를 archive `.photoarchive/plans`에 보존하고 pending/complete manifest를 남기므로 interruption 뒤 재실행할 때 verified staging 또는 final resource를 재사용한다. complete manifest는 모든 final resource가 다시 full SHA-256 검증되고 destination root를 working catalog에 scan해 logical asset/role이 plan과 일치한 뒤에만 기록된다.
+
+Destination scan은 hidden `.photoarchive` control tree를 제외하며, ordinary duplicate candidate가 아니어서 exact hash가 비어 있을 수 있는 unique archive media에도 `computeArchiveIntegrityPreconditions`로 SHA-256을 완성한다. scan 성공 후 portable catalog JSONL snapshot을 `.photoarchive/catalog`에 기록하고 manifest에 snapshot SHA-256을 남긴다. completed operation 재진입 시 snapshot byte도 manifest hash와 다시 비교한다.
+
+Synthetic/self-test 및 executable CLI 검증:
+
+```text
+dry-run creates no archive media                                             PASS
+apply copies one canonical AUTO resource through staging                     PASS
+staging/final full SHA-256 verification                                      PASS
+source copies remain byte-identical and unmoved                              PASS
+destination archive root registered in working catalog                       PASS
+destination media linked through destination scan                            PASS
+archive-local portable catalog snapshot written                              PASS
+completed apply replay is no-op / already-final                              PASS
+same-size source tamper after plan rejected                                  PASS
+plan asset-ID semantic tamper rejected by current catalog evidence           PASS
+one-resource Live Photo plan rejected before copy                            PASS
+completed snapshot byte tamper rejected                                      PASS
+agent-safe copy report omits path/filename/marker/hash                        PASS
+hidden .photoarchive control files cataloged as sidecars                       0
+end-to-end archive-plan -> archive-copy dry-run/apply/replay CLI smoke        PASS
+```
+
+이 milestone은 synthetic/temporary filesystem에서 copy transaction과 catalog/snapshot lifecycle을 검증한 것이다. 실제 개인 library를 외장 HDD에 대량 copy하는 mutation은 아직 수행하지 않았으며, 사용자가 명시한 destination에서 dry-run을 다시 확인한 뒤 별도 real-library milestone으로 검증한다. 그 다음에는 user-installed rclone을 이용한 독립 replica/check가 남아 있다.
 
 ## 2026-09-04 — Product North Star 고정
 

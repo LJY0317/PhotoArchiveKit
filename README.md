@@ -16,7 +16,7 @@ PhotoArchiveKit is a local-first, session-based toolkit for preserving and organ
 
 The project is intentionally small. It does not run a background daemon, host a gallery server, or move media behind an opaque storage format. Media remains in ordinary filesystem folders; a local SQLite catalog records relationships and decisions that folders cannot express.
 
-> **Project status:** early safety-first prototype. `scan`, `plan`, and `organize-plan` are read-only; `archive-plan` is media-read-only and writes only a local-private immutable plan file. `quarantine` supports reversible exact-duplicate moves, while marker-gated `organize` can dry-run or apply only automatic iPhone-camera rename/flatten items. Permanent deletion, verified HDD archive copy, and cloud upload are not implemented yet.
+> **Project status:** early safety-first prototype. `scan`, `plan`, and `organize-plan` are read-only; `archive-plan` writes a local-private immutable plan; `archive-copy` defaults to a full dry-run and can explicitly copy/verify only AUTO archive items through resumable staging. `quarantine` supports reversible exact-duplicate moves, while marker-gated `organize` can apply only automatic iPhone-camera rename/flatten items. Permanent deletion, a real-library HDD archive apply, independent replica verification, and cloud upload are not completed yet.
 
 ## Why this exists
 
@@ -61,6 +61,7 @@ The initial CLI can:
 - keep same-volume resource identity stable across rename/move and recognize a moved source root through an optional `.photoarchive-root` marker;
 - generate a read-only `organize-plan` for only `IMG_####` / `IMG_E####` camera-style names, using capture wall-clock names such as `YYYY-MM-DD_HH-mm-ss[_NN]` while preserving custom filenames;
 - generate an immutable `archive-plan` against a marker-initialized destination: choose one canonical representation per logical asset, keep complete Live Photo still+paired-video resources atomic, freeze source/destination marker bindings and relative paths, freshly compare each AUTO source byte stream with exact SHA-256 evidence from the same scan/catalog state, and avoid existing destination filename collisions deterministically;
+- dry-run or apply `archive-copy` from immutable plan schema v2: independently re-check current catalog asset/role/hash evidence and root markers, copy each AUTO item through hidden `.photoarchive` staging, verify full SHA-256 before and after finalization, resume from already verified staging/final files, scan the completed archive root back into SQLite, and write a portable catalog JSONL snapshot into the archive control directory; source media is never moved or deleted;
 - require a stable root marker before `organize --apply`, keep Live Photo still+video on one destination basename, verify post-move filesystem identity/size, transactionally update the stable resource path/history in SQLite without a second full scan, write a restore manifest, and roll back filesystem moves if catalog commit fails;
 - let `cleanup-empty-dirs` consider only source directories proven by a completed organization manifest plus catalog location history, require the stable root marker, skip package/symlink boundaries, and remove only directories that are still literally empty at apply time;
 - produce a human-readable report or sanitized JSON;
@@ -125,7 +126,7 @@ swift run photoarchive plan \
   --takeout "~/Pictures/Takeout"
 ```
 
-For an AI agent, use `--agent-json` with `scan`, `plan`, `organize-plan`, `archive-plan`, `organize`, `quarantine`, `restore-quarantine`, `cleanup-empty-dirs`, or the `catalog` command reports; local diagnostic `--json` can contain paths. Persisted archive-plan and JSONL snapshot files themselves are **not** agent-safe because safe replay/disaster recovery requires local-private paths, filenames, marker bindings, and integrity preconditions.
+For an AI agent, use `--agent-json` with `scan`, `plan`, `organize-plan`, `archive-plan`, `archive-copy`, `organize`, `quarantine`, `restore-quarantine`, `cleanup-empty-dirs`, or the `catalog` command reports; local diagnostic `--json` can contain paths. Persisted archive-plan, archive-copy manifest, and JSONL snapshot files themselves are **not** agent-safe because safe replay/disaster recovery requires local-private paths, filenames, catalog paths, marker bindings, and integrity preconditions.
 
 Preview a quarantine without moving anything:
 
@@ -171,7 +172,21 @@ swift run photoarchive archive-plan \
   --takeout "~/Pictures/Takeout"
 ```
 
-The persisted plan is **local-private**: it contains source/destination paths, exact byte sizes, marker bindings, and expected SHA-256 preconditions. `--agent-json` exposes only opaque IDs, reason codes, and counts. `archive-plan` never copies or deletes media; verified staging/copy/apply is the next archive milestone.
+The persisted plan is **local-private**: schema v2 contains the working catalog path, source/destination paths, exact byte sizes, marker bindings, and expected SHA-256 preconditions. `--agent-json` exposes only opaque IDs, reason codes, and counts. `archive-plan` never copies or deletes media.
+
+Preview the immutable plan again at the copy boundary. The executor re-checks the plan against current catalog evidence and fresh source bytes, so the plan file alone is not sufficient copy authority:
+
+```bash
+swift run photoarchive archive-copy --agent-json \
+  "~/Library/Application Support/PhotoArchiveKit/archive-plan.json"
+```
+
+Only after the preflight succeeds, add `--apply`. AUTO resources are copied through `.photoarchive/staging/<plan-id>`, full-file SHA-256 is verified before and after finalization, and complete Live Photo items are staged as a full still+paired-video set before a missing member is finalized. A pending operation can be re-run idempotently: already verified staged or final files are reused. On completion the archive root is scanned back into the working catalog and a portable catalog snapshot is written under the archive's hidden `.photoarchive` directory. Source media is never moved or deleted.
+
+```bash
+swift run photoarchive archive-copy --apply --agent-json \
+  "~/Library/Application Support/PhotoArchiveKit/archive-plan.json"
+```
 
 Export a versioned disaster-recovery snapshot of the catalog's portable semantic state:
 

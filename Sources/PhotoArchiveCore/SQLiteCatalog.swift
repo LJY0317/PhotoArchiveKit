@@ -38,6 +38,16 @@ struct CatalogPersistenceResult {
     let duplicateGroupIDs: [Data: String]
 }
 
+struct ArchiveCopyCatalogEvidence {
+    let resourceID: String
+    let rootID: String
+    let relativePath: String
+    let assetID: String
+    let role: ResourceRole
+    let byteSize: Int64
+    let exactHash: Data
+}
+
 final class SQLiteCatalog {
     let url: URL
     private var database: OpaquePointer?
@@ -1129,6 +1139,44 @@ final class SQLiteCatalog {
             "SELECT exact_hash FROM resources WHERE id = ? AND last_seen_session = ?",
             bindings: [.text(resourceID), .text(sessionID)]
         )
+    }
+
+    func archiveCopyEvidence(resourceID: String) throws -> ArchiveCopyCatalogEvidence? {
+        try withStatement(
+            """
+            SELECT r.id, r.root_id, r.relative_path, ar.asset_id, ar.role, r.byte_size, r.exact_hash
+            FROM resources r
+            JOIN asset_resources ar ON ar.resource_id = r.id
+            WHERE r.id = ?
+            LIMIT 1
+            """,
+            bindings: [.text(resourceID)]
+        ) { statement in
+            let result = sqlite3_step(statement)
+            if result == SQLITE_DONE { return nil }
+            guard result == SQLITE_ROW,
+                  let resourceText = sqlite3_column_text(statement, 0),
+                  let rootText = sqlite3_column_text(statement, 1),
+                  let relativeText = sqlite3_column_text(statement, 2),
+                  let assetText = sqlite3_column_text(statement, 3),
+                  let roleText = sqlite3_column_text(statement, 4),
+                  let role = ResourceRole(rawValue: String(cString: roleText)),
+                  sqlite3_column_type(statement, 6) != SQLITE_NULL,
+                  let hashBytes = sqlite3_column_blob(statement, 6)
+            else {
+                throw sqliteError(sql: "SELECT archive copy evidence")
+            }
+            let hashCount = Int(sqlite3_column_bytes(statement, 6))
+            return ArchiveCopyCatalogEvidence(
+                resourceID: String(cString: resourceText),
+                rootID: String(cString: rootText),
+                relativePath: String(cString: relativeText),
+                assetID: String(cString: assetText),
+                role: role,
+                byteSize: sqlite3_column_int64(statement, 5),
+                exactHash: Data(bytes: hashBytes, count: hashCount)
+            )
+        }
     }
 
     private func queryText(_ sql: String, bindings: [SQLiteBinding]) throws -> String? {

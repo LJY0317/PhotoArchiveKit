@@ -54,7 +54,9 @@ catalog는 private application state다. `.gitignore`로 제외하며 sanitizati
 
 ### Immutable archive plan
 
-`photoarchive archive-plan`이 쓰는 persisted JSON도 agent-safe 파일이 아니다. 향후 copy/apply가 scan 시점의 결정을 독립적으로 재검증하려면 source/destination canonical path, stable root-marker key, resource relative path, exact byte size, destination relative path, expected SHA-256이 필요하다. 이 값들은 local replay authority이므로 plan 파일은 local-private으로 취급한다. AI agent에는 plan 본문이 아니라 `archive-plan --agent-json`의 opaque plan/item/asset ID, decision/reason, resource count만 전달한다.
+`photoarchive archive-plan`이 쓰는 persisted JSON도 agent-safe 파일이 아니다. `archive-copy`가 scan 시점의 결정을 독립적으로 재검증하려면 working catalog path, source/destination canonical path, stable root-marker key, resource relative path, exact byte size, destination relative path, expected SHA-256이 필요하다. 이 값들은 local replay authority이므로 plan 파일은 local-private으로 취급한다. AI agent에는 plan 본문이 아니라 `archive-plan --agent-json`의 opaque plan/item/asset ID, decision/reason, resource count만 전달한다.
+
+`archive-copy --apply`는 destination의 hidden `.photoarchive` 아래에 immutable plan copy, pending/complete operation manifest, staging checkpoint, portable catalog JSONL snapshot을 기록한다. 이 artifact도 local path/hash 또는 private semantic snapshot을 포함하므로 agent-safe가 아니다. 정상 agent workflow에서는 `AgentSafeArchiveCopyReport`의 plan ID, item/resource count, staged/final/copy-required count, catalog/snapshot completion boolean만 사용하며 manifest/snapshot path와 본문은 전달하지 않는다.
 
 ### Agent-safe report에 절대 포함하지 않는 항목
 

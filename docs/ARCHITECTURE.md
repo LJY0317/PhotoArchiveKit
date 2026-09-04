@@ -142,7 +142,7 @@ scan
   -> close session
 ```
 
-현재 구현은 read-only scan/reconciliation/organization planning, local-private immutable `archive-plan`, 제한된 reversible mutation(`quarantine`, marker-gated `organize`)까지 포함한다. archive-plan은 source/destination stable marker binding, canonical representation 선택, Live Photo atomic resource set, destination relative path, byte size, fresh SHA-256 precondition을 고정하지만 실제 HDD copy/apply는 아직 없다.
+현재 구현은 read-only scan/reconciliation/organization planning, local-private immutable `archive-plan`, resumable verified `archive-copy`, 제한된 reversible mutation(`quarantine`, marker-gated `organize`)까지 포함한다. archive-plan schema v2는 working catalog path, source/destination stable marker binding, canonical representation, Live Photo atomic resource set, destination relative path, byte size, fresh SHA-256 precondition을 고정한다. archive-copy는 plan을 current catalog evidence와 source byte에 다시 대조한 뒤 hidden staging -> final full-hash verification -> destination archive scan/catalog reconciliation -> archive-local portable snapshot 순서로 commit한다. 실제 개인 library의 외장 HDD apply는 아직 별도 validation으로 남아 있다.
 
 future plan은 immutable document이며 다음을 포함한다.
 
@@ -244,7 +244,7 @@ apply precondition:
 
 `photoarchive restore-quarantine`은 이 manifest를 역방향 mutation authority로 사용하되 기본은 dry-run이다. original source가 비어 있어야 하고, quarantined file은 expected size뿐 아니라 local SQLite에 보존된 원래 exact SHA-256과 fresh하게 다시 일치해야 한다. 적용 중 실패하면 이미 source로 돌아간 resource를 다시 quarantine으로 rollback한다. agent-safe restore report에는 manifest/source/destination path나 hash가 포함되지 않는다. 현재 두 real quarantine의 legacy v1 manifest까지 dry-run 호환성을 검증했으므로, 별도의 더 복잡한 quarantine recovery subsystem은 실제 실패 사례가 생기기 전까지 추가하지 않는다.
 
-stable root marker 기능은 구현됐지만 existing root에는 자동으로 marker를 쓰지 않는다. `archive-plan`의 AUTO item은 scan 때 기록한 source marker key가 plan 순간에도 그대로이고 fresh source SHA-256이 같은 scan/catalog의 exact evidence와 일치할 때만 생성된다. destination도 marker를 필수로 요구하고 existing path collision을 deterministic suffix로 피한다. 향후 archive copy/apply executor는 persisted plan의 marker/path/hash precondition을 독립적으로 다시 검증해야 하며, missing-root reconciliation은 user-initialized marker 없이는 수행하지 않는다.
+stable root marker 기능은 구현됐지만 existing root에는 자동으로 marker를 쓰지 않는다. `archive-plan`의 AUTO item은 scan 때 기록한 source marker key가 plan 순간에도 그대로이고 fresh source SHA-256이 같은 scan/catalog의 exact evidence와 일치할 때만 생성된다. destination도 marker를 필수로 요구하고 existing path collision을 deterministic suffix로 피한다. `archive-copy`는 replay 때 plan의 source resource/root/path/asset/role/size/hash를 current catalog와 다시 비교하고 source/destination marker와 byte를 재검증한다. root가 이동했다면 같은 marker를 가진 explicit rebind만 허용한다. `.photoarchive/plans`, pending/complete operation manifest, verified staging/final state가 checkpoint이며 complete manifest 이후에는 archive-local catalog snapshot hash도 재검증한다. missing-root reconciliation은 user-initialized marker 없이는 수행하지 않는다.
 
 ### Organization mutation boundary
 

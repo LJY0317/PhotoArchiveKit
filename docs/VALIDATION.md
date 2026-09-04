@@ -79,7 +79,31 @@ Synthetic catalog에서 versioned JSONL export -> restore dry-run -> 새 SQLite 
 
 Synthetic marked source/destination fixture에서 `archive-plan`이 non-Takeout canonical exact copy 하나만 AUTO로 선택하고, plan 시점의 fresh SHA-256을 같은 scan/catalog에 저장된 exact evidence와 다시 비교한 뒤 local-private precondition으로 고정하는 것을 검증했다. scan 뒤 source byte를 같은 크기로 바꾸면 `sourceChanged`로 plan 생성이 거부된다. destination에 같은 filename이 이미 있으면 deterministic `_NN` suffix로 충돌을 피한다.
 
-별도 synthetic Live Photo fixture에서는 complete still + paired-video 두 resource가 하나의 AUTO item으로 유지되고 destination basename도 동일했다. source stable marker가 없는 fixture는 REVIEW로 남는다. agent-safe archive plan에는 source/destination path, filename, marker key, byte size, SHA-256이 포함되지 않는다. 아직 실제 HDD copy/apply는 구현하지 않았으므로 이 validation은 immutable plan authority까지만 다룬다.
+별도 synthetic Live Photo fixture에서는 complete still + paired-video 두 resource가 하나의 AUTO item으로 유지되고 destination basename도 동일했다. source stable marker가 없는 fixture는 REVIEW로 남는다. agent-safe archive plan에는 source/destination path, filename, catalog path, marker key, byte size, SHA-256이 포함되지 않는다. plan schema v2는 이후 replay를 위해 working catalog path까지 local-private precondition으로 고정한다.
+
+## Verified archive copy 검증
+
+별도 synthetic catalog/source/destination에서 `archive-copy` dry-run -> apply -> completed replay를 검증했다. executor는 plan의 source resource/root/path/asset/role/size/hash를 current catalog와 다시 비교하고 source/destination marker와 fresh source SHA-256을 재검증한다. apply는 hidden `.photoarchive/staging/<plan-id>`를 사용하며 final path로 보내기 전후 full-file SHA-256을 확인한다. destination scan은 unique archive media에도 integrity SHA-256을 계산해 기존 logical asset/role과 다시 연결하고, archive `.photoarchive/catalog`에 portable JSONL snapshot을 기록한다.
+
+검증 결과:
+
+```text
+dry-run creates no archive media                                     PASS
+apply copies and verifies the canonical AUTO resource                PASS
+source copies remain byte-identical and unmoved                      PASS
+destination archive root/media committed to working catalog          PASS
+archive-local portable catalog snapshot written                      PASS
+completed replay is no-op and reuses verified final media            PASS
+same-size source tamper after immutable plan rejected                PASS
+plan asset-ID semantic tamper rejected by current catalog evidence   PASS
+one-resource Live Photo item rejected before copy                    PASS
+completed catalog snapshot byte tamper rejected                      PASS
+agent-safe copy report omits path/filename/marker/hash                PASS
+hidden .photoarchive control JSON cataloged as sidecars                 0
+archive-plan -> archive-copy dry-run/apply/replay CLI smoke           PASS
+```
+
+Live Photo의 두 final path가 하나의 filesystem syscall로 동시에 rename된다고 가정하지 않는다. 대신 item 전체가 staging/final에서 먼저 검증되고 complete manifest는 모든 final resource, destination catalog relationship, archive snapshot이 검증된 뒤에만 기록된다. interruption이 생기면 pending manifest와 exact-verified staged/final state에서 idempotent resume한다. 실제 개인 library의 외장 HDD 대량 apply는 아직 별도 validation 대상으로 남긴다.
 
 ## Provenance 결론
 
