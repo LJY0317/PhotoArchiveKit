@@ -465,6 +465,37 @@ Git worktree remained clean                                                  PAS
 
 이로써 synthetic -> 실제 외장 HDD 1-resource smoke -> 실제 working catalog 전체 preflight -> real-library 10-item/15-resource bounded apply의 단계적 검증을 완료했다. 전체 `4,947` AUTO resource apply는 아직 수행하지 않는다. 다음 판단은 Takeout 3개 root에 stable marker를 부여해 현재 `source_root_marker_missing` 3,964 item을 자동 권한 대상으로 재평가할지, 현재 marker 상태를 유지한 채 local-authoritative AUTO만 batch로 확장할지 결정하는 것이다.
 
+## 2026-09-05 — Takeout stable marker 승격 검증과 full-plan blocker 발견
+
+사용자 승인 후 기존 Google Takeout source root 3개에 `.photoarchive-root` stable marker를 초기화했다. media byte는 수정하지 않았으며 subsequent scan에서 working catalog의 Takeout marker binding이 `3/3`으로 연결된 것을 확인했다.
+
+Marker 전 full preflight에서 `source_root_marker_missing`으로 REVIEW였던 항목은 `3,964 item / 4,151 resource`였다. 구성은 standalone 3,777 item과 complete Live Photo 187 item이며, planner 코드상 completeness/conflict/canonical-selection을 모두 통과한 뒤 **source root marker 존재 여부 하나 때문에** REVIEW가 된 집합이다.
+
+Marker 후 전체 `archive-plan`을 동일 real-library source에 다시 생성하려 했으나 두 번 모두 장시간 실행 뒤 `exit 137`로 강제 종료되어 immutable plan 파일이 완성되지 않았다. 첫 시도는 일반 동시성/agent-safe output 경로, 두 번째는 `--jobs 1`과 compact stdout 경로였으므로 단순 JSON 출력 문제로 보지 않는다. 종료 뒤 DevSpace session 자체와 workspace/Git은 정상 유지됐고 process session은 명시적 exit 137을 반환했다. 현재 원인은 확정하지 않았으며 full scan+plan 경로의 resource/runtime 안정성 blocker로 기록한다.
+
+전체 planner를 반복하지 않고 marker-gated resource만 분리해 root별 lightweight verifier로 재검증했다. 기존 catalog의 exact SHA-256은 4,151 resource 전부 존재했고, 각 source의 current marker/schema, regular-file/symlink boundary, byte size, fresh streaming full SHA-256을 catalog hash와 비교했다.
+
+```text
+Takeout stable marker initialized/bound                                      3 / 3
+marker-gated resources with catalog exact hash                         4,151 / 4,151
+fresh source byte/size/SHA-256 verification PASS                      4,151 / 4,151
+failed resources                                                               0
+failed logical items                                                           0
+```
+
+Planner의 marker gate가 마지막 단독 gate라는 코드 경로와 위 fresh evidence를 결합하면, 이전 marker-missing 3,964 item은 모두 AUTO 승격 조건을 충족한다. 따라서 현재 evidence 기준 예상 post-marker totals는 다음과 같다.
+
+```text
+AUTO before marker                 3,319 item / 4,947 resource
+marker-gated promotion             3,964 item / 4,151 resource
+AUTO after marker (evidence-based) 7,283 item / 9,098 resource
+REVIEW after marker                  895 item / 1,576 resource
+  incomplete_live_photo              892 item
+  conflicting variants                 3 item
+```
+
+이 수치는 새 immutable plan 파일이 실제 완성됐다는 뜻은 아니다. source evidence와 planner gate를 독립 검증해 계산한 정확한 승격 결과이며, **다음 blocker는 post-marker full archive-plan을 정상 종료시켜 같은 수치를 실제 persisted plan으로 재현하는 것**이다. 그 전에는 9,098 resource 전체 apply를 수행하지 않는다.
+
 ## 2026-09-04 — Product North Star 고정
 
 최초 제품 목적을 `docs/PROJECT_NORTH_STAR.md`와 `AGENTS.md`의 explicit scope gate로 고정했다.
