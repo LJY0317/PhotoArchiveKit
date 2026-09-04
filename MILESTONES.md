@@ -293,6 +293,35 @@ remaining candidates after apply            0
 
 적용 직전 후보 수가 기존 dry-run과 동일했고, apply 뒤 같은 manifest를 즉시 다시 dry-run하여 잔여 후보가 0임을 확인했다. cleanup 범위는 manifest + catalog location history로 제한되며 registered root 자체, package/symlink boundary, unrelated empty directory는 대상이 아니다. 이로써 real-library organization 후 빈 source directory 정리는 현재 범위에서 완료로 닫는다.
 
+## 2026-09-05 — Live Photo timed metadata strict validation
+
+Live Photo pairing을 still-side MakerApple identifier와 paired-video QuickTime content identifier 일치만으로 complete 처리하지 않고, paired video의 timed metadata track까지 검증하도록 강화했다. `com.apple.quicktime.still-image-time` marker가 정확히 하나 존재하고 metadata datatype이 int8이며 marker sample이 유효한 movie timeline 위치에 있어야 complete occurrence로 인정한다. marker payload 자체는 timestamp로 사용하지 않는다.
+
+Synthetic self-test는 metadata-only MOV fixture를 생성해 다음 네 경우를 검증한다.
+
+```text
+single valid int8 marker      valid
+marker absent                 missing
+wrong marker datatype         invalid
+multiple markers              invalid
+```
+
+실제 iPhone-origin paired video에서는 marker payload가 `-1`인 사례를 확인했고, payload 값이 아니라 timed sample 위치가 실제 still 시각 evidence라는 점에 맞춰 validator가 특정 payload 값을 강제하지 않도록 했다. file path, raw identifier, marker timeline timestamp는 agent-safe output에 노출하지 않는다.
+
+Real-library agent-safe validation 결과:
+
+```text
+resources                         22232
+logical Live Photos                2710
+complete occurrences               1824
+new timed-metadata missing             0
+new timed-metadata invalid             0
+new timed-metadata unreadable          0
+exact reconciliation AUTO/REVIEW    0 / 227
+```
+
+따라서 strict validation은 현재 library에서 기존 valid Live Photo occurrence를 오탐으로 깨뜨리지 않았고 exact reconciliation 결과도 바꾸지 않았다. broader device/OS/codec/export variant coverage는 여전히 별도 validation 대상으로 남긴다.
+
 ## 2026-09-04 — Product North Star 고정
 
 최초 제품 목적을 `docs/PROJECT_NORTH_STAR.md`와 `AGENTS.md`의 explicit scope gate로 고정했다.
@@ -309,7 +338,7 @@ AI-agent privacy도 North Star에 포함한다. agent-safe CLI/API에서는 medi
 
 - Google Takeout Live Photo byte fidelity와 sidecar schema
 - edited Live Photo의 original/current/adjustment 보존
-- file variant 전반의 timed `still-image-time` validation
+- 현재 real library 밖의 추가 device/OS/codec/export variant에 대한 timed `still-image-time` validation
 - 모든 Apple device, OS, codec, camera-format 조합
 - Google Photos API로 still+video에서 하나의 composite Live Photo 생성 가능 여부
 - fully automatic semantic folder classification 정확도

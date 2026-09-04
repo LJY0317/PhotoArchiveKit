@@ -49,6 +49,7 @@ The initial CLI can:
 
 - recursively scan one or more Inbox, archive, import, or reference roots;
 - identify Live Photo still and video resources from embedded Apple linkage metadata;
+- require a paired video with a matching identifier to contain exactly one valid QuickTime `still-image-time` timed-metadata marker before reporting that Live Photo occurrence as complete;
 - group copies found in different roots into one logical Live Photo asset and partition repeated same-identifier exports into physical occurrences using directory/basename only as boundary hints after embedded identifier identity is established;
 - report completeness separately for every root, so a complete copy elsewhere does not hide a broken local copy;
 - find exact duplicate files using local SHA-256 comparisons only when file sizes match;
@@ -275,7 +276,7 @@ Live Photo asset
 └── paired_video   MOV or MP4
 ```
 
-PhotoArchiveKit does not use matching basenames as proof of pairing. It compares the internal still-side and QuickTime content identifiers locally, stores only a keyed fingerprint in the catalog, and reports the relationship without disclosing the identifier.
+PhotoArchiveKit does not use matching basenames as proof of pairing. It compares the internal still-side and QuickTime content identifiers locally, then requires the paired video to contain exactly one valid int8 `com.apple.quicktime.still-image-time` timed-metadata marker at a valid movie timeline position before the occurrence is considered complete. The marker payload itself is not treated as the timestamp; the timed metadata sample position is the evidence. Only a keyed identifier fingerprint and semantic validation status are exposed beyond the local metadata reader.
 
 A future mutating command must treat all resources of a validated Live Photo as one transaction. One-sided rename, move, quarantine, or deletion is forbidden by project policy.
 

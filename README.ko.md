@@ -49,6 +49,7 @@ byte 보존 복제본          provenance와 이력
 
 - Inbox, archive, import, reference root를 하나 이상 재귀적으로 scan
 - 내부 Apple linkage metadata로 Live Photo의 still/video resource 식별
+- identifier가 일치하는 paired video에 유효한 QuickTime `still-image-time` timed-metadata marker가 정확히 하나 있어야 해당 Live Photo occurrence를 complete로 인정
 - 서로 다른 root에서 발견된 사본을 하나의 논리 Live Photo asset으로 통합하고, embedded identifier로 identity를 먼저 확정한 뒤 directory/basename은 경계 힌트로만 사용해 반복 export occurrence를 분할
 - 다른 root에 완전한 사본이 있어도 현재 root의 누락을 숨기지 않도록 root별 completeness 보고
 - 크기가 같은 후보에 한해 로컬 SHA-256으로 exact duplicate 탐색
@@ -275,7 +276,7 @@ Live Photo asset
 └── paired_video   MOV 또는 MP4
 ```
 
-PhotoArchiveKit은 basename이 같다는 이유만으로 pair라고 판단하지 않습니다. still-side identifier와 QuickTime content identifier를 로컬에서 비교하고, catalog에는 keyed fingerprint만 저장하며, report에는 identifier 값을 노출하지 않습니다.
+PhotoArchiveKit은 basename이 같다는 이유만으로 pair라고 판단하지 않습니다. still-side identifier와 QuickTime content identifier를 로컬에서 비교한 뒤 paired video에 유효한 int8 `com.apple.quicktime.still-image-time` timed-metadata marker가 정확히 하나 있고 그 marker가 유효한 movie timeline 위치에 있는지까지 확인해야 occurrence를 complete로 인정합니다. marker payload 자체를 timestamp로 해석하지 않고 timed metadata sample의 위치를 evidence로 사용하며, local metadata reader 밖에는 keyed identifier fingerprint와 semantic validation status만 전달합니다.
 
 향후 파일을 변경하는 명령은 검증된 Live Photo의 모든 resource를 한 transaction으로 처리해야 합니다. 한쪽만 rename·move·quarantine·delete하는 동작은 프로젝트 정책상 금지합니다.
 

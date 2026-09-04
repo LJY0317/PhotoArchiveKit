@@ -81,6 +81,17 @@ public enum LivePhotoOccurrenceStatus: String, Codable, Sendable {
     case multipleStills = "multiple_stills"
     case multipleVideos = "multiple_videos"
     case multipleVariants = "multiple_variants"
+    case stillImageTimeMissing = "still_image_time_missing"
+    case stillImageTimeInvalid = "still_image_time_invalid"
+    case stillImageTimeUnreadable = "still_image_time_unreadable"
+}
+
+public enum LivePhotoTimedMetadataStatus: String, Codable, Sendable {
+    case notApplicable = "not_applicable"
+    case valid
+    case missing
+    case invalid
+    case unreadable
 }
 
 public enum CaptureTimeSource: String, Codable, Sendable {

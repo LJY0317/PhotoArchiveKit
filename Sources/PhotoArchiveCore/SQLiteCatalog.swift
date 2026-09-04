@@ -650,11 +650,20 @@ final class SQLiteCatalog {
         resources: [ProbedResource]
     ) -> LivePhotoOccurrenceStatus {
         let stillCount = indices.count { resources[$0].mediaKind == .image }
-        let videoCount = indices.count { resources[$0].mediaKind == .video }
-        if stillCount > 0, videoCount > 0 {
+        let videos = indices.map { resources[$0] }.filter { $0.mediaKind == .video }
+        if stillCount > 0, videos.contains(where: { $0.livePhotoTimedMetadataStatus == .valid }) {
             return .complete
         }
-        return AssetAssembler.occurrenceStatus(stillCount: stillCount, videoCount: videoCount)
+        if stillCount > 0, !videos.isEmpty {
+            if videos.contains(where: { $0.livePhotoTimedMetadataStatus == .unreadable }) {
+                return .stillImageTimeUnreadable
+            }
+            if videos.contains(where: { $0.livePhotoTimedMetadataStatus == .invalid }) {
+                return .stillImageTimeInvalid
+            }
+            return .stillImageTimeMissing
+        }
+        return AssetAssembler.occurrenceStatus(stillCount: stillCount, videoCount: videos.count)
     }
 
     private func resourceBindings(

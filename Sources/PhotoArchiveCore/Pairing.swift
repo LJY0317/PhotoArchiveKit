@@ -92,6 +92,26 @@ enum AssetAssembler {
         }
     }
 
+    static func occurrenceStatus(resources: [ProbedResource]) -> LivePhotoOccurrenceStatus {
+        let stillCount = resources.count { $0.mediaKind == .image }
+        let videos = resources.filter { $0.mediaKind == .video }
+        let countStatus = occurrenceStatus(stillCount: stillCount, videoCount: videos.count)
+        guard countStatus == .complete, let video = videos.first else {
+            return countStatus
+        }
+
+        switch video.livePhotoTimedMetadataStatus {
+        case .valid:
+            return .complete
+        case .missing:
+            return .stillImageTimeMissing
+        case .invalid:
+            return .stillImageTimeInvalid
+        case .unreadable, .notApplicable:
+            return .stillImageTimeUnreadable
+        }
+    }
+
     static func unverifiedBasenamePairWarnings(
         resources: [ProbedResource]
     ) -> [ScanWarning] {

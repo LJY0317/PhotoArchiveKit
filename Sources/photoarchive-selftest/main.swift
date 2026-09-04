@@ -1,3 +1,5 @@
+import AVFoundation
+import CoreMedia
 import CryptoKit
 import Foundation
 import PhotoArchiveCore
@@ -24,6 +26,42 @@ struct PhotoArchiveSelfTest {
         try fileManager.createDirectory(at: rootA, withIntermediateDirectories: true)
         try fileManager.createDirectory(at: rootB, withIntermediateDirectories: true)
         defer { try? fileManager.removeItem(at: temporary) }
+
+        let validTimedVideo = temporary.appendingPathComponent("valid-timed.mov")
+        try await writeSyntheticTimedMetadataMovie(to: validTimedVideo, markerValues: [-1])
+        let validTimedStatus = await LivePhotoTimedMetadataValidator.validateVideo(at: validTimedVideo)
+        try require(
+            validTimedStatus == .valid,
+            "a single int8 still-image-time marker should validate regardless of marker payload"
+        )
+
+        let missingTimedVideo = temporary.appendingPathComponent("missing-timed.mov")
+        try await writeSyntheticTimedMetadataMovie(to: missingTimedVideo, markerValues: [])
+        let missingTimedStatus = await LivePhotoTimedMetadataValidator.validateVideo(at: missingTimedVideo)
+        try require(
+            missingTimedStatus == .missing,
+            "a readable metadata track without still-image-time should be reported missing"
+        )
+
+        let invalidTimedVideo = temporary.appendingPathComponent("invalid-timed.mov")
+        try await writeSyntheticTimedMetadataMovie(
+            to: invalidTimedVideo,
+            markerValues: [0],
+            validDataType: false
+        )
+        let invalidTimedStatus = await LivePhotoTimedMetadataValidator.validateVideo(at: invalidTimedVideo)
+        try require(
+            invalidTimedStatus == .invalid,
+            "a still-image-time marker with the wrong metadata datatype should be rejected"
+        )
+
+        let ambiguousTimedVideo = temporary.appendingPathComponent("ambiguous-timed.mov")
+        try await writeSyntheticTimedMetadataMovie(to: ambiguousTimedVideo, markerValues: [0, 0])
+        let ambiguousTimedStatus = await LivePhotoTimedMetadataValidator.validateVideo(at: ambiguousTimedVideo)
+        try require(
+            ambiguousTimedStatus == .invalid,
+            "multiple still-image-time markers should be rejected as ambiguous"
+        )
 
         let bytes = Data("synthetic-not-a-real-photo".utf8)
         let fileA = rootA.appendingPathComponent("one.jpg")
@@ -708,6 +746,79 @@ private func executableExists(_ name: String) -> Bool {
     return environmentPath.split(separator: ":").contains { directory in
         let candidate = URL(fileURLWithPath: String(directory)).appendingPathComponent(name).path
         return FileManager.default.isExecutableFile(atPath: candidate)
+    }
+}
+
+private func writeSyntheticTimedMetadataMovie(
+    to url: URL,
+    markerValues: [Int8],
+    validDataType: Bool = true
+) async throws {
+    let stillImageTimeIdentifier = "mdta/com.apple.quicktime.still-image-time"
+    let unrelatedIdentifier = "mdta/com.example.photoarchive.synthetic"
+    let metadataIdentifiers = markerValues.isEmpty
+        ? [unrelatedIdentifier]
+        : [stillImageTimeIdentifier]
+    let dataType = validDataType
+        ? (kCMMetadataBaseDataType_SInt8 as String)
+        : (kCMMetadataBaseDataType_UTF8 as String)
+    let specifications = metadataIdentifiers.map { identifier -> CFDictionary in
+        [
+            kCMMetadataFormatDescriptionMetadataSpecificationKey_Identifier as String: identifier,
+            kCMMetadataFormatDescriptionMetadataSpecificationKey_DataType as String: dataType
+        ] as CFDictionary
+    }
+
+    var formatDescription: CMMetadataFormatDescription?
+    let formatStatus = CMMetadataFormatDescriptionCreateWithMetadataSpecifications(
+        allocator: kCFAllocatorDefault,
+        metadataType: kCMMetadataFormatType_Boxed,
+        metadataSpecifications: specifications as CFArray,
+        formatDescriptionOut: &formatDescription
+    )
+    guard formatStatus == noErr, formatDescription != nil else {
+        throw SelfTestFailure("could not create synthetic metadata format description")
+    }
+
+    let writer = try AVAssetWriter(outputURL: url, fileType: .mov)
+    let input = AVAssetWriterInput(
+        mediaType: .metadata,
+        outputSettings: nil,
+        sourceFormatHint: formatDescription
+    )
+    guard writer.canAdd(input) else {
+        throw SelfTestFailure("could not add synthetic metadata input")
+    }
+    writer.add(input)
+    let adaptor = AVAssetWriterInputMetadataAdaptor(assetWriterInput: input)
+
+    guard writer.startWriting() else {
+        throw SelfTestFailure("synthetic metadata writer did not start")
+    }
+    writer.startSession(atSourceTime: .zero)
+
+    let values = markerValues.isEmpty ? [Int8(0)] : markerValues
+    for (index, value) in values.enumerated() {
+        let item = AVMutableMetadataItem()
+        item.identifier = AVMetadataIdentifier(
+            rawValue: markerValues.isEmpty ? unrelatedIdentifier : stillImageTimeIdentifier
+        )
+        item.dataType = dataType
+        item.value = validDataType ? NSNumber(value: value) : NSString(string: "invalid")
+        let start = CMTime(value: CMTimeValue(index), timescale: 30)
+        let group = AVTimedMetadataGroup(
+            items: [item],
+            timeRange: CMTimeRange(start: start, duration: CMTime(value: 1, timescale: 30))
+        )
+        guard adaptor.append(group) else {
+            throw SelfTestFailure("could not append synthetic timed metadata")
+        }
+    }
+
+    input.markAsFinished()
+    await writer.finishWriting()
+    guard writer.status == .completed else {
+        throw SelfTestFailure("synthetic metadata movie did not finish")
     }
 }
 

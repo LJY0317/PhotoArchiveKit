@@ -1,6 +1,6 @@
 # 현재 상태
 
-마지막 업데이트: 2026-09-04
+마지막 업데이트: 2026-09-05
 
 ## 저장소
 
@@ -25,6 +25,7 @@
 - ImageIO still-image metadata probe
 - AVFoundation QuickTime metadata probe
 - embedded identifier 기반 Live Photo grouping
+- paired video의 QuickTime timed metadata track에서 `com.apple.quicktime.still-image-time` marker를 strict 검증하고, identifier 일치 + 정확히 1개의 valid int8 marker + 유효한 timeline 위치를 모두 만족해야 occurrence를 complete로 인정
 - Live Photo identifier를 위한 catalog-local HMAC 보호
 - root별 Live Photo completeness report
 - opaque report ID를 사용하는 local exact duplicate grouping
@@ -131,13 +132,13 @@ swift run photoarchive-selftest
 - organization synthetic apply test에서 `IMG_1234.HEIC + IMG_1234.MOV`가 같은 capture-time destination basename으로 함께 이동하고 custom filename은 보존되며 marker gate, post-move filesystem ID/size, restore manifest, agent-safe path redaction이 동작함을 확인했다. 별도 tracking fixture에서는 full rescan 없이 catalog resource path가 즉시 갱신되고 stable resource ID와 old/new location history가 유지되는 것, synthetic catalog commit failure 시 모든 filesystem move가 원위치 rollback되는 것도 검증했다.
 - real-library `organize`를 stable root marker 초기화 후 실제 적용했다. `2,765` AUTO item / `4,292` resource가 capture-time flat name으로 이동됐고 manifest `complete`, old source 잔존 0, destination 누락 0, size mismatch 0을 확인했다. resource `22,232`, logical asset `8,178`, logical Live Photo `2,710`, exact reconciliation `AUTO 0 / REVIEW 227`은 유지됐다. 적용 후 이미 정리된 1,527 Live Photo를 custom-name REVIEW로 다시 표시하던 idempotence 문제를 수정해 현재 organization plan은 `AUTO 0`, 실제 보류만 `628 item / 795 resource`다: filesystem fallback `58`, custom-name Live Photo `154 resource`, incomplete Live Photo `415 resource`, multiple physical representation `168 resource`.
 - 위 real organization manifest를 대상으로 `cleanup-empty-dirs --agent-json` dry-run을 수행해 removal candidate 412개를 확인했다. 후보는 organization source history로 제한되며 count-only local diagnostic에서 `.photoslibrary` 내부 0, Takeout 0, `Pictures` root 자체 0이었다. 이후 같은 manifest에 `--apply`를 수행해 412개 directory를 제거했고, 즉시 다시 dry-run하여 잔여 후보 0을 확인했다.
+- strict Live Photo timed-metadata validation을 synthetic MOV fixture와 real library에서 검증했다. self-test는 valid int8 marker, marker 누락, 잘못된 datatype, multiple marker를 각각 검증한다. real library 22,232 resource / 2,710 logical Live Photo를 다시 읽었을 때 기존 complete occurrence 1,824개가 모두 `still-image-time` 검증을 통과했고 새 `missing`/`invalid`/`unreadable` occurrence는 0이었다. 정상 exact plan 재검증도 `AUTO 0 / REVIEW 227`을 그대로 유지했다.
 
 private fixture와 temporary catalog는 repository에 포함하지 않는다.
 
 ## 알려진 제한사항
 
 - verified HDD archive copy, permanent delete, cloud upload는 아직 없다. `organize`는 same-session deterministic camera-name rename/flatten 전용이며 persisted plan replay나 general-purpose move command가 아니다.
-- Live Photo timed `still-image-time` metadata를 strict하게 parse하지 않는다.
 - still-side identifier extraction은 격리되어 있지만 현재 iPhone file에서 관찰한 ImageIO MakerApple entry를 따른다. 추가 format fixture가 필요하다.
 - stable root marker 기능은 구현됐지만 기존 real roots에는 자동으로 marker를 쓰지 않는다. 각 root는 사용자가 `photoarchive root init --apply PATH`를 명시적으로 실행한 뒤부터 relocation identity를 가진다.
 - versioned JSONL catalog export/restore가 없다.
@@ -172,7 +173,7 @@ private fixture와 temporary catalog는 repository에 포함하지 않는다.
 7. 실제 `~/Pictures`와 향후 HDD archive root에 stable root marker를 사용자 승인 후 초기화하고 relocation fixture를 real filesystem에서 확인
 8. organization apply 전 persisted immutable plan/approval token은 향후 offline/replay mutation에 필요할 때 추가한다. same-session organize는 post-move catalog transaction까지 이미 완료됨
 9. `cleanup-empty-dirs`는 real library apply와 postcondition까지 완료로 닫는다. 같은 organization manifest 기준 412 directory 제거 후 잔여 후보 0을 확인했다.
-10. strict Live Photo timed-metadata validation 추가
+10. strict Live Photo timed-metadata validation은 구현과 real-library 검증까지 완료로 닫는다. 현재 library의 기존 complete occurrence 1,824개가 모두 통과했고 reconciliation `AUTO 0 / REVIEW 227`도 유지됐다.
 11. versioned sanitized JSONL catalog export/restore 추가
 12. HDD archive destination plan, verified copy, rclone replica/check adapter 추가
 13. 기존 folder를 example로 사용하는 event-level archive-folder learning은 core archive flow 이후로 유지

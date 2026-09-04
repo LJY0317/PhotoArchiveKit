@@ -14,6 +14,7 @@ struct MetadataProbe {
                 pending,
                 captureTime: nil,
                 rawIdentifier: nil,
+                timedMetadataStatus: .notApplicable,
                 metadataProbeFailed: false
             )
         }
@@ -27,6 +28,7 @@ struct MetadataProbe {
                 pending,
                 captureTime: fallbackCaptureTime(createdAt: pending.createdAt),
                 rawIdentifier: nil,
+                timedMetadataStatus: .notApplicable,
                 metadataProbeFailed: true
             )
         }
@@ -46,6 +48,7 @@ struct MetadataProbe {
             pending,
             captureTime: captureTime,
             rawIdentifier: identifier,
+            timedMetadataStatus: .notApplicable,
             metadataProbeFailed: false
         )
     }
@@ -72,11 +75,18 @@ struct MetadataProbe {
                 originalString: creationString,
                 dateValue: creationDate
             ) ?? fallbackCaptureTime(createdAt: pending.createdAt)
+            let timedMetadataStatus: LivePhotoTimedMetadataStatus
+            if identifier == nil {
+                timedMetadataStatus = .notApplicable
+            } else {
+                timedMetadataStatus = await LivePhotoTimedMetadataValidator.validate(asset: asset)
+            }
 
             return makeResource(
                 pending,
                 captureTime: captureTime,
                 rawIdentifier: identifier,
+                timedMetadataStatus: timedMetadataStatus,
                 metadataProbeFailed: false
             )
         } catch {
@@ -84,6 +94,7 @@ struct MetadataProbe {
                 pending,
                 captureTime: fallbackCaptureTime(createdAt: pending.createdAt),
                 rawIdentifier: nil,
+                timedMetadataStatus: .notApplicable,
                 metadataProbeFailed: true
             )
         }
@@ -93,6 +104,7 @@ struct MetadataProbe {
         _ pending: PendingFile,
         captureTime: CaptureTime?,
         rawIdentifier: String?,
+        timedMetadataStatus: LivePhotoTimedMetadataStatus,
         metadataProbeFailed: Bool
     ) -> ProbedResource {
         ProbedResource(
@@ -107,6 +119,7 @@ struct MetadataProbe {
             fileSystemIdentifier: pending.fileSystemIdentifier,
             captureTime: captureTime,
             rawLivePhotoIdentifier: normalizedIdentifier(rawIdentifier),
+            livePhotoTimedMetadataStatus: timedMetadataStatus,
             metadataProbeFailed: metadataProbeFailed,
             exactHash: nil,
             persistentResourceID: nil,

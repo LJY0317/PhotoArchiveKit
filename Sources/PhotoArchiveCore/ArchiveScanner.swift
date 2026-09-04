@@ -503,10 +503,7 @@ public final class ArchiveScanner {
                 .map { group -> LivePhotoOccurrenceReport in
                     let stills = group.filter { $0.mediaKind == .image }
                     let videos = group.filter { $0.mediaKind == .video }
-                    let status = AssetAssembler.occurrenceStatus(
-                        stillCount: stills.count,
-                        videoCount: videos.count
-                    )
+                    let status = AssetAssembler.occurrenceStatus(resources: group)
                     let representative = group[0]
                     let report = LivePhotoOccurrenceReport(
                         rootID: representative.root.id,
@@ -720,6 +717,12 @@ public final class ArchiveScanner {
             return "Multiple video resources share one Live Photo identifier in this source root."
         case .multipleVariants:
             return "Multiple still and video resources share one Live Photo identifier in this source root."
+        case .stillImageTimeMissing:
+            return "A matching Live Photo identifier was found, but the paired video has no still-image-time timed metadata marker."
+        case .stillImageTimeInvalid:
+            return "A matching Live Photo identifier was found, but the paired video's still-image-time timed metadata marker is invalid or ambiguous."
+        case .stillImageTimeUnreadable:
+            return "A matching Live Photo identifier was found, but the paired video's still-image-time timed metadata could not be verified."
         }
     }
 

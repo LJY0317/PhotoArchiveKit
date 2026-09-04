@@ -85,6 +85,7 @@ struct ProbedResource: Sendable {
     let fileSystemIdentifier: String?
     var captureTime: CaptureTime?
     var rawLivePhotoIdentifier: String?
+    let livePhotoTimedMetadataStatus: LivePhotoTimedMetadataStatus
     let metadataProbeFailed: Bool
     var exactHash: Data?
     var persistentResourceID: String?
