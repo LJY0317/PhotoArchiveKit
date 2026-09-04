@@ -416,6 +416,27 @@ end-to-end archive-plan -> archive-copy dry-run/apply/replay CLI smoke        PA
 
 이 milestone은 synthetic/temporary filesystem에서 copy transaction과 catalog/snapshot lifecycle을 검증한 것이다. 실제 개인 library를 외장 HDD에 대량 copy하는 mutation은 아직 수행하지 않았으며, 사용자가 명시한 destination에서 dry-run을 다시 확인한 뒤 별도 real-library milestone으로 검증한다. 그 다음에는 user-installed rclone을 이용한 독립 replica/check가 남아 있다.
 
+## 2026-09-05 — 외장 HDD 제한 실전 archive-copy smoke
+
+실제 외장 HDD에서 archive-copy의 filesystem 경계를 검증했다. 전체 개인 library와 기존 working catalog를 바로 mutation하지 않기 위해, `~/Pictures`의 일반 이미지 1개를 내용 열람이나 원래 filename/path 노출 없이 별도 local smoke source로 복사하고 독립 catalog를 사용했다. source와 HDD의 전용 test archive directory에 각각 stable root marker를 초기화했다.
+
+Agent-safe dry-run은 `AUTO 1 / REVIEW 0 / copy-required 1`을 보고했고 destination media를 만들지 않았다. 이어 `--apply`를 수행한 뒤 다음 postcondition을 확인했다.
+
+```text
+external HDD apply filesModified=true                                      PASS
+verified final resource count                                                   1
+portable catalog snapshot written                                              PASS
+copy manifest written                                                          PASS
+immediate replay filesModified=false                                           PASS
+source smoke media remains present                                              PASS
+source/final byte-for-byte compare                                              PASS
+archive media file count                                                           1
+```
+
+이 검증은 실제 media byte와 실제 외장 HDD filesystem을 사용했지만 **전체 real-library archive apply는 아니다**. 기존 개인 library 파일과 기존 working catalog는 수정하지 않았고, 외장 HDD에도 전용 smoke archive directory만 추가했다. 다음 real-library 단계에서는 먼저 전체 source에 대한 agent-safe archive-plan/dry-run을 만들고 AUTO 규모를 확인한다. 현재 `archive-copy`는 plan의 AUTO 전체를 적용하므로, 한 번에 전체 mutation하기 전에 bounded batch/approval이 필요한지 판단한다.
+
+Smoke 직후 기존 working catalog를 path 없이 점검한 결과 source root는 `local_library 1 + google_takeout 3`이었고 stable marker binding은 local library 1개에만 있었다. Takeout 3개는 marker가 없으므로 현재 정책에서 직접 AUTO copy authority가 되지 않으며, 전체 archive-plan에서는 canonical local source와 reconciliation evidence로만 사용되는 상태를 우선 확인해야 한다.
+
 ## 2026-09-04 — Product North Star 고정
 
 최초 제품 목적을 `docs/PROJECT_NORTH_STAR.md`와 `AGENTS.md`의 explicit scope gate로 고정했다.

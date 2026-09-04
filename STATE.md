@@ -178,13 +178,13 @@ private fixture와 temporary catalog는 repository에 포함하지 않는다.
 3. 현재 organization REVIEW의 `multiple_physical_representations` 168 resource는 exact-deletion hold와 별개다. 현 core 목표의 blocker가 아니므로 추가 evidence/HDD 비교가 생기기 전까지 보류하고, 이를 줄이기 위한 별도 알고리즘 개발은 하지 않는다.
 4. Czkawka image/video similarity adapter는 residual human review가 실제 bottleneck이 될 때만 추가한다. 현재 core archive 흐름보다 앞서지 않는다.
 5. native incremental hash cache를 설계해 unchanged file의 full SHA-256 재계산을 줄인다. Czkawka exact accelerator는 이중 hashing을 피할 수 있을 때만 benchmark 후 `automatic` 후보로 재평가한다.
-6. preferred/canonical representation을 HDD immutable archive plan으로 고정하고 source/destination marker + fresh exact-byte precondition까지 구현했으며, 이를 독립 재검증하는 staging copy/apply executor도 synthetic/CLI 수준에서 완료했다. 다음 단계는 실제 외장 HDD dry-run/제한된 apply와 postcondition 검증이다.
+6. preferred/canonical representation의 immutable archive plan과 staging copy/apply executor를 구현했고, 실제 외장 HDD의 전용 smoke archive에서 real media 1개로 dry-run -> apply -> byte compare -> catalog snapshot -> replay no-op까지 검증했다. 기존 working catalog는 `local_library 1 + google_takeout 3`이고 stable marker는 local library에만 있다. 다음 단계는 전체 real-library agent-safe archive-plan/dry-run으로 AUTO 규모를 확인하고, 전체 mutation 전에 bounded batch/approval 필요성을 결정하는 것이다.
 7. 실제 `~/Pictures`와 향후 HDD archive root에 stable root marker를 사용자 승인 후 초기화하고 relocation fixture를 real filesystem에서 확인
 8. organization apply 전 persisted immutable plan/approval token은 향후 offline/replay mutation에 필요할 때 추가한다. same-session organize는 post-move catalog transaction까지 이미 완료됨
 9. `cleanup-empty-dirs`는 real library apply와 postcondition까지 완료로 닫는다. 같은 organization manifest 기준 412 directory 제거 후 잔여 후보 0을 확인했다.
 10. strict Live Photo timed-metadata validation은 구현과 real-library 검증까지 완료로 닫는다. 현재 library의 기존 complete occurrence 1,824개가 모두 통과했고 reconciliation `AUTO 0 / REVIEW 227`도 유지됐다.
 11. versioned sanitized JSONL catalog export/restore는 synthetic round-trip, stable opaque ID rebind, Takeout collection semantics preservation까지 완료. archive-copy도 verified destination scan 뒤 archive `.photoarchive/catalog`에 snapshot을 배치하도록 구현했다. 실제 HDD snapshot/restore 확인은 real-library archive apply에서 수행
-12. HDD archive destination plan과 staging copy -> byte verify -> verified finalization -> destination scan/catalog commit -> resumable manifest/snapshot 경로는 synthetic/CLI 수준에서 완료. 다음은 사용자가 지정한 실제 외장 HDD에 dry-run/제한된 apply를 수행해 real-library postcondition을 검증하고, 그 뒤 user-installed rclone replica/check adapter와 최소 1개의 독립 verified replica를 연결
+12. HDD archive destination plan과 staging copy -> byte verify -> verified finalization -> destination scan/catalog commit -> resumable manifest/snapshot 경로는 synthetic/CLI와 실제 외장 HDD 1-resource smoke까지 완료. 전체 real-library dry-run에서 AUTO 규모를 확인한 뒤 안전한 적용 단위를 정하고, 그 다음 user-installed rclone replica/check adapter와 최소 1개의 독립 verified replica를 연결
 13. 기존 folder를 example로 사용하는 event-level archive-folder learning은 core archive flow 이후로 유지
 14. North Star archive workflow가 real library에서 안정화되기 전에는 Google upload와 broader provider convenience를 보류
 
