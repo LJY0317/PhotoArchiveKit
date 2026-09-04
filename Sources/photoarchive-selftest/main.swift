@@ -301,6 +301,18 @@ struct PhotoArchiveSelfTest {
             organizationLive.moves.allSatisfy { ($0.destinationRelativePath as NSString).deletingLastPathComponent.isEmpty },
             "automatic organization destinations should be flat within the local root"
         )
+        let alreadyOrganizedPlan = OrganizationPlanner.makePlan(
+            from: syntheticOrganizationReport(alreadyOrganizedLivePhoto: true)
+        )
+        try require(
+            !alreadyOrganizedPlan.items.contains { $0.assetID == "AORG1" },
+            "an already flattened capture-time Live Photo should be treated as completed, not REVIEW"
+        )
+        try require(
+            alreadyOrganizedPlan.summary.automaticItemCount == 1,
+            "only the standalone camera file should remain automatic after the Live Photo is already organized"
+        )
+
         let organizationAgentJSON = String(
             decoding: try encoder.encode(AgentSafeOrganizationPlan(plan: organizationPlan)),
             as: UTF8.self
@@ -617,7 +629,10 @@ private func executableExists(_ name: String) -> Bool {
     }
 }
 
-private func syntheticOrganizationReport(localPath: String = "/synthetic/local") -> ScanReport {
+private func syntheticOrganizationReport(
+    localPath: String = "/synthetic/local",
+    alreadyOrganizedLivePhoto: Bool = false
+) -> ScanReport {
     let rootID = "RORG"
     let capture = CaptureTime(
         localTimestamp: "2026-08-14T17:42:31",
@@ -626,13 +641,18 @@ private func syntheticOrganizationReport(localPath: String = "/synthetic/local")
         source: .exifDateTimeOriginal,
         confidence: .trusted
     )
+    let liveStem = "2026-08-14_17-42-31"
+    let photoRelativePath = alreadyOrganizedLivePhoto ? "\(liveStem).HEIC" : "nested/IMG_1234.HEIC"
+    let videoRelativePath = alreadyOrganizedLivePhoto ? "\(liveStem).MOV" : "nested/IMG_1234.MOV"
+    let photoFileName = alreadyOrganizedLivePhoto ? "\(liveStem).HEIC" : "IMG_1234.HEIC"
+    let videoFileName = alreadyOrganizedLivePhoto ? "\(liveStem).MOV" : "IMG_1234.MOV"
     let photo = ScannedResourceReport(
         resourceID: "FORG1",
         assetID: "AORG1",
         rootID: rootID,
         rootLabel: "Local",
-        relativePath: "nested/IMG_1234.HEIC",
-        fileName: "IMG_1234.HEIC",
+        relativePath: photoRelativePath,
+        fileName: photoFileName,
         mediaKind: .image,
         role: .photo,
         byteSize: 100,
@@ -643,8 +663,8 @@ private func syntheticOrganizationReport(localPath: String = "/synthetic/local")
         assetID: "AORG1",
         rootID: rootID,
         rootLabel: "Local",
-        relativePath: "nested/IMG_1234.MOV",
-        fileName: "IMG_1234.MOV",
+        relativePath: videoRelativePath,
+        fileName: videoFileName,
         mediaKind: .video,
         role: .pairedVideo,
         byteSize: 200,

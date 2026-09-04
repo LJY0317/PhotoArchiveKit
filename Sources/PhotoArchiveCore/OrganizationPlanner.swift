@@ -158,6 +158,10 @@ public enum OrganizationPlanner {
                     continue
                 }
 
+                if isAlreadyOrganizedLivePhoto(occurrenceResources) {
+                    continue
+                }
+
                 guard occurrenceResources.allSatisfy({ isAppleCameraFilename($0.fileName) }) else {
                     drafts.append(Draft(
                         assetID: asset.assetID,
@@ -322,6 +326,25 @@ public enum OrganizationPlanner {
             items: items,
             filesModified: false
         )
+    }
+
+    private static func isAlreadyOrganizedLivePhoto(_ resources: [ScannedResourceReport]) -> Bool {
+        guard resources.count == 2,
+              Set(resources.map(\.role)) == Set([ResourceRole.photo, ResourceRole.pairedVideo]),
+              resources.allSatisfy({ ($0.relativePath as NSString).deletingLastPathComponent.isEmpty }),
+              let expectedStem = preferredTimestampStem(resources)
+        else {
+            return false
+        }
+
+        let stems = Set(resources.map { ($0.fileName as NSString).deletingPathExtension })
+        guard stems.count == 1, let actualStem = stems.first else { return false }
+        if actualStem == expectedStem { return true }
+
+        let prefix = expectedStem + "_"
+        guard actualStem.hasPrefix(prefix) else { return false }
+        let suffix = actualStem.dropFirst(prefix.count)
+        return suffix.count >= 2 && suffix.allSatisfy(\.isNumber)
     }
 
     private static func preferredTimestampStem(_ resources: [ScannedResourceReport]) -> String? {

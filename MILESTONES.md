@@ -277,7 +277,9 @@ review items/resources          628 /  795
   multiple representation        99 /  168
 ```
 
-실제 media rename/move는 수행하지 않았다. `photoarchive organize` executor는 marker-gated dry-run/apply, Live Photo atomic same-basename move, post-move filesystem identity/size verification, session rollback, local restore manifest를 synthetic fixture에서 검증했다. 이후 apply의 마지막 단계로 stable resource ID 기반 SQLite path/location-history transaction을 추가해 full media re-scan 없이 catalog를 즉시 갱신하도록 했다. 별도 tracking fixture에서 resource ID 유지와 location history 추가를 검증했고, synthetic catalog commit failure는 filesystem move 전체를 원위치 rollback했다.
+`~/Pictures`에 stable root marker를 명시적으로 초기화한 뒤 위 AUTO 집합을 실제 적용했다. Session `SF1EB17E28C164FDA85AC4D4AFB7D6100`은 `2,765` item / `4,292` resource를 complete manifest로 기록했고, postcondition에서 old source 잔존 0, destination 누락 0, destination size mismatch 0을 확인했다. 재검증 결과 resource `22,232`, logical asset `8,178`, logical Live Photo `2,710`, exact reconciliation `AUTO 0 / REVIEW 227`이 유지됐다.
+
+적용 후 capture-time 이름으로 이미 flat 정리된 Live Photo 1,527개를 `custom_filename_preserved` REVIEW로 다시 표시하던 idempotence 문제를 수정했다. planner는 expected capture-time stem과 root-level same-basename pair가 이미 성립하면 완료된 no-op로 제외한다. 실제 library post-plan은 다시 `AUTO 0`, 원래 보류만 `628 item / 795 resource`로 복원됐다. `photoarchive organize` executor는 marker-gated dry-run/apply, Live Photo atomic same-basename move, post-move filesystem identity/size verification, stable resource ID 기반 SQLite path/location-history transaction, session rollback과 local restore manifest까지 현재 필요 수준에서 완료로 닫는다.
 
 ## 2026-09-04 — Product North Star 고정
 

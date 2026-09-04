@@ -127,7 +127,7 @@ swift run photoarchive-selftest
 - 두 real quarantine의 기존 v1 manifest도 `restore-quarantine --agent-json` dry-run을 통과했다: 첫 session `2,262 item / 4,195 resource`, 둘째 `3,787 item / 3,813 resource`, 둘 다 `filesModified=false`. 첫 legacy manifest의 과거 `photo` 단독 item 24개는 manifest 전체를 session 단위로 역복구하는 compatibility 경로로 취급하고, 새 manifest는 source-relative path와 strict Live Photo item completeness를 요구한다.
 - synthetic tracking test에서 같은 volume의 file rename 후 resource ID가 유지되고 old/new path가 location history로 남으며, `.photoarchive-root`가 있는 root directory 자체를 다른 path로 이동한 뒤에도 root ID가 유지됨을 확인했다.
 - organization synthetic apply test에서 `IMG_1234.HEIC + IMG_1234.MOV`가 같은 capture-time destination basename으로 함께 이동하고 custom filename은 보존되며 marker gate, post-move filesystem ID/size, restore manifest, agent-safe path redaction이 동작함을 확인했다. 별도 tracking fixture에서는 full rescan 없이 catalog resource path가 즉시 갱신되고 stable resource ID와 old/new location history가 유지되는 것, synthetic catalog commit failure 시 모든 filesystem move가 원위치 rollback되는 것도 검증했다.
-- real-library `organize-plan --agent-json` 최신 결과는 `2,765` AUTO item / `4,292` resource, `628` REVIEW item / `795` resource다. AUTO는 trusted timestamp 또는 timezone이 빠진 EXIF local wall-clock을 가진 iPhone camera-style filename이고, REVIEW는 filesystem fallback `58`, custom-name Live Photo `154 resource`, incomplete Live Photo `415 resource`, multiple physical representation `168 resource`다. 실제 rename/move는 아직 0개다.
+- real-library `organize`를 stable root marker 초기화 후 실제 적용했다. `2,765` AUTO item / `4,292` resource가 capture-time flat name으로 이동됐고 manifest `complete`, old source 잔존 0, destination 누락 0, size mismatch 0을 확인했다. resource `22,232`, logical asset `8,178`, logical Live Photo `2,710`, exact reconciliation `AUTO 0 / REVIEW 227`은 유지됐다. 적용 후 이미 정리된 1,527 Live Photo를 custom-name REVIEW로 다시 표시하던 idempotence 문제를 수정해 현재 organization plan은 `AUTO 0`, 실제 보류만 `628 item / 795 resource`다: filesystem fallback `58`, custom-name Live Photo `154 resource`, incomplete Live Photo `415 resource`, multiple physical representation `168 resource`.
 
 private fixture와 temporary catalog는 repository에 포함하지 않는다.
 
@@ -162,7 +162,7 @@ private fixture와 temporary catalog는 repository에 포함하지 않는다.
 
 1. 남은 `227` mixed-exact Live Photo review는 complete paired-video evidence가 없는 still-only asset이 대부분이므로 자동 제거하지 않는다. additional source/backup/HDD에서 paired video를 찾거나 strict restore evidence가 생길 때만 재평가한다.
 2. quarantine의 forward/restore lifecycle은 현재 필요 수준에서 완료로 닫는다. interrupted-session resume은 향후 HDD archive copy/apply에서 실제 필요성이 생길 때 구현한다.
-3. 현재 organization REVIEW의 `multiple_physical_representations` 168 resource는 exact-deletion hold와 별개다. preferred representation 선택을 더 강화한 뒤 rename/flatten 대상으로 재평가한다.
+3. 현재 organization REVIEW의 `multiple_physical_representations` 168 resource는 exact-deletion hold와 별개다. 현 core 목표의 blocker가 아니므로 추가 evidence/HDD 비교가 생기기 전까지 보류하고, 이를 줄이기 위한 별도 알고리즘 개발은 하지 않는다.
 4. Czkawka image/video similarity adapter는 residual human review가 실제 bottleneck이 될 때만 추가한다. 현재 core archive 흐름보다 앞서지 않는다.
 5. native incremental hash cache를 설계해 unchanged file의 full SHA-256 재계산을 줄인다. Czkawka exact accelerator는 이중 hashing을 피할 수 있을 때만 benchmark 후 `automatic` 후보로 재평가한다.
 6. preferred-representation plan을 immutable persisted plan으로 발전시키고 direct byte verification 옵션과 stable replay precondition을 추가한다.
