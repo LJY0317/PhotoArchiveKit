@@ -16,7 +16,7 @@ PhotoArchiveKit은 iPhone 사진·동영상·Live Photo를 특정 사진 클라�
 
 프로젝트는 의도적으로 가볍게 유지합니다. 백그라운드 daemon을 실행하거나 별도 gallery server를 운영하지 않으며, 미디어를 불투명한 전용 저장 형식 안으로 옮기지 않습니다. 사진과 동영상은 일반 파일시스템 폴더에 남고, 폴더만으로 표현할 수 없는 관계와 결정만 로컬 SQLite catalog에 기록합니다.
 
-> **현재 상태:** 초기 safety-first prototype입니다. `scan`, `plan`, `organize-plan`은 읽기 전용입니다. `quarantine`은 reversible exact-duplicate 이동을 지원하고, marker-gated `organize`는 automatic iPhone-camera rename/flatten item만 dry-run/apply할 수 있습니다. 영구 삭제, 검증된 HDD archive copy, cloud upload는 아직 구현하지 않았습니다.
+> **현재 상태:** 초기 safety-first prototype입니다. `scan`, `plan`, `organize-plan`은 읽기 전용이고, `archive-plan`은 media에 대해 읽기 전용이며 local-private immutable plan 파일만 씁니다. `quarantine`은 reversible exact-duplicate 이동을 지원하고, marker-gated `organize`는 automatic iPhone-camera rename/flatten item만 dry-run/apply할 수 있습니다. 영구 삭제, 검증된 HDD archive copy, cloud upload는 아직 구현하지 않았습니다.
 
 ## 왜 필요한가
 
@@ -60,6 +60,7 @@ byte 보존 복제본          provenance와 이력
 - catalog의 portable semantic subset을 versioned JSONL로 export하고 raw hash·Live Photo fingerprint·filesystem ID·absolute root path·capture timestamp·provider object ID·generated scan/event cache 없이 새 SQLite catalog로 dry-run/restore
 - 같은 volume 안의 rename/move에서는 physical resource identity를 유지하고, optional `.photoarchive-root` marker로 이동된 source root도 동일 root로 다시 인식
 - `IMG_####` / `IMG_E####` camera-style 이름만 대상으로 `YYYY-MM-DD_HH-mm-ss[_NN]` 촬영시각 기반 flat rename `organize-plan` 생성; custom filename은 보존
+- marker가 초기화된 destination을 대상으로 immutable `archive-plan` 생성: logical asset마다 canonical representation 하나를 선택하고, complete Live Photo still+paired-video를 atomic하게 유지하며, source/destination marker binding과 relative path를 고정하고, AUTO source의 현재 byte를 같은 scan/catalog의 exact SHA-256 evidence와 다시 비교하며, destination에 이미 존재하는 filename collision은 deterministic suffix로 회피
 - `organize --apply`에는 stable root marker를 요구하고, Live Photo still+video를 같은 destination basename으로 유지하며 post-move filesystem identity/size를 검증한 뒤 stable resource path/history를 full rescan 없이 SQLite에 transaction commit하고, catalog commit 실패 시 filesystem move 전체 rollback
 - `cleanup-empty-dirs`는 완료된 organization manifest와 catalog location history에 실제로 기록된 source directory만 대상으로 하며, stable root marker를 확인하고 package/symlink boundary를 제외한 뒤 apply 순간에도 완전히 빈 directory만 제거
 - 사람이 읽는 report와 privacy-safe JSON report 제공
@@ -124,7 +125,7 @@ swift run photoarchive plan \
   --takeout "~/Pictures/Takeout"
 ```
 
-AI agent는 `scan`, `plan`, `organize-plan`, `organize`, `quarantine`, `restore-quarantine`, `cleanup-empty-dirs`와 `catalog` command의 report에서 `--agent-json`을 사용해야 하며, path를 포함할 수 있는 local diagnostic `--json`은 agent에 전달하지 않습니다. JSONL snapshot 파일 자체는 portable restore에 relative path·original filename·collection label이 필요하므로 **agent-safe가 아닙니다**.
+AI agent는 `scan`, `plan`, `organize-plan`, `archive-plan`, `organize`, `quarantine`, `restore-quarantine`, `cleanup-empty-dirs`와 `catalog` command의 report에서 `--agent-json`을 사용해야 하며, path를 포함할 수 있는 local diagnostic `--json`은 agent에 전달하지 않습니다. persisted archive-plan과 JSONL snapshot 파일 자체는 안전한 replay/disaster recovery에 local-private path·filename·marker binding·integrity precondition이 필요하므로 **agent-safe가 아닙니다**.
 
 아무 파일도 이동하지 않고 quarantine 후보를 먼저 검증합니다.
 
@@ -158,6 +159,19 @@ organization apply 전에는 stable root marker를 명시적으로 초기화합�
 swift run photoarchive cleanup-empty-dirs --agent-json "/path/to/organization.json"
 # preflight 성공 후에만 --apply 추가
 ```
+
+아직 media를 copy하지 않고 local-private immutable HDD archive plan만 생성할 수 있습니다. automatic copy authority를 받으려면 canonical source root와 archive destination 모두 stable `.photoarchive-root` marker가 필요합니다.
+
+```bash
+swift run photoarchive archive-plan \
+  --to "/Volumes/Photo Archive" \
+  --output "~/Library/Application Support/PhotoArchiveKit/archive-plan.json" \
+  --agent-json \
+  --local "~/Pictures" \
+  --takeout "~/Pictures/Takeout"
+```
+
+persisted plan은 source/destination path, exact byte size, marker binding, expected SHA-256 precondition을 포함하는 **local-private** 파일입니다. `--agent-json`에는 opaque ID, reason code, count만 노출합니다. `archive-plan` 자체는 media를 copy/delete하지 않으며 verified staging/copy/apply가 다음 archive milestone입니다.
 
 catalog의 portable semantic state를 versioned disaster-recovery snapshot으로 내보낼 수 있습니다.
 

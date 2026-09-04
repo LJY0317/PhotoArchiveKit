@@ -43,17 +43,20 @@ public enum ExactDuplicateEngine: String, Codable, CaseIterable, Sendable {
 
 public struct ScanOptions: Sendable {
     public var computeExactDuplicates: Bool
+    public var computeArchiveIntegrityPreconditions: Bool
     public var exactDuplicateEngine: ExactDuplicateEngine
     public var eventGap: TimeInterval
     public var maxConcurrentProbes: Int
 
     public init(
         computeExactDuplicates: Bool = true,
+        computeArchiveIntegrityPreconditions: Bool = false,
         exactDuplicateEngine: ExactDuplicateEngine = .automatic,
         eventGap: TimeInterval = 6 * 60 * 60,
         maxConcurrentProbes: Int = min(max(ProcessInfo.processInfo.activeProcessorCount, 1), 8)
     ) {
         self.computeExactDuplicates = computeExactDuplicates
+        self.computeArchiveIntegrityPreconditions = computeArchiveIntegrityPreconditions
         self.exactDuplicateEngine = exactDuplicateEngine
         self.eventGap = eventGap
         self.maxConcurrentProbes = max(1, maxConcurrentProbes)
@@ -278,6 +281,7 @@ public struct RootScanReport: Codable, Sendable, Equatable {
     public let kind: SourceRootKind
     public let provenance: SourceProvenance
     public let canonicalPath: String
+    public let stableMarkerKey: String?
     public let mediaFileCount: Int
     public let completeLivePhotos: Int
     public let stillOnlyLiveResources: Int
@@ -294,6 +298,7 @@ public struct RootScanReport: Codable, Sendable, Equatable {
         kind: SourceRootKind,
         provenance: SourceProvenance,
         canonicalPath: String,
+        stableMarkerKey: String? = nil,
         mediaFileCount: Int,
         completeLivePhotos: Int,
         stillOnlyLiveResources: Int,
@@ -309,6 +314,7 @@ public struct RootScanReport: Codable, Sendable, Equatable {
         self.kind = kind
         self.provenance = provenance
         self.canonicalPath = canonicalPath
+        self.stableMarkerKey = stableMarkerKey
         self.mediaFileCount = mediaFileCount
         self.completeLivePhotos = completeLivePhotos
         self.stillOnlyLiveResources = stillOnlyLiveResources

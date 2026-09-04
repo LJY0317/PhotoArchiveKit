@@ -25,6 +25,8 @@ struct PhotoArchiveSelfTest {
         let rootB = temporary.appendingPathComponent("B", isDirectory: true)
         try fileManager.createDirectory(at: rootA, withIntermediateDirectories: true)
         try fileManager.createDirectory(at: rootB, withIntermediateDirectories: true)
+        let rootAMarker = try RootMarkerStore.create(at: rootA)
+        let rootBMarker = try RootMarkerStore.create(at: rootB)
         defer { try? fileManager.removeItem(at: temporary) }
 
         let validTimedVideo = temporary.appendingPathComponent("valid-timed.mov")
@@ -117,6 +119,163 @@ struct PhotoArchiveSelfTest {
         try require(!agentJSON.contains("one.jpg"), "agent-safe report exposed a filename")
         try require(!agentJSON.contains("copy.jpg"), "agent-safe report exposed a filename")
         try require(!agentJSON.contains("catalog.sqlite3"), "agent-safe report exposed a catalog path")
+        try require(!agentJSON.contains(rootAMarker.markerKey), "agent-safe report exposed a root marker key")
+        try require(!agentJSON.contains(rootBMarker.markerKey), "agent-safe report exposed a root marker key")
+
+        let archiveDestination = temporary.appendingPathComponent("ArchiveDestination", isDirectory: true)
+        try fileManager.createDirectory(at: archiveDestination, withIntermediateDirectories: true)
+        let archiveDestinationMarker = try RootMarkerStore.create(at: archiveDestination)
+        let archivePlan = try scanner.makeArchivePlan(from: first, destinationURL: archiveDestination)
+        try require(archivePlan.mediaFilesModified == false, "archive planning must not modify media")
+        try require(archivePlan.summary.automaticItemCount == 1, "expected one canonical archive item")
+        try require(archivePlan.summary.automaticResourceCount == 1, "expected one canonical archive resource")
+        try require(archivePlan.summary.reviewItemCount == 0, "exact standalone copies should not require archive review")
+        guard let archivedResource = archivePlan.items.first?.resources.first else {
+            throw SelfTestFailure("archive plan did not contain a canonical resource")
+        }
+        try require(
+            archivedResource.sourceRootID == first.resources.first(where: { $0.relativePath == "one.jpg" })?.rootID,
+            "archive planner should prefer the non-Takeout canonical copy"
+        )
+        try require(
+            archivedResource.expectedSHA256 == rawHash,
+            "archive plan should freeze a fresh full-file SHA-256 precondition"
+        )
+        try require(
+            archivedResource.destinationRelativePath == "Media/Undated/one.jpg",
+            "archive plan should use the deterministic undated fallback folder"
+        )
+        let archivePlanURL = temporary.appendingPathComponent("archive-plan.json")
+        try ArchivePlanStore.write(archivePlan, to: archivePlanURL)
+        try require(
+            try ArchivePlanStore.read(from: archivePlanURL) == archivePlan,
+            "archive plan should round-trip without changing immutable preconditions"
+        )
+        do {
+            try ArchivePlanStore.write(archivePlan, to: archivePlanURL)
+            throw SelfTestFailure("archive plan store overwrote an existing plan")
+        } catch ArchivePlanError.planOutputExists {
+            // Expected: immutable plans are never overwritten in place.
+        }
+        let archiveAgentJSON = String(
+            decoding: try encoder.encode(AgentSafeArchivePlan(plan: archivePlan)),
+            as: UTF8.self
+        )
+        try require(!archiveAgentJSON.contains(rawHash), "agent-safe archive plan exposed SHA-256")
+        try require(!archiveAgentJSON.contains(rootA.path), "agent-safe archive plan exposed a source path")
+        try require(!archiveAgentJSON.contains(archiveDestination.path), "agent-safe archive plan exposed destination path")
+        try require(!archiveAgentJSON.contains("one.jpg"), "agent-safe archive plan exposed a filename")
+        try require(
+            !archiveAgentJSON.contains(archiveDestinationMarker.markerKey),
+            "agent-safe archive plan exposed a destination marker key"
+        )
+
+        let sameSizeTamper = Data(repeating: 0x5A, count: beforeA.count)
+        try sameSizeTamper.write(to: fileA)
+        do {
+            _ = try scanner.makeArchivePlan(from: first, destinationURL: archiveDestination)
+            throw SelfTestFailure("archive planning accepted source bytes changed after the scan")
+        } catch ArchivePlanError.sourceChanged {
+            // Expected: immutable copy authority must be anchored to scan/catalog exact evidence.
+        }
+        try beforeA.write(to: fileA)
+
+        let occupiedArchiveFolder = archiveDestination
+            .appendingPathComponent("Media/Undated", isDirectory: true)
+        try fileManager.createDirectory(at: occupiedArchiveFolder, withIntermediateDirectories: true)
+        try Data("existing-archive-entry".utf8).write(
+            to: occupiedArchiveFolder.appendingPathComponent("one.jpg")
+        )
+        let collisionPlan = try scanner.makeArchivePlan(from: first, destinationURL: archiveDestination)
+        try require(
+            collisionPlan.items.first?.resources.first?.destinationRelativePath == "Media/Undated/one_01.jpg",
+            "archive planning should deterministically avoid an existing destination path"
+        )
+
+        let unmarkedRoot = temporary.appendingPathComponent("UnmarkedSource", isDirectory: true)
+        try fileManager.createDirectory(at: unmarkedRoot, withIntermediateDirectories: true)
+        try Data("unmarked-source-media".utf8).write(to: unmarkedRoot.appendingPathComponent("plain.jpg"))
+        let unmarkedScanner = try ArchiveScanner(
+            catalogURL: temporary.appendingPathComponent("unmarked-catalog.sqlite3")
+        )
+        let unmarkedReport = try await unmarkedScanner.scan(roots: [
+            ScanRoot(url: unmarkedRoot, kind: .reference, provenance: .localLibrary)
+        ])
+        let unmarkedPlan = try unmarkedScanner.makeArchivePlan(
+            from: unmarkedReport,
+            destinationURL: archiveDestination
+        )
+        try require(unmarkedPlan.summary.automaticItemCount == 0, "unmarked source must not receive replay authority")
+        try require(unmarkedPlan.summary.reviewItemCount == 1, "unmarked source should remain review-only")
+        try require(
+            unmarkedPlan.items.first?.reason == .sourceRootMarkerMissing,
+            "unmarked source should report the stable-marker blocker"
+        )
+
+        let liveArchiveSource = temporary.appendingPathComponent("ArchiveLiveSource", isDirectory: true)
+        let liveArchiveDestination = temporary.appendingPathComponent("ArchiveLiveDestination", isDirectory: true)
+        try fileManager.createDirectory(
+            at: liveArchiveSource.appendingPathComponent("nested", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+        try fileManager.createDirectory(
+            at: liveArchiveSource.appendingPathComponent("other", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+        try fileManager.createDirectory(at: liveArchiveDestination, withIntermediateDirectories: true)
+        let liveArchiveSourceMarker = try RootMarkerStore.create(at: liveArchiveSource)
+        _ = try RootMarkerStore.create(at: liveArchiveDestination)
+        let liveArchiveBytes: [String: Data] = [
+            "FORG1": Data(repeating: 0x11, count: 100),
+            "FORG2": Data(repeating: 0x22, count: 200),
+            "FORG3": Data(repeating: 0x33, count: 80),
+            "FORG4": Data(repeating: 0x44, count: 70)
+        ]
+        try liveArchiveBytes["FORG1"]!.write(
+            to: liveArchiveSource.appendingPathComponent("nested/IMG_1234.HEIC")
+        )
+        try liveArchiveBytes["FORG2"]!.write(
+            to: liveArchiveSource.appendingPathComponent("nested/IMG_1234.MOV")
+        )
+        try liveArchiveBytes["FORG3"]!.write(
+            to: liveArchiveSource.appendingPathComponent("other/IMG_5678.JPG")
+        )
+        try liveArchiveBytes["FORG4"]!.write(
+            to: liveArchiveSource.appendingPathComponent("other/ZIIl652B 2.jpg")
+        )
+        let liveArchiveReport = syntheticOrganizationReport(
+            localPath: liveArchiveSource.path,
+            stableMarkerKey: liveArchiveSourceMarker.markerKey
+        )
+        let liveArchiveHashes = liveArchiveBytes.mapValues { Data(SHA256.hash(data: $0)) }
+        let liveArchivePlan = try ArchivePlanner.makePlan(
+            from: liveArchiveReport,
+            destinationURL: liveArchiveDestination,
+            expectedHashForResource: { liveArchiveHashes[$0] }
+        )
+        try require(
+            liveArchivePlan.summary.automaticItemCount == 3
+                && liveArchivePlan.summary.automaticResourceCount == 4,
+            "archive planner should select one complete Live Photo pair plus two standalone resources"
+        )
+        guard let liveArchiveItem = liveArchivePlan.items.first(where: { $0.kind == .livePhoto }) else {
+            throw SelfTestFailure("archive plan is missing the synthetic Live Photo")
+        }
+        try require(
+            liveArchiveItem.decision == .automatic && liveArchiveItem.resources.count == 2,
+            "complete Live Photo archive planning must stay atomic"
+        )
+        let liveArchiveStems = Set(liveArchiveItem.resources.map {
+            ($0.destinationRelativePath as NSString).deletingPathExtension
+        })
+        try require(
+            liveArchiveStems.count == 1,
+            "Live Photo archive resources must share one destination basename"
+        )
+        try require(
+            liveArchiveItem.resources.allSatisfy { $0.destinationRelativePath.hasPrefix("Media/2026/") },
+            "archive planner should place the synthetic Live Photo in its capture-year folder"
+        )
 
         guard let rootAID = first.resources.first(where: { $0.relativePath == "one.jpg" })?.rootID,
               let rootBID = first.resources.first(where: { $0.relativePath == "copy.jpg" })?.rootID,
@@ -973,6 +1132,7 @@ private func writeSyntheticTimedMetadataMovie(
 
 private func syntheticOrganizationReport(
     localPath: String = "/synthetic/local",
+    stableMarkerKey: String? = nil,
     alreadyOrganizedLivePhoto: Bool = false
 ) -> ScanReport {
     let rootID = "RORG"
@@ -1069,6 +1229,7 @@ private func syntheticOrganizationReport(
                 kind: .inbox,
                 provenance: .localLibrary,
                 canonicalPath: localPath,
+                stableMarkerKey: stableMarkerKey,
                 mediaFileCount: 4,
                 completeLivePhotos: 1,
                 stillOnlyLiveResources: 0,

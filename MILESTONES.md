@@ -361,6 +361,31 @@ Restored asset rebind는 `snapshot:` placeholder key가 있는 asset에만 허�
 
 현재 DevSpace agent boundary에서는 실제 개인 catalog를 local-private JSONL 본문으로 펼쳐 agent가 검사하는 작업은 수행하지 않았다. real archive에서의 snapshot placement와 replica copy/check는 HDD archive destination/apply milestone에서 사용자 local path 안에서 검증한다.
 
+## 2026-09-05 — Immutable HDD archive plan
+
+실제 HDD copy authority를 만들기 전에 source/destination identity와 exact-byte precondition을 persisted local-private artifact로 고정하는 `photoarchive archive-plan`을 추가했다. destination은 explicit `.photoarchive-root` marker가 있어야 plan 자체가 생성되고, AUTO source representation은 같은 scan에서 관찰된 source marker binding이 현재 filesystem marker와 일치해야 한다.
+
+Archive-plan mode는 일반 duplicate scan의 size-group 최적화와 달리 모든 media resource의 scan-time SHA-256을 완성한다. planner는 canonical representation을 선택한 뒤 해당 resource를 다시 full-file SHA-256으로 읽어 scan/catalog evidence와 fresh byte가 정확히 같을 때만 `expectedSHA256` precondition을 plan에 기록한다. 따라서 scan 뒤 같은 byte size로 source를 변조해도 plan 생성 전에 거부된다.
+
+Synthetic validation:
+
+```text
+marked local + exact Takeout copy -> one non-Takeout AUTO canonical resource    PASS
+scan/catalog SHA-256 == fresh source SHA-256 before freezing plan               PASS
+same-size source tamper after scan rejected                                      PASS
+existing destination filename receives deterministic _NN suffix                  PASS
+persisted plan refuses overwrite and round-trips unchanged                       PASS
+unmarked source remains REVIEW-only                                               PASS
+complete Live Photo still+paired-video remains one 2-resource AUTO item           PASS
+Live Photo destination basename remains atomic/shared                            PASS
+agent-safe output omits path/filename/marker key/byte size/SHA-256               PASS
+end-to-end synthetic archive-plan CLI smoke                                      PASS
+```
+
+Destination folder policy는 현재 `Media/YYYY`이고 trusted/available local capture year가 없으면 `Media/Undated`를 사용한다. 이 단계는 media를 copy하거나 delete하지 않는다. persisted plan은 source/destination path, marker key, relative path, exact byte size, expected SHA-256을 포함하므로 agent-safe/share-safe가 아닌 local-private replay authority다.
+
+다음 archive milestone은 이 plan을 독립적으로 다시 검증하는 staging copy -> byte verify -> atomic finalization -> catalog commit이다. 실제 HDD root marker는 사용자 명시 승인 없이 자동 생성하지 않는다.
+
 ## 2026-09-04 — Product North Star 고정
 
 최초 제품 목적을 `docs/PROJECT_NORTH_STAR.md`와 `AGENTS.md`의 explicit scope gate로 고정했다.

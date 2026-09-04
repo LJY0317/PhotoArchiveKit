@@ -40,7 +40,7 @@ Roadmap은 작고 검증 가능한 layer를 우선한다. 어느 phase도 existi
 - [ ] existing archive folder를 collection example로 import
 - [ ] event-level collection proposal
 - [ ] confidence band 및 policy preset
-- [ ] precondition을 가진 immutable plan format
+- [x] source/destination marker binding, fresh exact-byte precondition, deterministic destination을 가진 immutable HDD archive plan format
 - [ ] Finder-compatible shadow review folder 또는 lightweight generated review index
 - [ ] 기본은 no mutation; explicit plan validation command
 

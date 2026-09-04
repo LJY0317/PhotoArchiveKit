@@ -36,6 +36,22 @@ public final class ArchiveScanner {
         }
     }
 
+    public func makeArchivePlan(
+        from report: ScanReport,
+        destinationURL: URL
+    ) throws -> ArchivePlan {
+        try ArchivePlanner.makePlan(
+            from: report,
+            destinationURL: destinationURL,
+            expectedHashForResource: { resourceID in
+                try self.catalog.archivePlanExactHash(
+                    resourceID: resourceID,
+                    sessionID: report.sessionID
+                )
+            }
+        )
+    }
+
     public func scan(
         roots inputs: [ScanRoot],
         options: ScanOptions = ScanOptions()
@@ -73,6 +89,12 @@ public final class ArchiveScanner {
                     resources: &resources,
                     roots: roots,
                     engine: options.exactDuplicateEngine,
+                    maxConcurrency: min(options.maxConcurrentProbes, 4)
+                ))
+            }
+            if options.computeArchiveIntegrityPreconditions {
+                warnings.append(contentsOf: await hashArchiveIntegrityPreconditions(
+                    resources: &resources,
                     maxConcurrency: min(options.maxConcurrentProbes, 4)
                 ))
             }
@@ -344,6 +366,20 @@ public final class ArchiveScanner {
         )
     }
 
+    private func hashArchiveIntegrityPreconditions(
+        resources: inout [ProbedResource],
+        maxConcurrency: Int
+    ) async -> [ScanWarning] {
+        let missingHashes = resources.indices.filter {
+            resources[$0].mediaKind != .sidecar && resources[$0].exactHash == nil
+        }
+        return await hashCandidateIndices(
+            missingHashes,
+            resources: &resources,
+            maxConcurrency: maxConcurrency
+        )
+    }
+
     private func hashCzkawkaDuplicateCandidates(
         resources: inout [ProbedResource],
         roots: [RootDescriptor],
@@ -555,6 +591,7 @@ public final class ArchiveScanner {
                 kind: root.kind,
                 provenance: root.provenance,
                 canonicalPath: root.url.path,
+                stableMarkerKey: root.markerKey,
                 mediaFileCount: rootResources.count {
                     $0.mediaKind == .image || $0.mediaKind == .video
                 },

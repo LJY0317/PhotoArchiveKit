@@ -52,6 +52,10 @@ catalog는 private application state다. `.gitignore`로 제외하며 sanitizati
 
 반면 새 catalog가 archive와 다시 연결될 수 있도록 opaque root/resource/asset ID, root kind/provenance, optional stable root-marker key, relative resource/location path, original filename, asset-resource role, collection hierarchy/membership, Takeout source-folder mapping은 보존한다. 따라서 이 snapshot의 `sanitized`는 **재생성 가능한 raw/cache와 absolute machine path를 제거했다는 뜻**이며, agent-safe/share-safe라는 뜻이 아니다. relative path·filename·collection label은 여전히 개인 정보일 수 있으므로 snapshot은 local-private backup으로 취급하고 AI agent에는 snapshot 본문이 아니라 `catalog ... --agent-json`의 count/status report만 전달한다.
 
+### Immutable archive plan
+
+`photoarchive archive-plan`이 쓰는 persisted JSON도 agent-safe 파일이 아니다. 향후 copy/apply가 scan 시점의 결정을 독립적으로 재검증하려면 source/destination canonical path, stable root-marker key, resource relative path, exact byte size, destination relative path, expected SHA-256이 필요하다. 이 값들은 local replay authority이므로 plan 파일은 local-private으로 취급한다. AI agent에는 plan 본문이 아니라 `archive-plan --agent-json`의 opaque plan/item/asset ID, decision/reason, resource count만 전달한다.
+
 ### Agent-safe report에 절대 포함하지 않는 항목
 
 - image/video byte

@@ -120,7 +120,8 @@ final class SQLiteCatalog {
                 label: input.label,
                 kind: input.kind,
                 provenance: input.provenance,
-                url: canonicalURL
+                url: canonicalURL,
+                markerKey: markerKey
             )
         }
 
@@ -141,7 +142,8 @@ final class SQLiteCatalog {
                 label: input.label,
                 kind: input.kind,
                 provenance: input.provenance,
-                url: canonicalURL
+                url: canonicalURL,
+                markerKey: markerKey
             )
         }
 
@@ -165,7 +167,8 @@ final class SQLiteCatalog {
             label: input.label,
             kind: input.kind,
             provenance: input.provenance,
-            url: canonicalURL
+            url: canonicalURL,
+            markerKey: markerKey
         )
     }
 
@@ -1118,6 +1121,13 @@ final class SQLiteCatalog {
         try queryBlob(
             "SELECT exact_hash FROM resources WHERE root_id = ? AND relative_path = ?",
             bindings: [.text(rootID), .text(relativePath)]
+        )
+    }
+
+    func archivePlanExactHash(resourceID: String, sessionID: String) throws -> Data? {
+        try queryBlob(
+            "SELECT exact_hash FROM resources WHERE id = ? AND last_seen_session = ?",
+            bindings: [.text(resourceID), .text(sessionID)]
         )
     }
 

@@ -22,6 +22,8 @@ struct PhotoArchiveCLI {
                 try await runScan(arguments, mode: .plan)
             case "organize-plan":
                 try await runScan(arguments, mode: .organizePlan)
+            case "archive-plan":
+                try await runScan(arguments, mode: .archivePlan)
             case "organize":
                 try await runScan(arguments, mode: .organize)
             case "quarantine":
@@ -329,6 +331,7 @@ struct PhotoArchiveCLI {
         case scan
         case plan
         case organizePlan
+        case archivePlan
         case organize
         case quarantine
     }
@@ -342,6 +345,8 @@ struct PhotoArchiveCLI {
         var eventGapHours = 6.0
         var maxConcurrency = min(max(ProcessInfo.processInfo.activeProcessorCount, 1), 8)
         var quarantineTargetURL: URL?
+        var archiveDestinationURL: URL?
+        var archivePlanOutputURL: URL?
         var applyMutation = false
         var roots: [ScanRoot] = []
 
@@ -376,10 +381,17 @@ struct PhotoArchiveCLI {
                 }
                 maxConcurrency = value
             case "--to":
-                guard mode == .quarantine else {
-                    throw CLIError("--to is only valid with the quarantine command.")
+                guard mode == .quarantine || mode == .archivePlan else {
+                    throw CLIError("--to is only valid with quarantine or archive-plan.")
                 }
-                quarantineTargetURL = fileURL(try value(after: argument, at: &index, in: arguments))
+                let url = fileURL(try value(after: argument, at: &index, in: arguments))
+                if mode == .archivePlan { archiveDestinationURL = url }
+                else { quarantineTargetURL = url }
+            case "--output":
+                guard mode == .archivePlan else {
+                    throw CLIError("--output is only valid with archive-plan.")
+                }
+                archivePlanOutputURL = fileURL(try value(after: argument, at: &index, in: arguments))
             case "--apply":
                 guard mode == .quarantine || mode == .organize else {
                     throw CLIError("--apply is only valid with the quarantine or organize command.")
@@ -431,6 +443,7 @@ struct PhotoArchiveCLI {
                 case .scan: command = "scan"
                 case .plan: command = "plan"
                 case .organizePlan: command = "organize-plan"
+                case .archivePlan: command = "archive-plan"
                 case .organize: command = "organize"
                 case .quarantine: command = "quarantine"
                 }
@@ -457,6 +470,7 @@ struct PhotoArchiveCLI {
             roots: roots,
             options: ScanOptions(
                 computeExactDuplicates: computeExactDuplicates,
+                computeArchiveIntegrityPreconditions: mode == .archivePlan,
                 exactDuplicateEngine: exactDuplicateEngine,
                 eventGap: eventGapHours * 60 * 60,
                 maxConcurrentProbes: maxConcurrency
@@ -483,6 +497,31 @@ struct PhotoArchiveCLI {
                 try printJSON(plan)
             } else {
                 printOrganizationPlan(plan)
+            }
+            return
+        }
+
+        if mode == .archivePlan {
+            guard computeExactDuplicates else {
+                throw CLIError("archive-plan requires exact duplicate comparison.")
+            }
+            guard let archiveDestinationURL else {
+                throw CLIError("archive-plan requires --to PATH.")
+            }
+            guard let archivePlanOutputURL else {
+                throw CLIError("archive-plan requires --output PATH.")
+            }
+            let plan = try scanner.makeArchivePlan(
+                from: report,
+                destinationURL: archiveDestinationURL
+            )
+            try ArchivePlanStore.write(plan, to: archivePlanOutputURL)
+            if outputAgentJSON {
+                try printJSON(AgentSafeArchivePlan(plan: plan))
+            } else if outputJSON {
+                try printJSON(plan)
+            } else {
+                printArchivePlan(plan, outputURL: archivePlanOutputURL)
             }
             return
         }
@@ -613,6 +652,20 @@ struct PhotoArchiveCLI {
             print("... \(plan.items.count - 80) more items; use --json locally or --agent-json for an AI agent")
         }
         print("")
+        print("No media files were modified.")
+    }
+
+    private static func printArchivePlan(_ plan: ArchivePlan, outputURL: URL) {
+        print("PhotoArchiveKit immutable archive plan")
+        print("Plan: \(plan.planID)")
+        print("Policy: \(plan.policy)")
+        print("Automatic items: \(plan.summary.automaticItemCount)")
+        print("Automatic resources: \(plan.summary.automaticResourceCount)")
+        print("Review items: \(plan.summary.reviewItemCount)")
+        print("Review resources: \(plan.summary.reviewResourceCount)")
+        print("Plan file: \(outputURL.path)")
+        print("")
+        print("The plan file is local-private: it contains source/destination paths, exact byte sizes, and expected SHA-256 preconditions.")
         print("No media files were modified.")
     }
 
@@ -857,6 +910,7 @@ struct PhotoArchiveCLI {
               photoarchive scan [options] ROOT...
               photoarchive plan [options] ROOT...
               photoarchive organize-plan [options] ROOT...
+              photoarchive archive-plan --to PATH --output PLAN [options] ROOT...
               photoarchive organize [--apply] [options] ROOT...
               photoarchive quarantine --to PATH [--apply] [options] ROOT...
               photoarchive restore-quarantine [--apply] [--catalog PATH] MANIFEST
@@ -873,7 +927,8 @@ struct PhotoArchiveCLI {
             user-supplied local quarantine directory. It never permanently deletes media.
 
             Run 'photoarchive scan --help', 'photoarchive plan --help',
-            'photoarchive organize-plan --help', 'photoarchive organize --help',
+            'photoarchive organize-plan --help', 'photoarchive archive-plan --help',
+            'photoarchive organize --help',
             'photoarchive quarantine --help', 'photoarchive restore-quarantine --help',
             'photoarchive cleanup-empty-dirs --help', or 'photoarchive catalog --help'
             for options.
@@ -1003,6 +1058,8 @@ struct PhotoArchiveCLI {
         let mutationOptions: String
         if command == "quarantine" {
             mutationOptions = "  --to PATH                  Existing quarantine directory (required)\n  --apply                    Move verified AUTO candidates; default is dry-run\n"
+        } else if command == "archive-plan" {
+            mutationOptions = "  --to PATH                  Existing marker-initialized archive destination (required)\n  --output PATH              New local-private immutable plan JSON path (required)\n"
         } else if command == "organize" {
             mutationOptions = "  --apply                    Rename/flatten verified AUTO organization items; default is dry-run\n"
         } else {
@@ -1015,6 +1072,14 @@ struct PhotoArchiveCLI {
             every candidate against a preferred exact counterpart; Live Photo candidate
             sets are fully verified before any resource in that item is moved. A local
             restore manifest is written under the quarantine directory.
+            """
+        } else if command == "archive-plan" {
+            operationNotes = """
+            archive-plan is media-read-only but writes one immutable local-private plan file.
+            It requires a stable marker on the destination. Automatic source representations
+            also require stable source markers and are freshly verified with full SHA-256
+            before their source/destination paths and byte preconditions are frozen in the plan.
+            Review items are never given automatic copy authority.
             """
         } else if command == "organize" {
             operationNotes = """

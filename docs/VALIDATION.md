@@ -75,6 +75,12 @@ Synthetic catalog에서 versioned JSONL export -> restore dry-run -> 새 SQLite 
 
 이 JSONL은 relative path, original filename, collection label을 보존하므로 agent-safe/share-safe 파일이 아니라 local-private disaster-recovery artifact다.
 
+## Immutable archive plan 검증
+
+Synthetic marked source/destination fixture에서 `archive-plan`이 non-Takeout canonical exact copy 하나만 AUTO로 선택하고, plan 시점의 fresh SHA-256을 같은 scan/catalog에 저장된 exact evidence와 다시 비교한 뒤 local-private precondition으로 고정하는 것을 검증했다. scan 뒤 source byte를 같은 크기로 바꾸면 `sourceChanged`로 plan 생성이 거부된다. destination에 같은 filename이 이미 있으면 deterministic `_NN` suffix로 충돌을 피한다.
+
+별도 synthetic Live Photo fixture에서는 complete still + paired-video 두 resource가 하나의 AUTO item으로 유지되고 destination basename도 동일했다. source stable marker가 없는 fixture는 REVIEW로 남는다. agent-safe archive plan에는 source/destination path, filename, marker key, byte size, SHA-256이 포함되지 않는다. 아직 실제 HDD copy/apply는 구현하지 않았으므로 이 validation은 immutable plan authority까지만 다룬다.
+
 ## Provenance 결론
 
 byte-identical file만으로 Image Capture와 Google Photos web 중 어디에서 왔는지 알 수 없다. provenance는 file content에서 추론하지 말고 source root, declared import method, relative path, scan session에서 기록해야 한다.

@@ -16,7 +16,7 @@ PhotoArchiveKit is a local-first, session-based toolkit for preserving and organ
 
 The project is intentionally small. It does not run a background daemon, host a gallery server, or move media behind an opaque storage format. Media remains in ordinary filesystem folders; a local SQLite catalog records relationships and decisions that folders cannot express.
 
-> **Project status:** early safety-first prototype. `scan`, `plan`, and `organize-plan` are read-only. `quarantine` supports reversible exact-duplicate moves, while marker-gated `organize` can dry-run or apply only automatic iPhone-camera rename/flatten items. Permanent deletion, verified HDD archive copy, and cloud upload are not implemented yet.
+> **Project status:** early safety-first prototype. `scan`, `plan`, and `organize-plan` are read-only; `archive-plan` is media-read-only and writes only a local-private immutable plan file. `quarantine` supports reversible exact-duplicate moves, while marker-gated `organize` can dry-run or apply only automatic iPhone-camera rename/flatten items. Permanent deletion, verified HDD archive copy, and cloud upload are not implemented yet.
 
 ## Why this exists
 
@@ -60,6 +60,7 @@ The initial CLI can:
 - export that catalog's portable semantic subset as versioned JSONL and dry-run/restore it into a new SQLite catalog without carrying raw hashes, Live Photo fingerprints, filesystem IDs, absolute root paths, capture timestamps, provider object IDs, or generated scan/event caches;
 - keep same-volume resource identity stable across rename/move and recognize a moved source root through an optional `.photoarchive-root` marker;
 - generate a read-only `organize-plan` for only `IMG_####` / `IMG_E####` camera-style names, using capture wall-clock names such as `YYYY-MM-DD_HH-mm-ss[_NN]` while preserving custom filenames;
+- generate an immutable `archive-plan` against a marker-initialized destination: choose one canonical representation per logical asset, keep complete Live Photo still+paired-video resources atomic, freeze source/destination marker bindings and relative paths, freshly compare each AUTO source byte stream with exact SHA-256 evidence from the same scan/catalog state, and avoid existing destination filename collisions deterministically;
 - require a stable root marker before `organize --apply`, keep Live Photo still+video on one destination basename, verify post-move filesystem identity/size, transactionally update the stable resource path/history in SQLite without a second full scan, write a restore manifest, and roll back filesystem moves if catalog commit fails;
 - let `cleanup-empty-dirs` consider only source directories proven by a completed organization manifest plus catalog location history, require the stable root marker, skip package/symlink boundaries, and remove only directories that are still literally empty at apply time;
 - produce a human-readable report or sanitized JSON;
@@ -124,7 +125,7 @@ swift run photoarchive plan \
   --takeout "~/Pictures/Takeout"
 ```
 
-For an AI agent, use `--agent-json` with `scan`, `plan`, `organize-plan`, `organize`, `quarantine`, `restore-quarantine`, `cleanup-empty-dirs`, or the `catalog` command reports; local diagnostic `--json` can contain paths. The JSONL snapshot file itself is **not** agent-safe because portable restore requires relative paths, original filenames, and collection labels.
+For an AI agent, use `--agent-json` with `scan`, `plan`, `organize-plan`, `archive-plan`, `organize`, `quarantine`, `restore-quarantine`, `cleanup-empty-dirs`, or the `catalog` command reports; local diagnostic `--json` can contain paths. Persisted archive-plan and JSONL snapshot files themselves are **not** agent-safe because safe replay/disaster recovery requires local-private paths, filenames, marker bindings, and integrity preconditions.
 
 Preview a quarantine without moving anything:
 
@@ -158,6 +159,19 @@ After organization, empty-directory cleanup can be constrained to directories th
 swift run photoarchive cleanup-empty-dirs --agent-json "/path/to/organization.json"
 # add --apply only after the preflight succeeds
 ```
+
+Create a local-private immutable HDD archive plan without copying media yet. Both the canonical source root and archive destination need stable `.photoarchive-root` markers for an item to receive automatic copy authority:
+
+```bash
+swift run photoarchive archive-plan \
+  --to "/Volumes/Photo Archive" \
+  --output "~/Library/Application Support/PhotoArchiveKit/archive-plan.json" \
+  --agent-json \
+  --local "~/Pictures" \
+  --takeout "~/Pictures/Takeout"
+```
+
+The persisted plan is **local-private**: it contains source/destination paths, exact byte sizes, marker bindings, and expected SHA-256 preconditions. `--agent-json` exposes only opaque IDs, reason codes, and counts. `archive-plan` never copies or deletes media; verified staging/copy/apply is the next archive milestone.
 
 Export a versioned disaster-recovery snapshot of the catalog's portable semantic state:
 

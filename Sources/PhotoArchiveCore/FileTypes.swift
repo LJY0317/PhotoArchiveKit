@@ -60,6 +60,7 @@ struct RootDescriptor: Sendable {
     let kind: SourceRootKind
     let provenance: SourceProvenance
     let url: URL
+    let markerKey: String?
 }
 
 struct PendingFile: Sendable {
