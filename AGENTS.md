@@ -9,6 +9,8 @@
 ## 제품 범위
 - `docs/PROJECT_NORTH_STAR.md`를 제품 범위의 최우선 gate로 사용한다. 새 기능을 제안하거나 구현하기 전에 반드시 읽는다.
 - real library에서 duplicate reconciliation, Live Photo 보존, preferred representation 선택, folder archive plan, verified copy, portable semantic state의 완료 기준을 충족하기 전에는 주변 기능을 우선하지 않는다.
+- **완료 후에는 멈춘다.** 현재 milestone의 acceptance criteria가 real-library validation에서 충족되면, 단지 더 정교하게 만들 수 있다는 이유만으로 같은 문제를 계속 파고들지 않는다. 추가 구현은 실제 실패 사례, 측정된 병목, 핵심 workflow의 명확한 blocker 중 하나가 있을 때만 연다.
+- 새 기능이 핵심 North Star 항목을 직접 진전시키지 않거나 이미 충분히 해결된 문제의 정확도/세분화만 높인다면 기본 판단은 `defer`다. 얼굴 인식, 범용 semantic vision, 세밀한 taxonomy처럼 흥미롭지만 현재 archive 목적에 필수 아닌 기능은 실제 blocker가 되기 전에는 구현하지 않는다.
 - PhotoArchiveKit은 local-first, session 기반, 경량 도구로 유지한다. 이후 milestone에서 명시적으로 필요성이 확인되지 않는 한 background daemon이나 filesystem watcher를 추가하지 않는다.
 - core는 third-party executable 없이도 유용해야 한다. 선택적 integration은 성숙한 duplicate/replication/metadata 기능을 다시 구현하기보다 사용자가 이미 설치한 도구를 활용할 수 있다.
 - **Live Photo atomicity는 최상위 safety invariant다.** Live Photo는 여러 resource를 가진 하나의 logical asset으로 취급한다. copy, move, rename, quarantine, delete, archive, provider projection 중 하나라도 Live Photo resource를 건드리면 operation을 해당 logical asset/occurrence의 완전한 resource set으로 확장하거나 실패해야 한다. provenance preference, exact-duplicate 판단, 성능 최적화보다 이 규칙이 우선하며 검증된 pair의 한쪽만 독립적으로 처리하지 않는다.

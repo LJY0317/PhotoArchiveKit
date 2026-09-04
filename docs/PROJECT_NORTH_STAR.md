@@ -77,9 +77,18 @@ PhotoArchiveKit은 exact duplicate 제거와 "가장 잘 나온 한 장" 선택�
 - portable catalog snapshot/restore
 - 최소 하나의 독립적인 verified replica
 
-## 범위 게이트
+## 범위 게이트와 stop rule
 
 위 완료 기준을 직접 진전시키지 않는 기능은 원칙적으로 보류한다.
+
+또한 **완료 기준을 충족한 문제는 완료된 것으로 취급하고 멈춘다.** 더 높은 정확도, 더 많은 metadata, 더 세밀한 분류가 가능하다는 사실만으로 구현을 계속하지 않는다. 이미 핵심 workflow가 안전하고 재현 가능하게 동작한다면 추가 작업은 다음 중 하나가 있어야만 다시 연다.
+
+- 실제 사용자/real-library에서 재현되는 실패 사례
+- 측정된 성능·배터리·I/O 병목
+- Live Photo atomicity, privacy, 복원 가능성, verified archive를 막는 명확한 blocker
+- 기존 완료 기준을 만족하지 못한다는 새로운 증거
+
+그 외의 개선은 `nice-to-have` 또는 future experiment로 남기고 현재 milestone을 닫는다. 특히 얼굴·인물 인식, 범용 pixel semantic classification, 세밀한 사진 taxonomy는 현재 핵심 목적을 달성하기 위한 필수 조건이 아니므로 blocker가 되기 전에는 구현하지 않는다.
 
 특히 다음은 핵심 기능보다 앞서 구현하지 않는다.
 
