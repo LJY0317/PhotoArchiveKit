@@ -72,6 +72,7 @@ scanner는 media에 대해 read-only다. 명시적으로 선택한 SQLite catalo
 - AI agent는 media-processing trust boundary 밖에 둔다. 정상 agent workflow는 `--agent-json`을 사용하며 raw hash/identifier/GPS뿐 아니라 filename/path, capture timestamp, exact byte size 같은 file-level private detail도 agent에 전달하지 않는다.
 - Google Photos Photo Stack/Top pick은 exact dedupe가 아니라 human-in-the-loop best-shot curation 단계로 취급한다. 사용자의 정상 루틴은 iPhone 촬영 -> Google Photos backup/Top-pick review -> Mac ingest -> 필요 시 Krokiet/Czkawka residual similarity review -> PhotoArchiveKit exact/Live Photo reconciliation -> archive 순서다.
 - Top pick을 사용했다고 batch가 similarity-free라고 가정하지 않는다. Google이 남긴 후보가 마음에 들지 않거나 여러 후보를 유지한 경우에만 Mac에서 Krokiet/Czkawka Similar Images/Videos를 추가 review 도구로 사용한다.
+- residual 후보가 여전히 애매하면 Krokiet/Czkawka로 작은 candidate set을 만든 뒤 Google Photos Top pick을 선택적으로 다시 활용할 수 있다. 이때 Google은 canonical file transport가 아니라 decision UI로 사용하고, 선택된 Top pick에 대응하는 Mac의 original resource/Live Photo pair를 보존한다. 후보 재업로드가 반드시 새 Photo Stack을 만들거나 ranking을 다시 실행한다고 가정하지 않는다.
 - Czkawka exact mode는 현재 native engine보다 real-library benchmark상 빠르지 않았으므로 `automatic` exact engine은 native를 유지한다. Czkawka exact는 독립 cross-check, Czkawka의 주된 장기 가치는 byte가 다른 similar image/video review candidate 생성이다.
 
 ## 검증

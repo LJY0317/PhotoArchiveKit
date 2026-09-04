@@ -61,6 +61,32 @@ iPhone 촬영
 
 Google Photos에서 culling을 끝낸 뒤 Mac ingest를 하는 현재 사용자 workflow는 바람직하다. archive가 처음부터 모든 burst-like 후보를 영구 보존할 필요가 줄어들고, PhotoArchiveKit은 살아남은 자산의 provenance·Live Photo 관계·exact copy reconciliation에 집중할 수 있다. 다만 Top pick을 사용했다고 해서 batch가 similarity-free라고 가정하지 않으며, 필요하면 Mac ingest 후 Krokiet/Czkawka review를 추가한다.
 
+### Optional second-pass Google curation loop
+
+Mac에서 Krokiet/Czkawka가 residual near-duplicate 후보를 좁힌 뒤 Google Photos의 Top pick UI를 한 번 더 활용하는 것은 **선택적 human curation loop**로 허용할 수 있다. 다만 Google Photos는 임의의 사용자 후보 set에 대해 Top pick을 강제로 실행하는 general-purpose ranking API가 아니다. Photo Stacks는 Google이 backed-up photos 중 같은 subject를 짧은 시간에 찍은 nearly-identical 사진이라고 자동 판단한 경우에 생성되므로, 후보를 다시 upload했다고 해서 반드시 새 stack이 생기거나 ranking이 다시 실행된다고 가정하지 않는다.
+
+권장 방식은 Google을 **data transport가 아니라 decision UI**로 사용하는 것이다.
+
+```text
+Mac original candidates
+  -> Krokiet/Czkawka로 residual similarity group 축소
+  -> 필요하면 Google Photos에 curation용 후보를 보여 줌
+  -> Google Photos가 stack/Top pick을 제공하면 사람이 검토
+  -> 선택된 Top pick에 대응하는 Mac의 original resource/Live Photo pair를 KEEP
+  -> 나머지 local candidates를 PhotoArchiveKit review/quarantine 대상으로 표시
+```
+
+가능하면 Google에서 선택된 파일을 다시 다운로드해 canonical archive copy로 삼지 않는다. 이미 Mac에 original candidate가 있다면 Google의 선택은 **어느 local original을 남길지 결정하는 신호**로만 사용한다. 이 원칙은 provider round-trip에서 발생할 수 있는 re-encoding, metadata 변화, filename 변화, Live Photo paired-video 누락 위험을 피한다. 특히 Live Photo는 Google에서 보이는 still 하나가 아니라 선택된 still에 대응하는 local still + paired-video resource graph 전체를 보존해야 한다.
+
+이 second-pass는 기본 automatic pipeline이 아니다. 다음 조건에서만 유용하다.
+
+- 첫 Google Top-pick pass 뒤에도 사람이 보기에 비슷한 후보가 여러 장 남아 있음
+- Krokiet/Czkawka가 그 후보를 작은 group으로 좁혀 줌
+- Google Photos가 실제로 그 후보를 stack으로 인식함
+- 사용자가 Google의 추천을 다시 검토하고 승인함
+
+Google Photos가 stack을 만들지 않으면 그 사실을 오류로 보지 않고 Mac local review로 끝낸다. PhotoArchiveKit은 Google Top pick을 permanent truth나 deletion authority로 저장하지 않으며, 향후 외부 curation 결과를 받더라도 `user_confirmed_survivor` 같은 provider-neutral decision으로만 기록하는 방향을 선호한다.
+
 Google Photos에서 사진을 실제 삭제하는 operation은 cloud view만 숨기는 작업이 아니므로 upstream app의 현재 deletion semantics를 사용자가 이해한 상태에서 수행해야 한다. PhotoArchiveKit은 이 curation 단계의 삭제를 자동으로 대신하지 않는다.
 
 ## Classification pipeline
