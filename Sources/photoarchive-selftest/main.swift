@@ -104,6 +104,8 @@ struct PhotoArchiveSelfTest {
             )
         }
 
+        let archiveReport = try await scanner.scan(roots: roots)
+
         let encoder = JSONEncoder()
         let json = String(decoding: try encoder.encode(first), as: UTF8.self)
         let rawHash = SHA256.hash(data: bytes).map { String(format: "%02x", $0) }.joined()
@@ -125,7 +127,10 @@ struct PhotoArchiveSelfTest {
         let archiveDestination = temporary.appendingPathComponent("ArchiveDestination", isDirectory: true)
         try fileManager.createDirectory(at: archiveDestination, withIntermediateDirectories: true)
         let archiveDestinationMarker = try RootMarkerStore.create(at: archiveDestination)
-        let archivePlan = try scanner.makeArchivePlan(from: first, destinationURL: archiveDestination)
+        let archivePlan = try scanner.makeArchivePlan(
+            from: archiveReport,
+            destinationURL: archiveDestination
+        )
         try require(archivePlan.mediaFilesModified == false, "archive planning must not modify media")
         try require(archivePlan.summary.automaticItemCount == 1, "expected one canonical archive item")
         try require(archivePlan.summary.automaticResourceCount == 1, "expected one canonical archive resource")
@@ -134,7 +139,7 @@ struct PhotoArchiveSelfTest {
             throw SelfTestFailure("archive plan did not contain a canonical resource")
         }
         try require(
-            archivedResource.sourceRootID == first.resources.first(where: { $0.relativePath == "one.jpg" })?.rootID,
+            archivedResource.sourceRootID == archiveReport.resources.first(where: { $0.relativePath == "one.jpg" })?.rootID,
             "archive planner should prefer the non-Takeout canonical copy"
         )
         try require(
@@ -173,7 +178,7 @@ struct PhotoArchiveSelfTest {
         let sameSizeTamper = Data(repeating: 0x5A, count: beforeA.count)
         try sameSizeTamper.write(to: fileA)
         do {
-            _ = try scanner.makeArchivePlan(from: first, destinationURL: archiveDestination)
+            _ = try scanner.makeArchivePlan(from: archiveReport, destinationURL: archiveDestination)
             throw SelfTestFailure("archive planning accepted source bytes changed after the scan")
         } catch ArchivePlanError.sourceChanged {
             // Expected: immutable copy authority must be anchored to scan/catalog exact evidence.
@@ -186,7 +191,10 @@ struct PhotoArchiveSelfTest {
         try Data("existing-archive-entry".utf8).write(
             to: occupiedArchiveFolder.appendingPathComponent("one.jpg")
         )
-        let collisionPlan = try scanner.makeArchivePlan(from: first, destinationURL: archiveDestination)
+        let collisionPlan = try scanner.makeArchivePlan(
+            from: archiveReport,
+            destinationURL: archiveDestination
+        )
         try require(
             collisionPlan.items.first?.resources.first?.destinationRelativePath == "Media/Undated/one_01.jpg",
             "archive planning should deterministically avoid an existing destination path"
