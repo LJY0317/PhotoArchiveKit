@@ -107,6 +107,12 @@ public enum OrganizationPlanner {
                 relativeDirectory: (resource.relativePath as NSString).deletingLastPathComponent
             )
         }
+        let recognizedSidecarsByAssetAndDirectory = Dictionary(grouping: report.recognizedSidecars) {
+            DirectoryKey(
+                rootID: $0.rootID,
+                relativeDirectory: ($0.sidecarRelativePath as NSString).deletingLastPathComponent
+            )
+        }
 
         let selected = plan.items.filter { item in
             guard item.decision == .automatic, !item.moves.isEmpty else { return false }
@@ -126,7 +132,11 @@ public enum OrganizationPlanner {
             let directoryKey = DirectoryKey(rootID: rootID, relativeDirectory: relativeDirectory)
             let directoryResources = resourcesByDirectory[directoryKey] ?? []
             let plannedResourceIDs = Set(item.moves.map(\.resourceID))
-            guard Set(directoryResources.map(\.resourceID)) == plannedResourceIDs else {
+            let recognizedSidecars = (recognizedSidecarsByAssetAndDirectory[directoryKey] ?? [])
+                .filter { $0.targetAssetID == item.assetID }
+            let allowedSidecarResourceIDs = Set(recognizedSidecars.map(\.sidecarResourceID))
+            let directoryResourceIDs = Set(directoryResources.map(\.resourceID))
+            guard directoryResourceIDs == plannedResourceIDs.union(allowedSidecarResourceIDs) else {
                 return false
             }
 
@@ -134,8 +144,11 @@ public enum OrganizationPlanner {
             let directoryURL = rootURL.appendingPathComponent(relativeDirectory, isDirectory: true).standardizedFileURL
             guard directoryURL.path.hasPrefix(rootURL.path + "/") else { return false }
 
-            let expectedNames = Set(item.moves.map {
+            var expectedNames = Set(item.moves.map {
                 ($0.sourceRelativePath as NSString).lastPathComponent
+            })
+            expectedNames.formUnion(recognizedSidecars.map {
+                ($0.sidecarRelativePath as NSString).lastPathComponent
             })
             guard let entries = try? fileManager.contentsOfDirectory(
                 at: directoryURL,
@@ -167,7 +180,7 @@ public enum OrganizationPlanner {
         let automaticResourceCount = selected.reduce(0) { $0 + $1.moves.count }
         return OrganizationPlan(
             schemaVersion: plan.schemaVersion,
-            policy: plan.policy + "+clean_singleton_leaf_v1",
+            policy: plan.policy + "+clean_singleton_leaf_v2",
             sessionID: plan.sessionID,
             summary: OrganizationPlanSummary(
                 automaticItemCount: selected.count,

@@ -58,6 +58,9 @@
 - 상위 local library 안에 Takeout root가 있어도 가장 구체적인 등록 root가 파일을 소유하도록 하는 nested-root ownership
 - filename이 같아도 내용이 다르면 identity로 합치지 않고 경고하는 filename collision 검출
 - GPS/description은 읽지 않고 `title`과 `photoTakenTime`만 사용하는 최소 Google Takeout sidecar capture-time import
+- recognized sidecar association: Google Takeout JSON의 `title` target 및 모호하지 않은 same-basename XMP/AAE를 logical asset에 연결하고 `sidecar_links`에 보존한다. recognized sidecar는 singleton media organize를 막지 않지만 sidecar file 자체는 자동 삭제하지 않으며, unrecognized JSON은 directory deletion blocker로 남긴다.
+- sidecar consumer policy: 검증된 schema/관계의 sidecar는 자동 처리하고 사용자가 JSON/XMP를 직접 판독하도록 요구하지 않는다. unknown/ambiguous sidecar는 source-folder 삭제 경계에서는 보존하지만 media 자체의 이동/열람 가능성을 부정하지 않는다. 현재 recognized parser는 Google Takeout JSON의 최소 `title`/`photoTakenTime` 경로다.
+- explicit root registry: `root add/list/enable/disable/remove`로 active/inactive/removed 상태를 catalog observation history와 분리한다. remove는 media를 수정하지 않고 해당 root의 current resource/hash/duplicate/source-folder evidence를 prune하며 source root identity/marker는 최소 history로 유지한다. agent-safe list/remove output에는 canonical path를 노출하지 않는다.
 - 영어/한국어 project overview
 - 날짜가 명시된 Google Photos 및 Apple PhotoKit capability 문서
 - validation 및 optional integration 문서
@@ -76,6 +79,11 @@ swift run photoarchive archive-plan --to PATH --output PLAN [options] ROOT...
 swift run photoarchive archive-copy [--apply] [--to PATH] [--bind-root ROOT_ID=PATH] PLAN
 swift run photoarchive archive-index [--fresh] [--apply] [options] PATH
 swift run photoarchive organize [--apply] [options] ROOT...
+swift run photoarchive root list [--all] [--json|--agent-json]
+swift run photoarchive root add [--kind KIND] [--provenance VALUE] PATH
+swift run photoarchive root enable ROOT_ID_OR_PATH
+swift run photoarchive root disable ROOT_ID_OR_PATH
+swift run photoarchive root remove [--json|--agent-json] ROOT_ID_OR_PATH
 swift run photoarchive root inspect PATH
 swift run photoarchive root init [--apply] PATH
 swift run photoarchive quarantine --to PATH [--apply] [options] ROOT...

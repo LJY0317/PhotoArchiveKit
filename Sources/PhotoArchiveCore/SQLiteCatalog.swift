@@ -60,6 +60,16 @@ private struct CachedExactHashIndex {
     var byFileSystemIdentifier: [String: CachedExactHashEvidence] = [:]
 }
 
+struct RootRegistryRow {
+    let rootID: String
+    let label: String
+    let kind: SourceRootKind
+    let provenance: SourceProvenance
+    let canonicalPath: String
+    let state: RootRegistrationState
+    let currentResourceCount: Int
+}
+
 final class SQLiteCatalog {
     let url: URL
     private var database: OpaquePointer?
@@ -461,6 +471,65 @@ final class SQLiteCatalog {
         }
 
         return liveAssetIDs
+    }
+
+    func persistSidecarAssociations(
+        sessionID: String,
+        resources: [ProbedResource],
+        associations: [SidecarAssociationCandidate]
+    ) throws -> [RecognizedSidecarReport] {
+        for resource in resources where resource.mediaKind == .sidecar {
+            guard let resourceID = resource.persistentResourceID else { continue }
+            try run(
+                "DELETE FROM sidecar_links WHERE sidecar_resource_id = ?",
+                bindings: [.text(resourceID)]
+            )
+        }
+
+        var reports: [RecognizedSidecarReport] = []
+        for association in associations {
+            guard resources.indices.contains(association.sidecarIndex),
+                  resources.indices.contains(association.targetIndex)
+            else {
+                continue
+            }
+            let sidecar = resources[association.sidecarIndex]
+            let target = resources[association.targetIndex]
+            guard let sidecarResourceID = sidecar.persistentResourceID,
+                  let targetAssetID = target.persistentAssetID,
+                  sidecar.root.id == target.root.id
+            else {
+                continue
+            }
+            try run(
+                """
+                INSERT INTO sidecar_links (
+                    sidecar_resource_id, target_asset_id, kind, last_seen_session
+                ) VALUES (?, ?, ?, ?)
+                ON CONFLICT(sidecar_resource_id) DO UPDATE SET
+                    target_asset_id = excluded.target_asset_id,
+                    kind = excluded.kind,
+                    last_seen_session = excluded.last_seen_session
+                """,
+                bindings: [
+                    .text(sidecarResourceID),
+                    .text(targetAssetID),
+                    .text(association.kind.rawValue),
+                    .text(sessionID)
+                ]
+            )
+            reports.append(RecognizedSidecarReport(
+                sidecarResourceID: sidecarResourceID,
+                targetAssetID: targetAssetID,
+                rootID: sidecar.root.id,
+                sidecarRelativePath: sidecar.relativePath,
+                targetRelativePath: target.relativePath,
+                kind: association.kind
+            ))
+        }
+        return reports.sorted {
+            ($0.rootID, $0.sidecarRelativePath) < ($1.rootID, $1.sidecarRelativePath)
+        }
     }
 
     func persistSourceFolderCollections(
@@ -1048,6 +1117,13 @@ final class SQLiteCatalog {
                 provenance TEXT NOT NULL DEFAULT 'unknown'
             );
 
+            CREATE TABLE IF NOT EXISTS root_registrations (
+                root_id TEXT PRIMARY KEY REFERENCES source_roots(id) ON DELETE CASCADE,
+                state TEXT NOT NULL CHECK(state IN ('active', 'inactive', 'removed')),
+                registered_at REAL NOT NULL,
+                updated_at REAL NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS scan_sessions (
                 id TEXT PRIMARY KEY,
                 started_at REAL NOT NULL,
@@ -1118,6 +1194,13 @@ final class SQLiteCatalog {
                 role TEXT NOT NULL,
                 last_seen_session TEXT NOT NULL REFERENCES scan_sessions(id),
                 PRIMARY KEY(asset_id, resource_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS sidecar_links (
+                sidecar_resource_id TEXT PRIMARY KEY REFERENCES resources(id) ON DELETE CASCADE,
+                target_asset_id TEXT NOT NULL REFERENCES logical_assets(id) ON DELETE CASCADE,
+                kind TEXT NOT NULL,
+                last_seen_session TEXT NOT NULL REFERENCES scan_sessions(id)
             );
 
             CREATE TABLE IF NOT EXISTS collections (
@@ -1327,6 +1410,196 @@ final class SQLiteCatalog {
 
     func quarantineRestoreRootPath(rootID: String) throws -> String? {
         try sourceRootPath(rootID: rootID)
+    }
+
+    func rootID(matching target: String) throws -> String? {
+        if let direct = try queryText(
+            "SELECT id FROM source_roots WHERE id = ?",
+            bindings: [.text(target)]
+        ) {
+            return direct
+        }
+
+        let expanded = (target as NSString).expandingTildeInPath
+        let url = URL(fileURLWithPath: expanded)
+        let canonicalPath = FileManager.default.fileExists(atPath: url.path)
+            ? url.resolvingSymlinksInPath().standardizedFileURL.path
+            : url.standardizedFileURL.path
+        return try queryText(
+            "SELECT id FROM source_roots WHERE canonical_path = ?",
+            bindings: [.text(canonicalPath)]
+        )
+    }
+
+    func setRootRegistration(rootID: String, state: RootRegistrationState) throws {
+        guard state != .history else {
+            throw CatalogError.invalidCatalogValue("history is a derived root registration state")
+        }
+        let now = Date().timeIntervalSince1970
+        try run(
+            """
+            INSERT INTO root_registrations (root_id, state, registered_at, updated_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(root_id) DO UPDATE SET
+                state = excluded.state,
+                updated_at = excluded.updated_at
+            """,
+            bindings: [.text(rootID), .text(state.rawValue), .double(now), .double(now)]
+        )
+    }
+
+    func rootRegistryRows(includeHistory: Bool) throws -> [RootRegistryRow] {
+        let whereClause = includeHistory
+            ? ""
+            : "WHERE rr.state IS NOT NULL AND rr.state <> 'removed'"
+        return try withStatement(
+            """
+            SELECT sr.id, sr.label, sr.kind, COALESCE(srm.provenance, 'unknown'),
+                   sr.canonical_path, rr.state,
+                   (SELECT COUNT(*) FROM resources r WHERE r.root_id = sr.id)
+            FROM source_roots sr
+            LEFT JOIN source_root_metadata srm ON srm.root_id = sr.id
+            LEFT JOIN root_registrations rr ON rr.root_id = sr.id
+            \(whereClause)
+            ORDER BY sr.canonical_path, sr.id
+            """,
+            bindings: []
+        ) { statement in
+            var rows: [RootRegistryRow] = []
+            while true {
+                let result = sqlite3_step(statement)
+                if result == SQLITE_DONE { break }
+                guard result == SQLITE_ROW,
+                      let rootText = sqlite3_column_text(statement, 0),
+                      let labelText = sqlite3_column_text(statement, 1),
+                      let kindText = sqlite3_column_text(statement, 2),
+                      let provenanceText = sqlite3_column_text(statement, 3),
+                      let pathText = sqlite3_column_text(statement, 4),
+                      let kind = SourceRootKind(rawValue: String(cString: kindText)),
+                      let provenance = SourceProvenance(rawValue: String(cString: provenanceText))
+                else {
+                    throw sqliteError(sql: "SELECT root registry rows")
+                }
+                let state = sqlite3_column_text(statement, 5)
+                    .flatMap { RootRegistrationState(rawValue: String(cString: $0)) }
+                    ?? .history
+                rows.append(RootRegistryRow(
+                    rootID: String(cString: rootText),
+                    label: String(cString: labelText),
+                    kind: kind,
+                    provenance: provenance,
+                    canonicalPath: String(cString: pathText),
+                    state: state,
+                    currentResourceCount: Int(sqlite3_column_int64(statement, 6))
+                ))
+            }
+            return rows
+        }
+    }
+
+    func removeRootFromCurrentCatalog(rootID: String) throws -> Int {
+        let resourceCount = Int(try queryText(
+            "SELECT CAST(COUNT(*) AS TEXT) FROM resources WHERE root_id = ?",
+            bindings: [.text(rootID)]
+        ) ?? "0") ?? 0
+
+        try withTransaction {
+            try setRootRegistration(rootID: rootID, state: .removed)
+
+            let affectedAssetIDs: [String] = try withStatement(
+                """
+                SELECT DISTINCT ar.asset_id
+                FROM asset_resources ar
+                JOIN resources r ON r.id = ar.resource_id
+                WHERE r.root_id = ?
+                """,
+                bindings: [.text(rootID)]
+            ) { statement in
+                var values: [String] = []
+                while true {
+                    let result = sqlite3_step(statement)
+                    if result == SQLITE_DONE { break }
+                    guard result == SQLITE_ROW,
+                          let text = sqlite3_column_text(statement, 0)
+                    else {
+                        throw sqliteError(sql: "SELECT affected root asset IDs")
+                    }
+                    values.append(String(cString: text))
+                }
+                return values
+            }
+
+            let affectedDuplicateGroupIDs: [String] = try withStatement(
+                """
+                SELECT DISTINCT edm.group_id
+                FROM exact_duplicate_members edm
+                JOIN resources r ON r.id = edm.resource_id
+                WHERE r.root_id = ?
+                """,
+                bindings: [.text(rootID)]
+            ) { statement in
+                var values: [String] = []
+                while true {
+                    let result = sqlite3_step(statement)
+                    if result == SQLITE_DONE { break }
+                    guard result == SQLITE_ROW,
+                          let text = sqlite3_column_text(statement, 0)
+                    else {
+                        throw sqliteError(sql: "SELECT affected root duplicate group IDs")
+                    }
+                    values.append(String(cString: text))
+                }
+                return values
+            }
+
+            let collections: [(String, String)] = try withStatement(
+                "SELECT source_key, collection_id FROM source_collection_keys WHERE source_key LIKE ?",
+                bindings: [.text(rootID + ":%")]
+            ) { statement in
+                var rows: [(String, String)] = []
+                while true {
+                    let result = sqlite3_step(statement)
+                    if result == SQLITE_DONE { break }
+                    guard result == SQLITE_ROW,
+                          let keyText = sqlite3_column_text(statement, 0),
+                          let collectionText = sqlite3_column_text(statement, 1)
+                    else {
+                        throw sqliteError(sql: "SELECT root source collections")
+                    }
+                    rows.append((String(cString: keyText), String(cString: collectionText)))
+                }
+                return rows
+            }
+            for row in collections {
+                try run("DELETE FROM source_collection_keys WHERE source_key = ?", bindings: [.text(row.0)])
+                try run("DELETE FROM collections WHERE id = ?", bindings: [.text(row.1)])
+            }
+
+            try run("DELETE FROM resources WHERE root_id = ?", bindings: [.text(rootID)])
+            for assetID in affectedAssetIDs {
+                try run(
+                    """
+                    DELETE FROM logical_assets
+                    WHERE id = ?
+                      AND NOT EXISTS (
+                          SELECT 1 FROM asset_resources ar WHERE ar.asset_id = logical_assets.id
+                      )
+                    """,
+                    bindings: [.text(assetID)]
+                )
+            }
+            for groupID in affectedDuplicateGroupIDs {
+                try run(
+                    """
+                    DELETE FROM exact_duplicate_groups
+                    WHERE id = ?
+                      AND (SELECT COUNT(*) FROM exact_duplicate_members edm WHERE edm.group_id = exact_duplicate_groups.id) < 2
+                    """,
+                    bindings: [.text(groupID)]
+                )
+            }
+        }
+        return resourceCount
     }
 
     func resourceLocationExists(

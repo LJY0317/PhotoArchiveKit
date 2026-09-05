@@ -85,6 +85,7 @@ public final class ArchiveScanner {
                 progressHandler: options.progressHandler
             )
             TakeoutSidecarImporter.applyCaptureTimes(to: &resources)
+            let sidecarAssociations = SidecarAssociationDetector.detect(in: resources)
 
             let reusedExactHashCount: Int
             if options.reuseExactHashCache {
@@ -142,6 +143,11 @@ public final class ArchiveScanner {
             try catalog.withTransaction {
                 try catalog.persistResources(sessionID: sessionID, resources: &resources)
                 _ = try catalog.persistAssets(sessionID: sessionID, resources: &resources)
+                let recognizedSidecars = try catalog.persistSidecarAssociations(
+                    sessionID: sessionID,
+                    resources: resources,
+                    associations: sidecarAssociations
+                )
                 let sourceFolderSemanticsCapturedRootIDs = try catalog.persistSourceFolderCollections(
                     resources: resources,
                     roots: roots
@@ -161,7 +167,8 @@ public final class ArchiveScanner {
                     duplicateGroupIDs: duplicateGroupIDs,
                     initialWarnings: warnings,
                     eventGap: options.eventGap,
-                    sourceFolderSemanticsCapturedRootIDs: sourceFolderSemanticsCapturedRootIDs
+                    sourceFolderSemanticsCapturedRootIDs: sourceFolderSemanticsCapturedRootIDs,
+                    recognizedSidecars: recognizedSidecars
                 )
                 try catalog.persistEvents(
                     sessionID: sessionID,
@@ -196,6 +203,7 @@ public final class ArchiveScanner {
                     livePhotos: reportParts.livePhotos,
                     exactDuplicateGroups: reportParts.duplicates,
                     eventSuggestions: reportParts.events,
+                    recognizedSidecars: reportParts.recognizedSidecars,
                     notices: reportParts.notices,
                     warnings: reportParts.warnings,
                     filesModified: false
@@ -648,6 +656,7 @@ public final class ArchiveScanner {
         let livePhotos: [LivePhotoAssetReport]
         let duplicates: [ExactDuplicateGroupReport]
         let events: [EventSuggestionReport]
+        let recognizedSidecars: [RecognizedSidecarReport]
         let notices: [ScanNotice]
         let warnings: [ScanWarning]
         let logicalAssetCount: Int
@@ -660,7 +669,8 @@ public final class ArchiveScanner {
         duplicateGroupIDs: [Data: String],
         initialWarnings: [ScanWarning],
         eventGap: TimeInterval,
-        sourceFolderSemanticsCapturedRootIDs: Set<String>
+        sourceFolderSemanticsCapturedRootIDs: Set<String>,
+        recognizedSidecars: [RecognizedSidecarReport]
     ) -> ReportParts {
         let assemblies = AssetAssembler.livePhotoAssemblies(from: resources)
         var notices: [ScanNotice] = []
@@ -728,6 +738,8 @@ public final class ArchiveScanner {
         let rootReports = roots.map { root -> RootScanReport in
             let rootResources = resources.filter { $0.root.id == root.id }
             let occurrences = occurrencesByRoot[root.id] ?? []
+            let recognizedSidecarCount = recognizedSidecars.count { $0.rootID == root.id }
+            let totalSidecars = rootResources.count { $0.mediaKind == .sidecar }
             return RootScanReport(
                 rootID: root.id,
                 label: root.label,
@@ -751,7 +763,9 @@ public final class ArchiveScanner {
                 standaloneVideos: rootResources.count {
                     $0.mediaKind == .video && $0.identifierFingerprint == nil
                 },
-                sidecars: rootResources.count { $0.mediaKind == .sidecar },
+                sidecars: totalSidecars,
+                recognizedSidecars: recognizedSidecarCount,
+                unrecognizedSidecars: max(totalSidecars - recognizedSidecarCount, 0),
                 metadataProbeFailures: rootResources.filter(\.metadataProbeFailed).count,
                 sourceFolderSemanticsCaptured: sourceFolderSemanticsCapturedRootIDs.contains(root.id)
             )
@@ -804,6 +818,7 @@ public final class ArchiveScanner {
             livePhotos: livePhotoReports,
             duplicates: duplicateReports,
             events: events,
+            recognizedSidecars: recognizedSidecars,
             notices: notices,
             warnings: warnings,
             logicalAssetCount: logicalAssetCount

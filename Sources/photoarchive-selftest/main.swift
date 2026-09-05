@@ -65,6 +65,40 @@ struct PhotoArchiveSelfTest {
             "multiple still-image-time markers should be rejected as ambiguous"
         )
 
+        let registryRoot = temporary.appendingPathComponent("RegistryRoot", isDirectory: true)
+        let registryCatalog = temporary.appendingPathComponent("registry.sqlite3")
+        try fileManager.createDirectory(at: registryRoot, withIntermediateDirectories: true)
+        let registryMedia = registryRoot.appendingPathComponent("IMG_0001.jpg")
+        try Data("registry-media".utf8).write(to: registryMedia)
+        let registryScanner = try ArchiveScanner(catalogURL: registryCatalog)
+        _ = try await registryScanner.scan(roots: [
+            ScanRoot(url: registryRoot, kind: .reference)
+        ])
+        let historyRoots = try RootRegistry.list(catalogURL: registryCatalog, includeHistory: true)
+        try require(historyRoots.count == 1 && historyRoots[0].state == .history, "an observed root should begin as history-only")
+        let registered = try RootRegistry.add(
+            url: registryRoot,
+            kind: .reference,
+            provenance: .unknown,
+            catalogURL: registryCatalog
+        )
+        try require(registered.state == .active, "root add should activate the registry entry")
+        let disabled = try RootRegistry.setState(target: registered.rootID, state: .inactive, catalogURL: registryCatalog)
+        try require(disabled.state == .inactive, "root disable should preserve catalog evidence")
+        let enabled = try RootRegistry.setState(target: registered.rootID, state: .active, catalogURL: registryCatalog)
+        try require(enabled.state == .active, "root enable should reactivate the registry entry")
+        let removed = try RootRegistry.remove(target: registered.rootID, catalogURL: registryCatalog)
+        try require(removed.prunedResourceCount == 1, "root remove should prune current resource evidence")
+        try require(fileManager.fileExists(atPath: registryMedia.path), "root remove must never delete media")
+        let removedRoots = try RootRegistry.list(catalogURL: registryCatalog, includeHistory: true)
+        try require(removedRoots.count == 1 && removedRoots[0].state == .removed, "removed root identity should remain as minimal history")
+        try require(removedRoots[0].currentResourceCount == 0, "removed root must not retain current resource evidence")
+        let registryAgentJSON = String(
+            decoding: try JSONEncoder().encode(removedRoots.map(AgentSafeRegisteredRootReport.init)),
+            as: UTF8.self
+        )
+        try require(!registryAgentJSON.contains(registryRoot.path), "agent-safe root registry exposed a path")
+
         let bytes = Data("synthetic-not-a-real-photo".utf8)
         let fileA = rootA.appendingPathComponent("one.jpg")
         let fileB = rootB.appendingPathComponent("copy.jpg")
@@ -88,6 +122,38 @@ struct PhotoArchiveSelfTest {
             })
         )
         let second = try await scanner.scan(roots: roots)
+
+        let takeoutSidecarRoot = temporary.appendingPathComponent("TakeoutSidecar", isDirectory: true)
+        try fileManager.createDirectory(at: takeoutSidecarRoot, withIntermediateDirectories: true)
+        let takeoutSidecarMedia = takeoutSidecarRoot.appendingPathComponent("IMG_2468.JPG")
+        let takeoutSidecarJSON = takeoutSidecarRoot.appendingPathComponent("IMG_2468.JPG.json")
+        try Data("synthetic-sidecar-media".utf8).write(to: takeoutSidecarMedia)
+        try Data(#"{"title":"IMG_2468.JPG","photoTakenTime":{"timestamp":"1776000000"}}"#.utf8)
+            .write(to: takeoutSidecarJSON)
+        let takeoutSidecarCatalog = temporary.appendingPathComponent("takeout-sidecar.sqlite3")
+        let takeoutSidecarScanner = try ArchiveScanner(catalogURL: takeoutSidecarCatalog)
+        let takeoutSidecarReport = try await takeoutSidecarScanner.scan(roots: [
+            ScanRoot(url: takeoutSidecarRoot, kind: .importSource, provenance: .googleTakeout)
+        ])
+        try require(
+            takeoutSidecarReport.recognizedSidecars.count == 1,
+            "a matching Google Takeout JSON sidecar should be associated automatically"
+        )
+        try require(
+            takeoutSidecarReport.roots[0].recognizedSidecars == 1
+                && takeoutSidecarReport.roots[0].unrecognizedSidecars == 0,
+            "root reports should distinguish recognized from unrecognized sidecars"
+        )
+        try require(
+            try sqliteInt(databaseURL: takeoutSidecarCatalog, sql: "SELECT COUNT(*) FROM sidecar_links") == 1,
+            "recognized sidecar association should be persisted in the catalog"
+        )
+        let takeoutSidecarAgentJSON = String(
+            decoding: try JSONEncoder().encode(AgentSafeScanReport(report: takeoutSidecarReport)),
+            as: UTF8.self
+        )
+        try require(!takeoutSidecarAgentJSON.contains("IMG_2468"), "agent-safe sidecar output exposed a filename")
+        try require(!takeoutSidecarAgentJSON.contains(takeoutSidecarRoot.path), "agent-safe sidecar output exposed a path")
 
         try require(first.summary.exactDuplicateGroupCount == 1, "expected one duplicate group")
         try require(first.summary.logicalAssetCount == 1, "exact standalone copies should share one logical asset")
@@ -1027,6 +1093,29 @@ struct PhotoArchiveSelfTest {
             singletonLeafPlan.items.first?.kind == .livePhoto,
             "singleton-leaf organization should exclude a directory containing another media asset"
         )
+
+        let organizationSidecarRoot = temporary.appendingPathComponent("OrganizationSidecar", isDirectory: true)
+        let organizationSidecarNested = organizationSidecarRoot.appendingPathComponent("nested", isDirectory: true)
+        try fileManager.createDirectory(at: organizationSidecarNested, withIntermediateDirectories: true)
+        try Data(repeating: 1, count: 100)
+            .write(to: organizationSidecarNested.appendingPathComponent("IMG_1234.HEIC"))
+        try Data(repeating: 2, count: 200)
+            .write(to: organizationSidecarNested.appendingPathComponent("IMG_1234.MOV"))
+        try Data("recognized-xmp".utf8)
+            .write(to: organizationSidecarNested.appendingPathComponent("IMG_1234.XMP"))
+        let organizationSidecarScan = syntheticOrganizationReport(
+            localPath: organizationSidecarRoot.path,
+            recognizedLiveSidecar: true
+        )
+        let organizationSidecarPlan = OrganizationPlanner.cleanSingletonLeafPlan(
+            from: OrganizationPlanner.makePlan(from: organizationSidecarScan),
+            report: organizationSidecarScan
+        )
+        try require(
+            organizationSidecarPlan.summary.automaticItemCount == 1
+                && organizationSidecarPlan.summary.automaticResourceCount == 2,
+            "a recognized sidecar should not block its Live Photo media pair from singleton organization"
+        )
         let organizationPreflight = try OrganizationExecutor.preflight(
             report: organizationApplyScan,
             plan: organizationApplyPlan
@@ -1629,7 +1718,8 @@ private func writeSyntheticTimedMetadataMovie(
 private func syntheticOrganizationReport(
     localPath: String = "/synthetic/local",
     stableMarkerKey: String? = nil,
-    alreadyOrganizedLivePhoto: Bool = false
+    alreadyOrganizedLivePhoto: Bool = false,
+    recognizedLiveSidecar: Bool = false
 ) -> ScanReport {
     let rootID = "RORG"
     let capture = CaptureTime(
@@ -1692,6 +1782,18 @@ private func syntheticOrganizationReport(
         byteSize: 70,
         captureTime: capture
     )
+    let sidecar = ScannedResourceReport(
+        resourceID: "FORGS1",
+        assetID: nil,
+        rootID: rootID,
+        rootLabel: "Local",
+        relativePath: "nested/IMG_1234.XMP",
+        fileName: "IMG_1234.XMP",
+        mediaKind: .sidecar,
+        role: .sidecar,
+        byteSize: 14,
+        captureTime: nil
+    )
     let liveOccurrence = LivePhotoOccurrenceReport(
         rootID: rootID,
         rootLabel: "Local",
@@ -1711,7 +1813,7 @@ private func syntheticOrganizationReport(
         catalogPath: "/synthetic/organization.sqlite3",
         summary: ScanSummary(
             rootCount: 1,
-            resourceCount: 4,
+            resourceCount: recognizedLiveSidecar ? 5 : 4,
             logicalAssetCount: 3,
             livePhotoAssetCount: 1,
             exactDuplicateGroupCount: 0,
@@ -1732,11 +1834,13 @@ private func syntheticOrganizationReport(
                 videoOnlyLiveResources: 0,
                 standaloneImages: 2,
                 standaloneVideos: 0,
-                sidecars: 0,
+                sidecars: recognizedLiveSidecar ? 1 : 0,
+                recognizedSidecars: recognizedLiveSidecar ? 1 : 0,
+                unrecognizedSidecars: 0,
                 metadataProbeFailures: 0
             )
         ],
-        resources: [photo, video, standalone, custom],
+        resources: [photo, video, standalone, custom] + (recognizedLiveSidecar ? [sidecar] : []),
         livePhotos: [
             LivePhotoAssetReport(
                 assetID: "AORG1",
@@ -1748,6 +1852,16 @@ private func syntheticOrganizationReport(
         ],
         exactDuplicateGroups: [],
         eventSuggestions: [],
+        recognizedSidecars: recognizedLiveSidecar ? [
+            RecognizedSidecarReport(
+                sidecarResourceID: sidecar.resourceID,
+                targetAssetID: "AORG1",
+                rootID: rootID,
+                sidecarRelativePath: sidecar.relativePath,
+                targetRelativePath: photo.relativePath,
+                kind: .xmp
+            )
+        ] : [],
         warnings: [],
         filesModified: false
     )

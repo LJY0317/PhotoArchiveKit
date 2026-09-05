@@ -308,6 +308,31 @@ public struct EventSuggestionReport: Codable, Sendable, Equatable {
     }
 }
 
+public struct RecognizedSidecarReport: Codable, Sendable, Equatable {
+    public let sidecarResourceID: String
+    public let targetAssetID: String
+    public let rootID: String
+    public let sidecarRelativePath: String
+    public let targetRelativePath: String
+    public let kind: SidecarAssociationKind
+
+    public init(
+        sidecarResourceID: String,
+        targetAssetID: String,
+        rootID: String,
+        sidecarRelativePath: String,
+        targetRelativePath: String,
+        kind: SidecarAssociationKind
+    ) {
+        self.sidecarResourceID = sidecarResourceID
+        self.targetAssetID = targetAssetID
+        self.rootID = rootID
+        self.sidecarRelativePath = sidecarRelativePath
+        self.targetRelativePath = targetRelativePath
+        self.kind = kind
+    }
+}
+
 public struct RootScanReport: Codable, Sendable, Equatable {
     public let rootID: String
     public let label: String
@@ -322,6 +347,8 @@ public struct RootScanReport: Codable, Sendable, Equatable {
     public let standaloneImages: Int
     public let standaloneVideos: Int
     public let sidecars: Int
+    public let recognizedSidecars: Int
+    public let unrecognizedSidecars: Int
     public let metadataProbeFailures: Int
     public let sourceFolderSemanticsCaptured: Bool
 
@@ -339,6 +366,8 @@ public struct RootScanReport: Codable, Sendable, Equatable {
         standaloneImages: Int,
         standaloneVideos: Int,
         sidecars: Int,
+        recognizedSidecars: Int = 0,
+        unrecognizedSidecars: Int = 0,
         metadataProbeFailures: Int,
         sourceFolderSemanticsCaptured: Bool = false
     ) {
@@ -355,6 +384,8 @@ public struct RootScanReport: Codable, Sendable, Equatable {
         self.standaloneImages = standaloneImages
         self.standaloneVideos = standaloneVideos
         self.sidecars = sidecars
+        self.recognizedSidecars = recognizedSidecars
+        self.unrecognizedSidecars = unrecognizedSidecars
         self.metadataProbeFailures = metadataProbeFailures
         self.sourceFolderSemanticsCaptured = sourceFolderSemanticsCaptured
     }
@@ -430,6 +461,8 @@ public struct AgentSafeRootReport: Codable, Sendable, Equatable {
     public let standaloneImages: Int
     public let standaloneVideos: Int
     public let sidecars: Int
+    public let recognizedSidecars: Int
+    public let unrecognizedSidecars: Int
     public let metadataProbeFailures: Int
     public let sourceFolderSemanticsCaptured: Bool
 }
@@ -461,6 +494,11 @@ public struct AgentSafeEventSuggestionReport: Codable, Sendable, Equatable {
     public let assetIDs: [String]
 }
 
+public struct AgentSafeRecognizedSidecarReport: Codable, Sendable, Equatable {
+    public let rootID: String
+    public let kind: SidecarAssociationKind
+}
+
 public struct AgentSafeWarning: Codable, Sendable, Equatable {
     public let code: String
     public let rootID: String?
@@ -480,6 +518,7 @@ public struct AgentSafeScanReport: Codable, Sendable, Equatable {
     public let livePhotos: [AgentSafeLivePhotoAssetReport]
     public let exactDuplicateGroups: [AgentSafeExactDuplicateGroupReport]
     public let eventSuggestions: [AgentSafeEventSuggestionReport]
+    public let recognizedSidecars: [AgentSafeRecognizedSidecarReport]
     public let notices: [AgentSafeNotice]
     public let warnings: [AgentSafeWarning]
     public let filesModified: Bool
@@ -501,6 +540,8 @@ public struct AgentSafeScanReport: Codable, Sendable, Equatable {
                 standaloneImages: root.standaloneImages,
                 standaloneVideos: root.standaloneVideos,
                 sidecars: root.sidecars,
+                recognizedSidecars: root.recognizedSidecars,
+                unrecognizedSidecars: root.unrecognizedSidecars,
                 metadataProbeFailures: root.metadataProbeFailures,
                 sourceFolderSemanticsCaptured: root.sourceFolderSemanticsCaptured
             )
@@ -534,6 +575,9 @@ public struct AgentSafeScanReport: Codable, Sendable, Equatable {
         eventSuggestions = report.eventSuggestions.map { event in
             AgentSafeEventSuggestionReport(eventID: event.eventID, assetIDs: event.assetIDs)
         }
+        recognizedSidecars = report.recognizedSidecars.map {
+            AgentSafeRecognizedSidecarReport(rootID: $0.rootID, kind: $0.kind)
+        }
         notices = report.notices.map { notice in
             AgentSafeNotice(code: notice.code, rootID: notice.rootID)
         }
@@ -556,6 +600,7 @@ public struct ScanReport: Codable, Sendable, Equatable {
     public let livePhotos: [LivePhotoAssetReport]
     public let exactDuplicateGroups: [ExactDuplicateGroupReport]
     public let eventSuggestions: [EventSuggestionReport]
+    public let recognizedSidecars: [RecognizedSidecarReport]
     public let notices: [ScanNotice]
     public let warnings: [ScanWarning]
     public let filesModified: Bool
@@ -572,6 +617,7 @@ public struct ScanReport: Codable, Sendable, Equatable {
         livePhotos: [LivePhotoAssetReport],
         exactDuplicateGroups: [ExactDuplicateGroupReport],
         eventSuggestions: [EventSuggestionReport],
+        recognizedSidecars: [RecognizedSidecarReport] = [],
         notices: [ScanNotice] = [],
         warnings: [ScanWarning],
         filesModified: Bool = false
@@ -587,6 +633,7 @@ public struct ScanReport: Codable, Sendable, Equatable {
         self.livePhotos = livePhotos
         self.exactDuplicateGroups = exactDuplicateGroups
         self.eventSuggestions = eventSuggestions
+        self.recognizedSidecars = recognizedSidecars
         self.notices = notices
         self.warnings = warnings
         self.filesModified = filesModified

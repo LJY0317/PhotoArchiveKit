@@ -445,6 +445,142 @@ struct PhotoArchiveCLI {
         }
         let rest = Array(arguments.dropFirst())
         switch action {
+        case "list":
+            var catalogURL = PhotoArchivePaths.defaultCatalogURL
+            var includeHistory = false
+            var outputJSON = false
+            var outputAgentJSON = false
+            var index = 0
+            while index < rest.count {
+                let argument = rest[index]
+                switch argument {
+                case "--catalog":
+                    catalogURL = fileURL(try value(after: argument, at: &index, in: rest))
+                case "--all":
+                    includeHistory = true
+                case "--json":
+                    outputJSON = true
+                case "--agent-json":
+                    outputAgentJSON = true
+                case "--help", "-h":
+                    printRootHelp(); return
+                default:
+                    throw CLIError("Unknown root list option: \(argument)")
+                }
+                index += 1
+            }
+            if outputJSON && outputAgentJSON {
+                throw CLIError("Use either --json or --agent-json, not both.")
+            }
+            let reports = try RootRegistry.list(catalogURL: catalogURL, includeHistory: includeHistory)
+            if outputAgentJSON {
+                try printJSON(reports.map(AgentSafeRegisteredRootReport.init))
+            } else if outputJSON {
+                try printJSON(reports)
+            } else if reports.isEmpty {
+                print("No registered roots. Use 'photoarchive root list --all' to show catalog history.")
+            } else {
+                print("PhotoArchiveKit registered roots")
+                for report in reports {
+                    print("[\(report.state.rawValue)] \(report.rootID) \(report.canonicalPath)")
+                    print("  kind/provenance: \(report.kind.rawValue) / \(report.provenance.rawValue)")
+                    print("  available: \(report.isAvailable)  catalog resources: \(report.currentResourceCount)")
+                }
+            }
+        case "add":
+            var catalogURL = PhotoArchivePaths.defaultCatalogURL
+            var kind = SourceRootKind.reference
+            var provenance = SourceProvenance.unknown
+            var paths: [String] = []
+            var index = 0
+            while index < rest.count {
+                let argument = rest[index]
+                switch argument {
+                case "--catalog":
+                    catalogURL = fileURL(try value(after: argument, at: &index, in: rest))
+                case "--kind":
+                    let raw = try value(after: argument, at: &index, in: rest)
+                    guard let parsed = SourceRootKind(rawValue: raw) else {
+                        throw CLIError("--kind must be one of: inbox, archive, import_source, reference.")
+                    }
+                    kind = parsed
+                case "--provenance":
+                    let raw = try value(after: argument, at: &index, in: rest)
+                    guard let parsed = SourceProvenance(rawValue: raw) else {
+                        throw CLIError("Unknown --provenance value: \(raw)")
+                    }
+                    provenance = parsed
+                case "--help", "-h":
+                    printRootHelp(); return
+                default:
+                    if argument.hasPrefix("-") { throw CLIError("Unknown root add option: \(argument)") }
+                    paths.append(argument)
+                }
+                index += 1
+            }
+            guard paths.count == 1 else { throw CLIError("Usage: photoarchive root add [options] PATH") }
+            let report = try RootRegistry.add(
+                url: fileURL(paths[0]),
+                kind: kind,
+                provenance: provenance,
+                catalogURL: catalogURL
+            )
+            print("Registered root as active: \(report.canonicalPath)")
+            print("Media files were not modified.")
+        case "enable", "disable":
+            var catalogURL = PhotoArchivePaths.defaultCatalogURL
+            var targets: [String] = []
+            var index = 0
+            while index < rest.count {
+                let argument = rest[index]
+                if argument == "--catalog" {
+                    catalogURL = fileURL(try value(after: argument, at: &index, in: rest))
+                } else if argument == "--help" || argument == "-h" {
+                    printRootHelp(); return
+                } else if argument.hasPrefix("-") {
+                    throw CLIError("Unknown root \(action) option: \(argument)")
+                } else {
+                    targets.append(argument)
+                }
+                index += 1
+            }
+            guard targets.count == 1 else { throw CLIError("Usage: photoarchive root \(action) [--catalog PATH] ROOT_ID_OR_PATH") }
+            let state: RootRegistrationState = action == "enable" ? .active : .inactive
+            let report = try RootRegistry.setState(target: targets[0], state: state, catalogURL: catalogURL)
+            print("Root is now \(report.state.rawValue): \(report.canonicalPath)")
+            print("Media files were not modified.")
+        case "remove":
+            var catalogURL = PhotoArchivePaths.defaultCatalogURL
+            var outputJSON = false
+            var outputAgentJSON = false
+            var targets: [String] = []
+            var index = 0
+            while index < rest.count {
+                let argument = rest[index]
+                switch argument {
+                case "--catalog":
+                    catalogURL = fileURL(try value(after: argument, at: &index, in: rest))
+                case "--json": outputJSON = true
+                case "--agent-json": outputAgentJSON = true
+                case "--help", "-h": printRootHelp(); return
+                default:
+                    if argument.hasPrefix("-") { throw CLIError("Unknown root remove option: \(argument)") }
+                    targets.append(argument)
+                }
+                index += 1
+            }
+            guard targets.count == 1 else { throw CLIError("Usage: photoarchive root remove [--catalog PATH] ROOT_ID_OR_PATH") }
+            if outputJSON && outputAgentJSON { throw CLIError("Use either --json or --agent-json, not both.") }
+            let report = try RootRegistry.remove(target: targets[0], catalogURL: catalogURL)
+            if outputAgentJSON {
+                try printJSON(AgentSafeRootRemovalReport(report: report))
+            } else if outputJSON {
+                try printJSON(report)
+            } else {
+                print("Removed root from the current PhotoArchiveKit library.")
+                print("Catalog resources pruned: \(report.prunedResourceCount)")
+                print("Media files were not modified. Minimal root identity/history is retained.")
+            }
         case "inspect":
             guard rest.count == 1 else { throw CLIError("Usage: photoarchive root inspect PATH") }
             let rootURL = fileURL(rest[0])
@@ -1082,6 +1218,9 @@ struct PhotoArchiveCLI {
             print("  unpaired Live video resources: \(root.videoOnlyLiveResources)")
             print("  standalone images/videos: \(root.standaloneImages)/\(root.standaloneVideos)")
             print("  sidecars: \(root.sidecars)")
+            if root.sidecars > 0 {
+                print("    recognized/unrecognized: \(root.recognizedSidecars)/\(root.unrecognizedSidecars)")
+            }
             print("")
         }
 
@@ -1418,8 +1557,19 @@ struct PhotoArchiveCLI {
         print(
             """
             Usage:
+              photoarchive root list [--all] [--json|--agent-json] [--catalog PATH]
+              photoarchive root add [--kind KIND] [--provenance VALUE] [--catalog PATH] PATH
+              photoarchive root enable [--catalog PATH] ROOT_ID_OR_PATH
+              photoarchive root disable [--catalog PATH] ROOT_ID_OR_PATH
+              photoarchive root remove [--json|--agent-json] [--catalog PATH] ROOT_ID_OR_PATH
               photoarchive root inspect PATH
               photoarchive root init [--apply] PATH
+
+            root list shows the explicit library-location registry; --all also shows removed and
+            history-only roots observed by older scans. add/enable/disable only change catalog
+            registration state. remove prunes that root's current resource/hash/duplicate and
+            source-folder collection evidence while retaining minimal root identity/history.
+            None of these registry actions delete, move, or rename media files.
 
             root inspect reports whether PATH has a stable .photoarchive-root marker.
             root init is a dry run by default. --apply creates only the hidden marker file

@@ -367,6 +367,10 @@ marker가 초기화된 기존 user-managed archive root 하나를 재배치 없�
 
 Google Takeout root에서는 embedded media metadata로 신뢰할 수 있는 촬영시각을 얻지 못한 경우 sidecar의 `title`과 `photoTakenTime`만 읽습니다. GPS, description 등 다른 Takeout metadata는 이 경로에서 import하지 않습니다.
 
+sidecar 정책은 일반 사용자 중심입니다. 사용자가 JSON/XMP를 직접 열어볼 필요 없이, Google Takeout JSON은 검증된 `title` target에, XMP/AAE는 같은 폴더에서 basename 관계가 모호하지 않은 media에 자동 연결합니다. recognized sidecar는 `organize --singleton-leaf-only`의 media 이동을 막지 않지만 sidecar 파일 자체는 몰래 삭제하지 않고 원래 위치에 보존합니다. 관계를 확인할 수 없는 JSON은 unrecognized 상태로 남아 source folder 삭제를 막을 수 있으므로 실제 삭제 직전에만 보존/정리 여부를 판단하면 됩니다.
+
+라이브러리 위치에는 명시적인 root registry가 있습니다. `photoarchive root add`, `enable`, `disable`, `remove`, `list`로 현재 관리하는 위치와 과거 scan에서 한 번 관측된 history root를 구분합니다. `root remove`는 media를 절대 건드리지 않고 해당 root의 current resource/hash/duplicate/source-folder evidence만 catalog에서 정리하며, removable archive를 다시 알아볼 수 있도록 최소 root identity/marker history는 남깁니다. `root list --all`은 removed/history-only root도 보여줍니다.
+
 ## 자동 분류 방향
 
 PhotoArchiveKit은 단순히 Finder 작업을 안전하게 만드는 데서 그치지 않고, 사람이 해야 하는 분류를 최대한 줄이는 방향으로 설계합니다.
