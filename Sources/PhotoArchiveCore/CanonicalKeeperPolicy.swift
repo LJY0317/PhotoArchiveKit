@@ -6,6 +6,20 @@ struct CanonicalResourceKey: Hashable {
 }
 
 enum CanonicalKeeperPolicy {
+    enum PreferenceRationale: String, Sendable {
+        case protectedOrPreferredRoot = "preferred_root_role"
+        case cleanerFilename = "cleaner_filename"
+        case recognizableFilename = "recognizable_filename"
+        case strongerCaptureEvidence = "stronger_capture_evidence"
+        case shallowerPath = "shallower_path"
+        case deterministicTieBreak = "deterministic_tie_break"
+    }
+
+    enum ReviewStrength: String, Sendable {
+        case strong
+        case preference
+    }
+
     static func key(_ resource: ResourceReference) -> CanonicalResourceKey {
         CanonicalResourceKey(rootID: resource.rootID, relativePath: resource.relativePath)
     }
@@ -39,10 +53,68 @@ enum CanonicalKeeperPolicy {
         let lhsScore = resourceScore(lhs, rootsByID: rootsByID, resourcesByKey: resourcesByKey)
         let rhsScore = resourceScore(rhs, rootsByID: rootsByID, resourcesByKey: resourcesByKey)
         if lhsScore.rootRank != rhsScore.rootRank { return lhsScore.rootRank < rhsScore.rootRank }
+        let copyPreference = pairwiseCopyPreference(lhs, rhs)
+        if copyPreference != 0 { return copyPreference < 0 }
+        if lhsScore.filenameRank != rhsScore.filenameRank { return lhsScore.filenameRank < rhsScore.filenameRank }
         if lhsScore.captureRank != rhsScore.captureRank { return lhsScore.captureRank < rhsScore.captureRank }
         if lhsScore.pathDepth != rhsScore.pathDepth { return lhsScore.pathDepth < rhsScore.pathDepth }
         return (lhs.rootID, lhs.relativePath, lhs.role.rawValue)
             < (rhs.rootID, rhs.relativePath, rhs.role.rawValue)
+    }
+
+    static func preferenceRationale(
+        preferred: ResourceReference,
+        candidate: ResourceReference,
+        rootsByID: [String: RootScanReport],
+        resourcesByKey: [CanonicalResourceKey: ScannedResourceReport]
+    ) -> PreferenceRationale {
+        let preferredScore = resourceScore(
+            preferred,
+            rootsByID: rootsByID,
+            resourcesByKey: resourcesByKey
+        )
+        let candidateScore = resourceScore(
+            candidate,
+            rootsByID: rootsByID,
+            resourcesByKey: resourcesByKey
+        )
+        if preferredScore.rootRank != candidateScore.rootRank { return .protectedOrPreferredRoot }
+        if pairwiseCopyPreference(preferred, candidate) != 0 { return .cleanerFilename }
+        if preferredScore.filenameRank != candidateScore.filenameRank { return .recognizableFilename }
+        if preferredScore.captureRank != candidateScore.captureRank { return .strongerCaptureEvidence }
+        if preferredScore.pathDepth != candidateScore.pathDepth { return .shallowerPath }
+        return .deterministicTieBreak
+    }
+
+    static func reviewStrength(
+        item: ReconciliationPlanItem,
+        rootsByID: [String: RootScanReport],
+        resourcesByKey: [CanonicalResourceKey: ScannedResourceReport]
+    ) -> ReviewStrength {
+        if item.kind == .livePhotoAsset,
+           item.reason == .canonicalLocalLivePhotoOccurrence {
+            return .strong
+        }
+        guard item.preferredResources.count == 1,
+              let preferred = item.preferredResources.first
+        else {
+            return .preference
+        }
+        for candidate in item.candidateResources {
+            switch preferenceRationale(
+                preferred: preferred,
+                candidate: candidate,
+                rootsByID: rootsByID,
+                resourcesByKey: resourcesByKey
+            ) {
+            case .protectedOrPreferredRoot, .cleanerFilename:
+                continue
+            case .recognizableFilename, .strongerCaptureEvidence, .shallowerPath,
+                    .deterministicTieBreak:
+                return .preference
+            }
+        }
+        return .strong
     }
 
     static func preferredOccurrence(
@@ -62,6 +134,7 @@ enum CanonicalKeeperPolicy {
 
     private struct ResourceScore {
         let rootRank: Int
+        let filenameRank: Int
         let captureRank: Int
         let pathDepth: Int
     }
@@ -80,9 +153,83 @@ enum CanonicalKeeperPolicy {
     ) -> ResourceScore {
         ResourceScore(
             rootRank: rootRank(rootsByID[resource.rootID]),
+            filenameRank: filenameRank(resource.relativePath),
             captureRank: captureRank(resourcesByKey[key(resource)]?.captureTime),
             pathDepth: pathDepth(resource.relativePath)
         )
+    }
+
+    private static func pairwiseCopyPreference(
+        _ lhs: ResourceReference,
+        _ rhs: ResourceReference
+    ) -> Int {
+        let lhsName = filenameStem(lhs.relativePath)
+        let rhsName = filenameStem(rhs.relativePath)
+        let lhsDerived = copyBaseName(lhsName).map { normalizedName($0) == normalizedName(rhsName) } ?? false
+        let rhsDerived = copyBaseName(rhsName).map { normalizedName($0) == normalizedName(lhsName) } ?? false
+        if lhsDerived == rhsDerived { return 0 }
+        return lhsDerived ? 1 : -1
+    }
+
+    private static func filenameRank(_ relativePath: String) -> Int {
+        let stem = filenameStem(relativePath)
+        let normalized = normalizedName(stem)
+        if isRecognizableSourceName(normalized) { return 0 }
+        if isOpaqueGeneratedName(normalized) { return 2 }
+        return 1
+    }
+
+    private static func filenameStem(_ relativePath: String) -> String {
+        let name = (relativePath as NSString).lastPathComponent as NSString
+        return name.deletingPathExtension
+    }
+
+    private static func normalizedName(_ value: String) -> String {
+        value.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    private static func copyBaseName(_ stem: String) -> String? {
+        let patterns = [
+            #"(?i)^(.*?)(?:[ _-]+copy)$"#,
+            #"^(.*?)(?:[ _-]+복사본)$"#,
+            #"^(.*?)(?:[ _-]+사본)$"#,
+            #"^(.*?)(?: \([1-9][0-9]*\))$"#,
+            #"^(.*?)(?: [1-9][0-9]*)$"#
+        ]
+        let fullRange = NSRange(stem.startIndex..<stem.endIndex, in: stem)
+        for pattern in patterns {
+            guard let expression = try? NSRegularExpression(pattern: pattern),
+                  let match = expression.firstMatch(in: stem, range: fullRange),
+                  match.numberOfRanges > 1,
+                  let range = Range(match.range(at: 1), in: stem)
+            else {
+                continue
+            }
+            let base = String(stem[range]).trimmingCharacters(in: .whitespacesAndNewlines)
+            if !base.isEmpty { return base }
+        }
+        return nil
+    }
+
+    private static func isRecognizableSourceName(_ stem: String) -> Bool {
+        let patterns = [
+            #"^img_e?[0-9]{4,6}(?:[ _-].*)?$"#,
+            #"^kakaotalk[_ -]photo[_ -].+$"#,
+            #"^photo on .+$"#,
+            #"^screenshot[ _-].+$"#,
+            #"^[12][0-9]{3}[-_]?[01][0-9][-_]?[0-3][0-9].*$"#
+        ]
+        return patterns.contains { stem.range(of: $0, options: .regularExpression) != nil }
+    }
+
+    private static func isOpaqueGeneratedName(_ stem: String) -> Bool {
+        if stem.range(
+            of: #"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"#,
+            options: .regularExpression
+        ) != nil {
+            return true
+        }
+        return stem.range(of: #"^[0-9a-f]{24,}$"#, options: .regularExpression) != nil
     }
 
     private static func occurrenceScore(

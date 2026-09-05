@@ -656,6 +656,7 @@ struct PhotoArchiveCLI {
         var duplicateReviewOutputURL: URL?
         var duplicateReviewCandidateRoot: String?
         var duplicateReviewRefresh = false
+        var duplicateReviewPreferenceOnly = false
         var applyMutation = false
         var roots: [ScanRoot] = []
 
@@ -729,6 +730,11 @@ struct PhotoArchiveCLI {
                     throw CLIError("--refresh is only valid with duplicate-review.")
                 }
                 duplicateReviewRefresh = true
+            case "--preference-only":
+                guard mode == .duplicateReview else {
+                    throw CLIError("--preference-only is only valid with duplicate-review.")
+                }
+                duplicateReviewPreferenceOnly = true
             case "--apply":
                 guard mode == .quarantine || mode == .organize else {
                     throw CLIError("--apply is only valid with the quarantine or organize command.")
@@ -854,7 +860,8 @@ struct PhotoArchiveCLI {
                 report: report,
                 plan: plan,
                 outputURL: duplicateReviewOutputURL,
-                candidateRootTarget: duplicateReviewCandidateRoot
+                candidateRootTarget: duplicateReviewCandidateRoot,
+                preferenceOnly: duplicateReviewPreferenceOnly
             )
             if outputAgentJSON {
                 try printJSON(AgentSafeDuplicateReviewWorkspaceReport(report: review))
@@ -932,7 +939,8 @@ struct PhotoArchiveCLI {
                 report: report,
                 plan: plan,
                 outputURL: duplicateReviewOutputURL,
-                candidateRootTarget: duplicateReviewCandidateRoot
+                candidateRootTarget: duplicateReviewCandidateRoot,
+                preferenceOnly: duplicateReviewPreferenceOnly
             )
             if outputAgentJSON {
                 try printJSON(AgentSafeDuplicateReviewWorkspaceReport(report: review))
@@ -1503,7 +1511,7 @@ struct PhotoArchiveCLI {
               photoarchive scan [options] ROOT...
               photoarchive archive-coverage [options] ROOT...
               photoarchive plan [options] ROOT...
-              photoarchive duplicate-review --output PATH [--candidate-root ROOT_ID_OR_PATH] [--refresh] [options] [ROOT...]
+              photoarchive duplicate-review --output PATH [--candidate-root ROOT_ID_OR_PATH] [--preference-only] [--refresh] [options] [ROOT...]
               photoarchive organize-plan [options] ROOT...
               photoarchive archive-plan --to PATH --output PLAN [options] ROOT...
               photoarchive archive-copy [--apply] [--to PATH] [--bind-root ROOT_ID=PATH] PLAN
@@ -1734,7 +1742,7 @@ struct PhotoArchiveCLI {
         } else if command == "organize-plan" {
             mutationOptions = "  --singleton-leaf-only      Limit to clean nested folders containing exactly one planned logical asset\n  --preserve-name-if-date-untrusted\n                              With --singleton-leaf-only, propose flattening untrusted-date standalone camera files without renaming them\n"
         } else if command == "duplicate-review" {
-            mutationOptions = "  --output PATH              New local-private Finder review workspace (required)\n  --candidate-root VALUE     Include only AUTO items whose candidate copies are all in this root ID/path\n  --refresh                  Incrementally rescan active registered roots (or supplied ROOTs) before review\n"
+            mutationOptions = "  --output PATH              New local-private Finder review workspace (required)\n  --candidate-root VALUE     Include only AUTO items whose candidate copies are all in this root ID/path\n  --preference-only          Hide strong automatic choices and show only preference-sensitive keeper choices\n  --refresh                  Incrementally rescan active registered roots (or supplied ROOTs) before review\n"
         } else {
             mutationOptions = ""
         }
@@ -1775,6 +1783,9 @@ struct PhotoArchiveCLI {
             does not reread the whole media library. Before presenting an old decision, it cheaply
             checks current size, modification time, filesystem identity, and stable root marker
             identity where available. Changed groups are marked STALE; unavailable roots are OFFLINE.
+            comparison.txt explains exact-byte evidence, original target size, metadata differences,
+            and the keeper rationale. --preference-only hides strong automatic choices so manual
+            review can focus on cases where the selected keeper is mostly a human preference.
             --refresh incrementally rescans the library, while --refresh --fresh forces metadata and
             exact-hash recomputation. Cached review is not mutation authority; quarantine must still
             freshly verify candidate bytes before moving anything.

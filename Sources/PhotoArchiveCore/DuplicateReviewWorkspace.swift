@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 public enum DuplicateReviewWorkspaceError: LocalizedError {
@@ -77,11 +78,23 @@ public enum DuplicateReviewWorkspace {
         let reason: String?
     }
 
+    private struct ReviewFileFacts {
+        let fileName: String
+        let parentRelativePath: String
+        let byteSize: Int64
+        let creationDate: Date?
+        let modificationDate: Date?
+        let fileSystemIdentifier: String?
+        let captureTime: CaptureTime?
+        let extendedAttributes: [String: Data]?
+    }
+
     public static func create(
         report: ScanReport,
         plan: ReconciliationPlan,
         outputURL rawOutputURL: URL,
         candidateRootTarget: String? = nil,
+        preferenceOnly: Bool = false,
         fileManager: FileManager = .default
     ) throws -> DuplicateReviewWorkspaceReport {
         let outputURL = rawOutputURL.standardizedFileURL
@@ -105,7 +118,7 @@ public enum DuplicateReviewWorkspace {
             candidateRootID = nil
         }
 
-        let selectedItems = plan.items.filter { item in
+        let initiallySelectedItems = plan.items.filter { item in
             guard item.decision == .automaticRedundant, !item.candidateResources.isEmpty else {
                 return false
             }
@@ -116,6 +129,14 @@ public enum DuplicateReviewWorkspace {
         let scannedResourcesByKey = Dictionary(uniqueKeysWithValues: report.resources.map {
             (CanonicalResourceKey(rootID: $0.rootID, relativePath: $0.relativePath), $0)
         })
+        let selectedItems = initiallySelectedItems.filter { item in
+            guard preferenceOnly else { return true }
+            return CanonicalKeeperPolicy.reviewStrength(
+                item: item,
+                rootsByID: rootsByID,
+                resourcesByKey: scannedResourcesByKey
+            ) == .preference
+        }
         let selectedResources = selectedItems.flatMap { $0.preferredResources + $0.candidateResources }
         let selectedResourceIDs = selectedResources.compactMap {
             scannedResourcesByKey[CanonicalKeeperPolicy.key($0)]?.resourceID
@@ -227,13 +248,22 @@ public enum DuplicateReviewWorkspace {
                 let locationsURL = groupURL.appendingPathComponent("locations.txt")
                 try (locationLines.joined(separator: "\n") + "\n")
                     .write(to: locationsURL, atomically: true, encoding: .utf8)
+                try writeComparison(
+                    item: item,
+                    status: itemStatus,
+                    rootsByID: rootsByID,
+                    scannedResourcesByKey: scannedResourcesByKey,
+                    freshnessByKey: freshnessByKey,
+                    groupURL: groupURL,
+                    fileManager: fileManager
+                )
                 if itemStatus != .current {
                     try writeNeedsRefresh(status: itemStatus, to: groupURL)
                 }
             }
 
             return DuplicateReviewWorkspaceReport(
-                schemaVersion: 2,
+                schemaVersion: 3,
                 itemCount: selectedItems.count,
                 currentItemCount: currentItemCount,
                 staleItemCount: staleItemCount,
@@ -362,6 +392,276 @@ public enum DuplicateReviewWorkspace {
         try fileManager.createSymbolicLink(at: linkURL, withDestinationURL: sourceURL)
     }
 
+    private static func writeComparison(
+        item: ReconciliationPlanItem,
+        status: FreshnessStatus,
+        rootsByID: [String: RootScanReport],
+        scannedResourcesByKey: [CanonicalResourceKey: ScannedResourceReport],
+        freshnessByKey: [CanonicalResourceKey: ResourceFreshness],
+        groupURL: URL,
+        fileManager: FileManager
+    ) throws {
+        var lines: [String] = [
+            "PhotoArchiveKit duplicate comparison",
+            "",
+            "status: \(status.rawValue)",
+            "content evidence: EXACT BYTES IDENTICAL for every keeper/candidate resource matched by this exact decision",
+            "embedded metadata: identical for byte-identical matched resources (embedded metadata is part of those bytes)",
+            "important: Finder may show different sizes for the symbolic links in this review folder; that is link-path storage, not media quality or original media size.",
+            "mutation safety: this review evidence is not deletion authority; quarantine must freshly verify bytes again before moving media.",
+            ""
+        ]
+
+        if item.kind == .livePhotoAsset,
+           item.reason == .canonicalLocalLivePhotoOccurrence {
+            lines.append("keeper reason: STRONG — retain the complete Live Photo occurrence; redundant exact-covered resources stay candidates only as an atomic media decision.")
+        } else if item.preferredResources.count == 1,
+                  let preferred = item.preferredResources.first {
+            let rationales = item.candidateResources.map {
+                CanonicalKeeperPolicy.preferenceRationale(
+                    preferred: preferred,
+                    candidate: $0,
+                    rootsByID: rootsByID,
+                    resourcesByKey: scannedResourcesByKey
+                )
+            }
+            let unique = Array(Set(rationales.map(\.rawValue))).sorted()
+            let strength = CanonicalKeeperPolicy.reviewStrength(
+                item: item,
+                rootsByID: rootsByID,
+                resourcesByKey: scannedResourcesByKey
+            )
+            lines.append("keeper reason: \(strength.rawValue.uppercased()) — \(unique.joined(separator: ", "))")
+            if rationales.allSatisfy({ $0 == .deterministicTieBreak }) {
+                lines.append("keeper interpretation: EQUIVALENT COPY — PhotoArchiveKit found no provenance-relevant preference in its current policy, so keeper/candidate is only a deterministic tie-break.")
+            }
+        } else {
+            lines.append("keeper reason: multiple-resource policy decision; inspect the resource rows below.")
+        }
+        lines.append("")
+        lines.append("Metadata scope currently compared:")
+        lines.append("- original target byte size")
+        lines.append("- embedded/capture metadata represented by the scan")
+        lines.append("- filename and parent path")
+        lines.append("- filesystem creation date (birth time; weak provenance evidence, not proof of first-ever creation/download)")
+        lines.append("- filesystem modification date")
+        lines.append("- filesystem identity")
+        lines.append("- extended attributes (names and byte values compared locally; values are not printed here)")
+        lines.append("- ACLs, APFS snapshots, backup history, and external cloud/history records are outside this comparison")
+        lines.append("")
+
+        let preferredFacts = item.preferredResources.compactMap { resource -> (ResourceReference, ReviewFileFacts)? in
+            let key = CanonicalKeeperPolicy.key(resource)
+            guard let sourceURL = freshnessByKey[key]?.sourceURL else { return nil }
+            return (
+                resource,
+                reviewFileFacts(
+                    resource: resource,
+                    scanned: scannedResourcesByKey[key],
+                    sourceURL: sourceURL,
+                    root: rootsByID[resource.rootID],
+                    fileManager: fileManager
+                )
+            )
+        }
+        let candidateFacts = item.candidateResources.compactMap { resource -> (ResourceReference, ReviewFileFacts)? in
+            let key = CanonicalKeeperPolicy.key(resource)
+            guard let sourceURL = freshnessByKey[key]?.sourceURL else { return nil }
+            return (
+                resource,
+                reviewFileFacts(
+                    resource: resource,
+                    scanned: scannedResourcesByKey[key],
+                    sourceURL: sourceURL,
+                    root: rootsByID[resource.rootID],
+                    fileManager: fileManager
+                )
+            )
+        }
+
+        for (index, pair) in preferredFacts.enumerated() {
+            lines.append(contentsOf: factLines(label: "KEEPER \(index + 1)", facts: pair.1))
+        }
+        for (index, pair) in candidateFacts.enumerated() {
+            lines.append(contentsOf: factLines(label: "CANDIDATE \(index + 1)", facts: pair.1))
+        }
+
+        if preferredFacts.count == 1, candidateFacts.count == 1 {
+            lines.append("Comparison summary:")
+            lines.append(contentsOf: comparisonLines(preferred: preferredFacts[0].1, candidate: candidateFacts[0].1))
+        } else {
+            lines.append("Comparison summary: multi-resource group; compare each role above. A complete Live Photo may intentionally contain an additional paired video that has no candidate counterpart.")
+        }
+
+        try (lines.joined(separator: "\n") + "\n").write(
+            to: groupURL.appendingPathComponent("comparison.txt"),
+            atomically: true,
+            encoding: .utf8
+        )
+    }
+
+    private static func reviewFileFacts(
+        resource: ResourceReference,
+        scanned: ScannedResourceReport?,
+        sourceURL: URL,
+        root: RootScanReport?,
+        fileManager: FileManager
+    ) -> ReviewFileFacts {
+        let attributes = try? fileManager.attributesOfItem(atPath: sourceURL.path)
+        let rootURL = root.map { URL(fileURLWithPath: $0.canonicalPath).standardizedFileURL }
+        let parentURL = sourceURL.deletingLastPathComponent().standardizedFileURL
+        let parentRelativePath: String
+        if let rootURL, parentURL.path == rootURL.path {
+            parentRelativePath = "."
+        } else if let rootURL {
+            let prefix = rootURL.path.hasSuffix("/") ? rootURL.path : rootURL.path + "/"
+            parentRelativePath = parentURL.path.hasPrefix(prefix)
+                ? String(parentURL.path.dropFirst(prefix.count))
+                : parentURL.path
+        } else {
+            parentRelativePath = parentURL.path
+        }
+        return ReviewFileFacts(
+            fileName: sourceURL.lastPathComponent,
+            parentRelativePath: parentRelativePath,
+            byteSize: (attributes?[.size] as? NSNumber)?.int64Value ?? resource.byteSize,
+            creationDate: attributes?[.creationDate] as? Date,
+            modificationDate: attributes?[.modificationDate] as? Date,
+            fileSystemIdentifier: (attributes?[.systemFileNumber] as? NSNumber).map { String($0.uint64Value) },
+            captureTime: scanned?.captureTime,
+            extendedAttributes: extendedAttributes(at: sourceURL)
+        )
+    }
+
+    private static func factLines(label: String, facts: ReviewFileFacts) -> [String] {
+        [
+            "\(label):",
+            "  filename: \(facts.fileName)",
+            "  parent: \(facts.parentRelativePath)",
+            "  original target size: \(facts.byteSize) bytes",
+            "  filesystem created: \(formatDate(facts.creationDate))",
+            "  filesystem modified: \(formatDate(facts.modificationDate))",
+            "  embedded capture: \(formatCaptureTime(facts.captureTime))",
+            "  filesystem identity: \(facts.fileSystemIdentifier ?? "unavailable")",
+            "  extended attributes: \(facts.extendedAttributes.map { String($0.count) } ?? "unavailable")",
+            ""
+        ]
+    }
+
+    private static func comparisonLines(
+        preferred: ReviewFileFacts,
+        candidate: ReviewFileFacts
+    ) -> [String] {
+        var lines: [String] = []
+        lines.append("- original target size: \(preferred.byteSize == candidate.byteSize ? "same" : "different")")
+        lines.append("- filename: \(preferred.fileName == candidate.fileName ? "same" : "different")")
+        lines.append("- parent path: \(preferred.parentRelativePath == candidate.parentRelativePath ? "same" : "different")")
+        let preferredExtension = (preferred.fileName as NSString).pathExtension
+        let candidateExtension = (candidate.fileName as NSString).pathExtension
+        let extensionComparison: String
+        if preferredExtension == candidateExtension {
+            extensionComparison = "same"
+        } else if preferredExtension.lowercased() == candidateExtension.lowercased() {
+            extensionComparison = "case-only difference (same file format)"
+        } else {
+            extensionComparison = "different"
+        }
+        lines.append("- filename extension: \(extensionComparison)")
+        lines.append("- filesystem creation date: \(dateComparison(preferred.creationDate, candidate.creationDate))")
+        lines.append("- filesystem modification date: \(dateComparison(preferred.modificationDate, candidate.modificationDate))")
+        lines.append("- embedded capture metadata: \(captureComparison(preferred.captureTime, candidate.captureTime))")
+        lines.append("- filesystem identity: \(preferred.fileSystemIdentifier == candidate.fileSystemIdentifier ? "same" : "different (expected for distinct copies)")")
+        lines.append("- extended attributes: \(extendedAttributeComparison(preferred.extendedAttributes, candidate.extendedAttributes))")
+
+        let provenanceRelevantSame = preferred.byteSize == candidate.byteSize
+            && preferred.fileName == candidate.fileName
+            && preferred.parentRelativePath == candidate.parentRelativePath
+            && datesMatch(preferred.creationDate, candidate.creationDate)
+            && datesMatch(preferred.modificationDate, candidate.modificationDate)
+            && preferred.captureTime == candidate.captureTime
+            && preferred.extendedAttributes == candidate.extendedAttributes
+        if provenanceRelevantSame {
+            lines.append("- RESULT: No provenance-relevant differences were detected in the metadata PhotoArchiveKit currently inspects. The two filesystem objects are still distinct copies, but this evidence does not provide a meaningful original-vs-copy preference.")
+        } else {
+            lines.append("- RESULT: Files are byte-identical, but one or more filesystem/provenance metadata fields differ. Those differences may help choose a preferred copy without implying a quality difference.")
+        }
+        return lines
+    }
+
+    private static func formatDate(_ date: Date?) -> String {
+        guard let date else { return "unavailable" }
+        return ISO8601DateFormatter().string(from: date)
+    }
+
+    private static func formatCaptureTime(_ capture: CaptureTime?) -> String {
+        guard let capture else { return "unavailable" }
+        let instant = capture.instant.map { ISO8601DateFormatter().string(from: $0) } ?? "no instant"
+        return "\(capture.source.rawValue) / \(capture.confidence.rawValue) / \(instant)"
+    }
+
+    private static func dateComparison(_ lhs: Date?, _ rhs: Date?) -> String {
+        guard let lhs, let rhs else { return lhs == nil && rhs == nil ? "both unavailable" : "availability differs" }
+        if datesMatch(lhs, rhs) { return "same" }
+        return lhs < rhs ? "keeper earlier" : "candidate earlier"
+    }
+
+    private static func captureComparison(_ lhs: CaptureTime?, _ rhs: CaptureTime?) -> String {
+        lhs == rhs ? "same" : "different"
+    }
+
+    private static func datesMatch(_ lhs: Date?, _ rhs: Date?) -> Bool {
+        guard let lhs, let rhs else { return lhs == nil && rhs == nil }
+        return abs(lhs.timeIntervalSince1970 - rhs.timeIntervalSince1970) < 0.001
+    }
+
+    private static func extendedAttributeComparison(
+        _ lhs: [String: Data]?,
+        _ rhs: [String: Data]?
+    ) -> String {
+        guard let lhs, let rhs else { return "unavailable" }
+        if lhs == rhs { return "same" }
+        let lhsNames = Set(lhs.keys)
+        let rhsNames = Set(rhs.keys)
+        if lhsNames == rhsNames { return "same attribute names, different value(s)" }
+        return "different attribute set"
+    }
+
+    private static func extendedAttributes(at url: URL) -> [String: Data]? {
+        url.withUnsafeFileSystemRepresentation { path -> [String: Data]? in
+            guard let path else { return nil }
+            let nameBufferSize = listxattr(path, nil, 0, 0)
+            guard nameBufferSize >= 0 else { return nil }
+            if nameBufferSize == 0 { return [:] }
+            var nameBuffer = [CChar](repeating: 0, count: nameBufferSize)
+            let filled = listxattr(path, &nameBuffer, nameBuffer.count, 0)
+            guard filled >= 0 else { return nil }
+
+            var names: [String] = []
+            var start = 0
+            for index in 0..<filled where nameBuffer[index] == 0 {
+                if index > start {
+                    names.append(String(cString: Array(nameBuffer[start...index])))
+                }
+                start = index + 1
+            }
+
+            var result: [String: Data] = [:]
+            for name in names {
+                let value = name.withCString { attributeName -> Data? in
+                    let size = getxattr(path, attributeName, nil, 0, 0, 0)
+                    guard size >= 0 else { return nil }
+                    if size == 0 { return Data() }
+                    var bytes = [UInt8](repeating: 0, count: size)
+                    let read = getxattr(path, attributeName, &bytes, bytes.count, 0, 0)
+                    guard read >= 0 else { return nil }
+                    return Data(bytes.prefix(read))
+                }
+                if let value { result[name] = value }
+            }
+            return result
+        }
+    }
+
     private static func writeReadme(to outputURL: URL) throws {
         let text = """
         PhotoArchiveKit exact-duplicate review workspace
@@ -376,6 +676,7 @@ public enum DuplicateReviewWorkspace {
         CURRENT groups contain:
         - KEEPER: the copy PhotoArchiveKit currently prefers to keep.
         - CANDIDATE: byte-identical copy/copies eligible for quarantine only after fresh cryptographic verification.
+        - comparison.txt: local-private target size, keeper rationale, and metadata-difference summary. Finder's symbolic-link size is not the original media size.
 
         STALE/OFFLINE groups use OLD_KEEPER and OLD_CANDIDATE because those names describe historical decisions only.
         - locations.txt: local-private original paths for Finder review.

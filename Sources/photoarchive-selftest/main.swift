@@ -1174,6 +1174,65 @@ struct PhotoArchiveSelfTest {
             "archive replicas must never become automatic redundant candidates"
         )
 
+        let filenamePolicyRoot = temporary.appendingPathComponent("FilenamePolicy", isDirectory: true)
+        try fileManager.createDirectory(at: filenamePolicyRoot, withIntermediateDirectories: true)
+        _ = try RootMarkerStore.create(at: filenamePolicyRoot)
+        let copyNameBytes = Data("copy-name-policy".utf8)
+        try copyNameBytes.write(to: filenamePolicyRoot.appendingPathComponent("a.jpg"))
+        try copyNameBytes.write(to: filenamePolicyRoot.appendingPathComponent("a 2.jpg"))
+        let recognizableNameBytes = Data("recognizable-name-policy".utf8)
+        try recognizableNameBytes.write(to: filenamePolicyRoot.appendingPathComponent("IMG_5199.JPG"))
+        try recognizableNameBytes.write(
+            to: filenamePolicyRoot.appendingPathComponent("72FD56C3-50FF-4980-B882-549DA293DE44.JPG")
+        )
+        let filenamePolicyCatalog = temporary.appendingPathComponent("filename-policy.sqlite3")
+        let filenamePolicyScanner = try ArchiveScanner(catalogURL: filenamePolicyCatalog)
+        let filenamePolicyReport = try await filenamePolicyScanner.scan(roots: [
+            ScanRoot(url: filenamePolicyRoot, kind: .inbox, provenance: .localLibrary)
+        ])
+        let filenamePolicyPlan = ReconciliationPlanner.makePlan(from: filenamePolicyReport)
+        guard let copyNameItem = filenamePolicyPlan.items.first(where: {
+            $0.preferredResources.contains { $0.relativePath == "a.jpg" }
+                || $0.candidateResources.contains { $0.relativePath == "a 2.jpg" }
+        }) else {
+            throw SelfTestFailure("copy-name fixture did not produce an exact reconciliation item")
+        }
+        try require(
+            copyNameItem.preferredResources.first?.relativePath == "a.jpg"
+                && copyNameItem.candidateResources.contains { $0.relativePath == "a 2.jpg" },
+            "a filename that exactly matches the peer after removing a copy suffix should lose keeper preference"
+        )
+        guard let recognizableNameItem = filenamePolicyPlan.items.first(where: {
+            $0.preferredResources.contains { $0.relativePath == "IMG_5199.JPG" }
+                || $0.candidateResources.contains { $0.relativePath.contains("72FD56C3") }
+        }) else {
+            throw SelfTestFailure("recognizable-name fixture did not produce an exact reconciliation item")
+        }
+        try require(
+            recognizableNameItem.preferredResources.first?.relativePath == "IMG_5199.JPG",
+            "a standard camera-style filename should weakly outrank an opaque UUID filename when bytes/root evidence tie"
+        )
+        let preferenceReviewRoot = temporary.appendingPathComponent("PreferenceReview", isDirectory: true)
+        let preferenceReview = try DuplicateReviewWorkspace.create(
+            report: filenamePolicyReport,
+            plan: filenamePolicyPlan,
+            outputURL: preferenceReviewRoot,
+            preferenceOnly: true
+        )
+        try require(
+            preferenceReview.itemCount == 1,
+            "preference-only review should hide the strong copy-name decision but keep the weak filename preference"
+        )
+        let preferenceGroup = try fileManager.contentsOfDirectory(
+            at: preferenceReviewRoot,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ).first { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
+        try require(
+            preferenceGroup.map { fileManager.fileExists(atPath: $0.appendingPathComponent("comparison.txt").path) } == true,
+            "duplicate review should write a local-private metadata comparison summary"
+        )
+
         let localDuplicateLiveReport = syntheticLocalDuplicateLivePhotoReport()
         let localDuplicateLivePlan = ReconciliationPlanner.makePlan(from: localDuplicateLiveReport)
         guard let localDuplicateLiveItem = localDuplicateLivePlan.items.first(where: {
