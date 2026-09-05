@@ -112,7 +112,7 @@ struct PhotoArchiveSelfTest {
         )
         let roots = [
             ScanRoot(url: rootA, kind: .reference, provenance: .localLibrary),
-            ScanRoot(url: rootB, kind: .reference, provenance: .googleTakeout)
+            ScanRoot(url: rootB, kind: .importSource, provenance: .googleTakeout)
         ]
         let progressRecorder = ProgressRecorder()
         let first = try await scanner.scan(
@@ -920,6 +920,66 @@ struct PhotoArchiveSelfTest {
         try require(
             !standaloneAgentPlanJSON.contains(rootB.path),
             "agent-safe reconciliation plan exposed a path"
+        )
+
+        let canonicalLocalRoot = temporary.appendingPathComponent("CanonicalLocal", isDirectory: true)
+        let canonicalArchiveRoot = temporary.appendingPathComponent("CanonicalArchive", isDirectory: true)
+        try fileManager.createDirectory(
+            at: canonicalLocalRoot.appendingPathComponent("nested", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+        try fileManager.createDirectory(at: canonicalArchiveRoot, withIntermediateDirectories: true)
+        _ = try RootMarkerStore.create(at: canonicalLocalRoot)
+        _ = try RootMarkerStore.create(at: canonicalArchiveRoot)
+        let canonicalBytes = Data("canonical-local-exact".utf8)
+        let canonicalRootFile = canonicalLocalRoot.appendingPathComponent("keeper.jpg")
+        let canonicalNestedFile = canonicalLocalRoot.appendingPathComponent("nested/copy.jpg")
+        let canonicalArchiveFile = canonicalArchiveRoot.appendingPathComponent("backup.jpg")
+        try canonicalBytes.write(to: canonicalRootFile)
+        try canonicalBytes.write(to: canonicalNestedFile)
+        try canonicalBytes.write(to: canonicalArchiveFile)
+        let canonicalCatalog = temporary.appendingPathComponent("canonical-local.sqlite3")
+        let canonicalScanner = try ArchiveScanner(catalogURL: canonicalCatalog)
+        let canonicalReport = try await canonicalScanner.scan(roots: [
+            ScanRoot(url: canonicalLocalRoot, kind: .inbox, provenance: .localLibrary),
+            ScanRoot(url: canonicalArchiveRoot, kind: .archive, provenance: .unknown)
+        ])
+        let canonicalPlan = ReconciliationPlanner.makePlan(from: canonicalReport)
+        guard let canonicalItem = canonicalPlan.items.first(where: { $0.reason == .canonicalExactCopy }) else {
+            throw SelfTestFailure("same-root local exact duplicates should produce a canonical keeper item")
+        }
+        try require(
+            canonicalItem.candidateResources.count == 1
+                && canonicalItem.candidateResources[0].relativePath == "nested/copy.jpg",
+            "canonical exact policy should prefer the shallower primary-library copy"
+        )
+        try require(
+            canonicalItem.preferredResources.count == 1
+                && canonicalItem.preferredResources[0].relativePath == "keeper.jpg",
+            "canonical exact policy should retain the primary-library root-level copy"
+        )
+        try require(
+            !canonicalItem.candidateResources.contains { $0.rootID == canonicalReport.roots.first(where: { $0.kind == .archive })?.rootID },
+            "archive replicas must never become automatic redundant candidates"
+        )
+
+        let localDuplicateLiveReport = syntheticLocalDuplicateLivePhotoReport()
+        let localDuplicateLivePlan = ReconciliationPlanner.makePlan(from: localDuplicateLiveReport)
+        guard let localDuplicateLiveItem = localDuplicateLivePlan.items.first(where: {
+            $0.reason == .canonicalLocalLivePhotoOccurrence
+        }) else {
+            throw SelfTestFailure("same-root complete Live Photo duplicates should produce a canonical occurrence item")
+        }
+        try require(
+            localDuplicateLiveItem.candidateResources.count == 2
+                && Set(localDuplicateLiveItem.candidateResources.map(\.relativePath))
+                    == Set(["nested/IMG_0001.HEIC", "nested/IMG_0001.MOV"]),
+            "a redundant complete Live Photo occurrence must move as an atomic pair"
+        )
+        try require(
+            Set(localDuplicateLiveItem.preferredResources.map(\.relativePath))
+                == Set(["IMG_0001.HEIC", "IMG_0001.MOV"]),
+            "the shallower complete Live Photo occurrence should be the canonical keeper"
         )
 
         let quarantineRoot = temporary.appendingPathComponent("Quarantine", isDirectory: true)
@@ -1952,6 +2012,145 @@ private func syntheticOrganizationReport(
                 kind: .xmp
             )
         ] : [],
+        warnings: [],
+        filesModified: false
+    )
+}
+
+private func syntheticLocalDuplicateLivePhotoReport() -> ScanReport {
+    let rootID = "RLOCALDUPLIVE"
+    let capture = CaptureTime(
+        localTimestamp: "2026-08-14T17:42:31",
+        utcOffset: "+09:00",
+        instant: Date(timeIntervalSince1970: 1_776_000_000),
+        source: .exifDateTimeOriginal,
+        confidence: .trusted
+    )
+    let rootPhoto = ScannedResourceReport(
+        resourceID: "FLIVEKEEP1",
+        assetID: "ALIVEKEEP",
+        rootID: rootID,
+        rootLabel: "Local",
+        relativePath: "IMG_0001.HEIC",
+        fileName: "IMG_0001.HEIC",
+        mediaKind: .image,
+        role: .photo,
+        byteSize: 100,
+        captureTime: capture
+    )
+    let rootVideo = ScannedResourceReport(
+        resourceID: "FLIVEKEEP2",
+        assetID: "ALIVEKEEP",
+        rootID: rootID,
+        rootLabel: "Local",
+        relativePath: "IMG_0001.MOV",
+        fileName: "IMG_0001.MOV",
+        mediaKind: .video,
+        role: .pairedVideo,
+        byteSize: 200,
+        captureTime: capture
+    )
+    let nestedPhoto = ScannedResourceReport(
+        resourceID: "FLIVEDUP1",
+        assetID: "ALIVEKEEP",
+        rootID: rootID,
+        rootLabel: "Local",
+        relativePath: "nested/IMG_0001.HEIC",
+        fileName: "IMG_0001.HEIC",
+        mediaKind: .image,
+        role: .photo,
+        byteSize: 100,
+        captureTime: capture
+    )
+    let nestedVideo = ScannedResourceReport(
+        resourceID: "FLIVEDUP2",
+        assetID: "ALIVEKEEP",
+        rootID: rootID,
+        rootLabel: "Local",
+        relativePath: "nested/IMG_0001.MOV",
+        fileName: "IMG_0001.MOV",
+        mediaKind: .video,
+        role: .pairedVideo,
+        byteSize: 200,
+        captureTime: capture
+    )
+    let rootOccurrence = LivePhotoOccurrenceReport(
+        rootID: rootID,
+        rootLabel: "Local",
+        status: .complete,
+        stillCount: 1,
+        videoCount: 1,
+        resources: [
+            ResourceReference(rootID: rootID, rootLabel: "Local", relativePath: rootPhoto.relativePath, role: .photo, byteSize: 100),
+            ResourceReference(rootID: rootID, rootLabel: "Local", relativePath: rootVideo.relativePath, role: .pairedVideo, byteSize: 200)
+        ]
+    )
+    let nestedOccurrence = LivePhotoOccurrenceReport(
+        rootID: rootID,
+        rootLabel: "Local",
+        status: .complete,
+        stillCount: 1,
+        videoCount: 1,
+        resources: [
+            ResourceReference(rootID: rootID, rootLabel: "Local", relativePath: nestedPhoto.relativePath, role: .photo, byteSize: 100),
+            ResourceReference(rootID: rootID, rootLabel: "Local", relativePath: nestedVideo.relativePath, role: .pairedVideo, byteSize: 200)
+        ]
+    )
+    let now = Date(timeIntervalSince1970: 1)
+    return ScanReport(
+        sessionID: "SLOCALDUPLIVE",
+        startedAt: now,
+        completedAt: now,
+        catalogPath: "/synthetic/local-duplicate-live.sqlite3",
+        summary: ScanSummary(
+            rootCount: 1,
+            resourceCount: 4,
+            logicalAssetCount: 1,
+            livePhotoAssetCount: 1,
+            exactDuplicateGroupCount: 2,
+            eventSuggestionCount: 0,
+            warningCount: 0
+        ),
+        roots: [
+            RootScanReport(
+                rootID: rootID,
+                label: "Local",
+                kind: .inbox,
+                provenance: .localLibrary,
+                canonicalPath: "/synthetic/local",
+                mediaFileCount: 4,
+                completeLivePhotos: 2,
+                stillOnlyLiveResources: 0,
+                videoOnlyLiveResources: 0,
+                standaloneImages: 0,
+                standaloneVideos: 0,
+                sidecars: 0,
+                metadataProbeFailures: 0
+            )
+        ],
+        resources: [rootPhoto, rootVideo, nestedPhoto, nestedVideo],
+        livePhotos: [
+            LivePhotoAssetReport(
+                assetID: "ALIVEKEEP",
+                occurrenceCount: 2,
+                stillCopyCount: 2,
+                videoCopyCount: 2,
+                occurrences: [rootOccurrence, nestedOccurrence]
+            )
+        ],
+        exactDuplicateGroups: [
+            ExactDuplicateGroupReport(
+                groupID: "GLOCALPHOTO",
+                byteSize: 100,
+                members: [rootOccurrence.resources[0], nestedOccurrence.resources[0]]
+            ),
+            ExactDuplicateGroupReport(
+                groupID: "GLOCALVIDEO",
+                byteSize: 200,
+                members: [rootOccurrence.resources[1], nestedOccurrence.resources[1]]
+            )
+        ],
+        eventSuggestions: [],
         warnings: [],
         filesModified: false
     )

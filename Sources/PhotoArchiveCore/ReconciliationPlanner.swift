@@ -12,6 +12,8 @@ public enum ReconciliationDecision: String, Codable, Sendable {
 }
 
 public enum ReconciliationReason: String, Codable, Sendable {
+    case canonicalExactCopy = "canonical_exact_copy"
+    case canonicalLocalLivePhotoOccurrence = "canonical_local_live_photo_occurrence"
     case preferredNonTakeoutExactCopy = "preferred_non_takeout_exact_copy"
     case livePhotoCanonicalCoverage = "live_photo_canonical_coverage"
     case livePhotoIncompleteOccurrenceExactCoverage = "live_photo_incomplete_occurrence_exact_coverage"
@@ -112,6 +114,9 @@ public enum ReconciliationPlanner {
 
     public static func makePlan(from report: ScanReport) -> ReconciliationPlan {
         let rootsByID = Dictionary(uniqueKeysWithValues: report.roots.map { ($0.rootID, $0) })
+        let resourcesByKey = Dictionary(uniqueKeysWithValues: report.resources.map {
+            (CanonicalResourceKey(rootID: $0.rootID, relativePath: $0.relativePath), $0)
+        })
         let duplicateGroupByResource = duplicateGroupIndex(report.exactDuplicateGroups)
         let liveResourceKeys = Set(
             report.livePhotos
@@ -124,11 +129,19 @@ public enum ReconciliationPlanner {
         drafts.append(contentsOf: standaloneDrafts(
             report: report,
             rootsByID: rootsByID,
+            resourcesByKey: resourcesByKey,
             liveResourceKeys: liveResourceKeys
+        ))
+        drafts.append(contentsOf: localLibraryLivePhotoDrafts(
+            report: report,
+            rootsByID: rootsByID,
+            resourcesByKey: resourcesByKey,
+            duplicateGroupByResource: duplicateGroupByResource
         ))
         drafts.append(contentsOf: livePhotoDrafts(
             report: report,
             rootsByID: rootsByID,
+            resourcesByKey: resourcesByKey,
             duplicateGroupByResource: duplicateGroupByResource
         ))
 
@@ -155,7 +168,7 @@ public enum ReconciliationPlanner {
         let reviewItems = items.filter { $0.decision == .review }
         return ReconciliationPlan(
             schemaVersion: 1,
-            policy: "prefer_non_takeout_exact_v2",
+            policy: "canonical_exact_keeper_v3",
             sessionID: report.sessionID,
             summary: ReconciliationPlanSummary(
                 automaticItemCount: automaticItems.count,
@@ -171,59 +184,180 @@ public enum ReconciliationPlanner {
     private static func standaloneDrafts(
         report: ScanReport,
         rootsByID: [String: RootScanReport],
+        resourcesByKey: [CanonicalResourceKey: ScannedResourceReport],
         liveResourceKeys: Set<ResourceKey>
     ) -> [DraftItem] {
-        report.exactDuplicateGroups.compactMap { group in
-            let members = group.members.filter { !liveResourceKeys.contains(resourceKey($0)) }
-            guard members.count > 1 else { return nil }
+        var output: [DraftItem] = []
+        for group in report.exactDuplicateGroups {
+            let nonLive = group.members.filter { !liveResourceKeys.contains(resourceKey($0)) }
+            let byRole = Dictionary(grouping: nonLive, by: \.role)
+            for members in byRole.values where members.count > 1 {
+                var candidateKeys = Set<ResourceKey>()
 
-            let takeout = members.filter { rootsByID[$0.rootID]?.provenance == .googleTakeout }
-            guard !takeout.isEmpty else { return nil }
-            let preferred = members.filter { rootsByID[$0.rootID]?.provenance != .googleTakeout }
+                let byRoot = Dictionary(grouping: members, by: \.rootID)
+                for (rootID, rootMembers) in byRoot {
+                    guard CanonicalKeeperPolicy.isPrimaryLibraryRoot(rootsByID[rootID]),
+                          rootMembers.count > 1
+                    else { continue }
+                    let sorted = rootMembers.sorted {
+                        CanonicalKeeperPolicy.preferredResource(
+                            $0,
+                            before: $1,
+                            rootsByID: rootsByID,
+                            resourcesByKey: resourcesByKey
+                        )
+                    }
+                    for candidate in sorted.dropFirst() {
+                        candidateKeys.insert(resourceKey(candidate))
+                    }
+                }
 
-            if let canonical = preferred.sorted(by: { preferredResource($0, before: $1, rootsByID: rootsByID) }).first {
-                return DraftItem(
-                    kind: .standaloneExactGroup,
+                var retained = members.filter { !candidateKeys.contains(resourceKey($0)) }
+                let importMembers = retained.filter {
+                    CanonicalKeeperPolicy.isImportCleanupRoot(rootsByID[$0.rootID])
+                }
+                let stableKeepers = retained.filter {
+                    !CanonicalKeeperPolicy.isImportCleanupRoot(rootsByID[$0.rootID])
+                }
+
+                if !stableKeepers.isEmpty {
+                    for candidate in importMembers {
+                        candidateKeys.insert(resourceKey(candidate))
+                    }
+                } else if importMembers.count > 1 {
+                    let semanticsCaptured = importMembers.allSatisfy {
+                        rootsByID[$0.rootID]?.sourceFolderSemanticsCaptured == true
+                    }
+                    if semanticsCaptured {
+                        let sorted = importMembers.sorted {
+                            CanonicalKeeperPolicy.preferredResource(
+                                $0,
+                                before: $1,
+                                rootsByID: rootsByID,
+                                resourcesByKey: resourcesByKey
+                            )
+                        }
+                        for candidate in sorted.dropFirst() {
+                            candidateKeys.insert(resourceKey(candidate))
+                        }
+                    }
+                }
+
+                let candidates = members
+                    .filter { candidateKeys.contains(resourceKey($0)) }
+                    .sorted(by: resourceSort)
+                guard !candidates.isEmpty else {
+                    if members.allSatisfy({ CanonicalKeeperPolicy.isImportCleanupRoot(rootsByID[$0.rootID]) }) {
+                        output.append(DraftItem(
+                            kind: .takeoutOnlyExactGroup,
+                            subjectID: group.groupID,
+                            decision: .review,
+                            reason: .takeoutCollectionSemanticsPending,
+                            preferredRootID: nil,
+                            preferredResources: [],
+                            candidateResources: members.sorted(by: resourceSort)
+                        ))
+                    }
+                    continue
+                }
+
+                retained = members.filter { !candidateKeys.contains(resourceKey($0)) }
+                let preferred = retained.sorted {
+                    CanonicalKeeperPolicy.preferredResource(
+                        $0,
+                        before: $1,
+                        rootsByID: rootsByID,
+                        resourcesByKey: resourcesByKey
+                    )
+                }
+                guard let canonical = preferred.first else { continue }
+
+                let hasLocalCandidate = candidates.contains {
+                    CanonicalKeeperPolicy.isPrimaryLibraryRoot(rootsByID[$0.rootID])
+                }
+                let onlyImport = retained.allSatisfy {
+                    CanonicalKeeperPolicy.isImportCleanupRoot(rootsByID[$0.rootID])
+                }
+                let reason: ReconciliationReason
+                let kind: ReconciliationItemKind
+                if hasLocalCandidate {
+                    reason = .canonicalExactCopy
+                    kind = .standaloneExactGroup
+                } else if onlyImport {
+                    reason = .takeoutSourceFolderSemanticsCaptured
+                    kind = .takeoutOnlyExactGroup
+                } else {
+                    reason = .preferredNonTakeoutExactCopy
+                    kind = .standaloneExactGroup
+                }
+                output.append(DraftItem(
+                    kind: kind,
                     subjectID: group.groupID,
                     decision: .automaticRedundant,
-                    reason: .preferredNonTakeoutExactCopy,
+                    reason: reason,
                     preferredRootID: canonical.rootID,
                     preferredResources: [canonical],
-                    candidateResources: takeout.sorted(by: resourceSort)
-                )
+                    candidateResources: candidates
+                ))
             }
-
-            let sortedTakeout = takeout.sorted(by: resourceSort)
-            let sourceFolderSemanticsCaptured = sortedTakeout.allSatisfy { resource in
-                rootsByID[resource.rootID]?.sourceFolderSemanticsCaptured == true
-            }
-            if sourceFolderSemanticsCaptured, let canonical = sortedTakeout.first {
-                return DraftItem(
-                    kind: .takeoutOnlyExactGroup,
-                    subjectID: group.groupID,
-                    decision: .automaticRedundant,
-                    reason: .takeoutSourceFolderSemanticsCaptured,
-                    preferredRootID: canonical.rootID,
-                    preferredResources: [canonical],
-                    candidateResources: Array(sortedTakeout.dropFirst())
-                )
-            }
-
-            return DraftItem(
-                kind: .takeoutOnlyExactGroup,
-                subjectID: group.groupID,
-                decision: .review,
-                reason: .takeoutCollectionSemanticsPending,
-                preferredRootID: nil,
-                preferredResources: [],
-                candidateResources: sortedTakeout
-            )
         }
+        return output
+    }
+
+    private static func localLibraryLivePhotoDrafts(
+        report: ScanReport,
+        rootsByID: [String: RootScanReport],
+        resourcesByKey: [CanonicalResourceKey: ScannedResourceReport],
+        duplicateGroupByResource: [ResourceKey: String]
+    ) -> [DraftItem] {
+        var output: [DraftItem] = []
+        for asset in report.livePhotos {
+            let byRoot = Dictionary(grouping: asset.occurrences, by: \.rootID)
+            for (rootID, occurrences) in byRoot {
+                guard CanonicalKeeperPolicy.isPrimaryLibraryRoot(rootsByID[rootID]),
+                      occurrences.count > 1
+                else { continue }
+                let sorted = occurrences.sorted {
+                    CanonicalKeeperPolicy.preferredOccurrence(
+                        $0,
+                        before: $1,
+                        rootsByID: rootsByID,
+                        resourcesByKey: resourcesByKey
+                    )
+                }
+                guard let canonical = sorted.first else { continue }
+                let canonicalGroupsByRole = exactGroupsByRole(
+                    canonical.resources,
+                    duplicateGroupByResource: duplicateGroupByResource
+                )
+                let redundantOccurrences = sorted.dropFirst().filter { occurrence in
+                    occurrence.resources.allSatisfy { resource in
+                        guard let groupID = duplicateGroupByResource[resourceKey(resource)] else {
+                            return false
+                        }
+                        return canonicalGroupsByRole[resource.role]?.contains(groupID) == true
+                    }
+                }
+                let candidates = redundantOccurrences.flatMap(\.resources).sorted(by: resourceSort)
+                guard !candidates.isEmpty else { continue }
+                output.append(DraftItem(
+                    kind: .livePhotoAsset,
+                    subjectID: asset.assetID,
+                    decision: .automaticRedundant,
+                    reason: .canonicalLocalLivePhotoOccurrence,
+                    preferredRootID: rootID,
+                    preferredResources: canonical.resources.sorted(by: resourceSort),
+                    candidateResources: candidates
+                ))
+            }
+        }
+        return output
     }
 
     private static func livePhotoDrafts(
         report: ScanReport,
         rootsByID: [String: RootScanReport],
+        resourcesByKey: [CanonicalResourceKey: ScannedResourceReport],
         duplicateGroupByResource: [ResourceKey: String]
     ) -> [DraftItem] {
         var output: [DraftItem] = []
@@ -239,7 +373,12 @@ public enum ReconciliationPlanner {
                     && rootsByID[occurrence.rootID]?.provenance != .googleTakeout
             }
             let canonical = completePreferredOccurrences.sorted { lhs, rhs in
-                preferredOccurrence(lhs, before: rhs, rootsByID: rootsByID)
+                CanonicalKeeperPolicy.preferredOccurrence(
+                    lhs,
+                    before: rhs,
+                    rootsByID: rootsByID,
+                    resourcesByKey: resourcesByKey
+                )
             }.first
 
             let exactMixedTakeout = takeoutResources.filter { resource in
@@ -267,6 +406,7 @@ public enum ReconciliationPlanner {
                             for: resource,
                             report: report,
                             rootsByID: rootsByID,
+                            resourcesByKey: resourcesByKey,
                             duplicateGroupByResource: duplicateGroupByResource
                         ) != nil
                     }
@@ -278,6 +418,7 @@ public enum ReconciliationPlanner {
                             for: resource,
                             report: report,
                             rootsByID: rootsByID,
+                            resourcesByKey: resourcesByKey,
                             duplicateGroupByResource: duplicateGroupByResource
                         )
                     })
@@ -364,6 +505,7 @@ public enum ReconciliationPlanner {
         for resource: ResourceReference,
         report: ScanReport,
         rootsByID: [String: RootScanReport],
+        resourcesByKey: [CanonicalResourceKey: ScannedResourceReport],
         duplicateGroupByResource: [ResourceKey: String]
     ) -> ResourceReference? {
         guard let groupID = duplicateGroupByResource[resourceKey(resource)],
@@ -376,8 +518,25 @@ public enum ReconciliationPlanner {
                 $0.role == resource.role
                     && rootsByID[$0.rootID]?.provenance != .googleTakeout
             }
-            .sorted { preferredResource($0, before: $1, rootsByID: rootsByID) }
+            .sorted {
+                CanonicalKeeperPolicy.preferredResource(
+                    $0,
+                    before: $1,
+                    rootsByID: rootsByID,
+                    resourcesByKey: resourcesByKey
+                )
+            }
             .first
+    }
+
+    private static func exactGroupsByRole(
+        _ resources: [ResourceReference],
+        duplicateGroupByResource: [ResourceKey: String]
+    ) -> [ResourceRole: Set<String>] {
+        Dictionary(grouping: resources, by: \.role)
+            .mapValues { values in
+                Set(values.compactMap { duplicateGroupByResource[resourceKey($0)] })
+            }
     }
 
     private static func uniqueResources(_ resources: [ResourceReference]) -> [ResourceReference] {
@@ -389,47 +548,6 @@ public enum ReconciliationPlanner {
 
     private static func resourceKey(_ resource: ResourceReference) -> ResourceKey {
         ResourceKey(rootID: resource.rootID, relativePath: resource.relativePath)
-    }
-
-    private static func preferredResource(
-        _ lhs: ResourceReference,
-        before rhs: ResourceReference,
-        rootsByID: [String: RootScanReport]
-    ) -> Bool {
-        let lhsRank = rootPreference(rootsByID[lhs.rootID])
-        let rhsRank = rootPreference(rootsByID[rhs.rootID])
-        if lhsRank != rhsRank { return lhsRank < rhsRank }
-        return resourceSort(lhs, rhs)
-    }
-
-    private static func preferredOccurrence(
-        _ lhs: LivePhotoOccurrenceReport,
-        before rhs: LivePhotoOccurrenceReport,
-        rootsByID: [String: RootScanReport]
-    ) -> Bool {
-        let lhsRank = rootPreference(rootsByID[lhs.rootID])
-        let rhsRank = rootPreference(rootsByID[rhs.rootID])
-        if lhsRank != rhsRank { return lhsRank < rhsRank }
-        return lhs.rootID < rhs.rootID
-    }
-
-    private static func rootPreference(_ root: RootScanReport?) -> Int {
-        guard let root else { return 100 }
-        if root.kind == .archive { return 0 }
-        switch root.provenance {
-        case .appleDirect:
-            return 1
-        case .localLibrary:
-            return 2
-        case .googleWeb:
-            return 3
-        case .unknown:
-            return 4
-        case .googleIOSShare:
-            return 5
-        case .googleTakeout:
-            return 6
-        }
     }
 
     private static func decisionRank(_ decision: ReconciliationDecision) -> Int {

@@ -231,6 +231,14 @@ classifier result는 deletion을 authorize하지 않는다.
 
 일반적인 occurrence 비교에서는 두 resource role이 모두 있어야 한다. identical still이 있어도 paired video가 missing/different하면 exact duplicate Live Photo occurrence가 아니다.
 
+### Canonical keeper와 intentional replica
+
+exact duplicate 발견과 실제 replica 제거는 분리한다. PhotoArchiveKit은 등록된 모든 storage root를 하나의 deduplicated pool로 축소하지 않는다. `archive`와 `reference` root는 backup/baseline 역할로 보고 automatic removal에서 보호한다. `local_library` primary root는 같은 root 안에서 겹치는 physical representation을 줄일 수 있지만 root 간 독립 replica 자체는 보존한다. `import_source`는 exact counterpart가 이미 보존되어 있거나 provider/source-folder semantics가 먼저 catalog에 보존된 경우 cleanup 후보가 될 수 있다.
+
+keeper tie-break는 semantic safety를 먼저 사용한다. Live Photo는 complete occurrence가 incomplete/ambiguous occurrence보다 우선하며 pair 전체를 선택한다. 같은 primary root의 standalone exact copy는 capture evidence confidence를 먼저 비교하고, 동률이면 더 얕은 relative path를 선호한 뒤 stable path/ID 순서로 deterministic하게 결정한다. filesystem creation fallback이 더 오래됐다는 이유만으로 embedded/provider metadata를 덮어쓰지는 않는다. keeper 결정은 byte mutation authority가 아니며 quarantine executor가 candidate와 keeper를 fresh full-file hash로 다시 확인해야 한다.
+
+향후 GUI의 duplicate inspector는 local-private surface로 구성한다. 한 exact group 아래 모든 physical location을 root/path와 함께 표시하고 protected replica, selected keeper, automatic candidate, review reason을 같은 화면에서 보여준다. agent-safe surface에는 이 path/filename을 보내지 않고 기존 opaque group/root ID와 count/status만 유지한다.
+
 예외적으로 canonical coverage가 성립하면 repeated Takeout occurrence의 내부 pairing ambiguity를 먼저 풀지 않아도 된다. non-Takeout complete pair가 보존되고, 제거하려는 Takeout asset의 모든 still/video resource가 역할별 exact copy로 완전히 cover될 때만 해당 Takeout set 전체를 automatic redundant candidate로 만들 수 있다.
 
 ### Preferred-representation reconciliation

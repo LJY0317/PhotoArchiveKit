@@ -134,7 +134,7 @@ Run a read-only scan of one folder:
 swift run photoarchive scan --inbox "~/Photo Inbox"
 ```
 
-Generate a read-only preferred-representation plan. This keeps non-Takeout exact copies preferred and applies Live Photo canonical coverage before placing unresolved cases into review:
+Generate a read-only preferred-representation plan. Exact duplicates use a canonical keeper policy: archive/reference roots are protected replicas, a primary local library keeps one preferred same-root representation, import-source copies may be reduced only when exact coverage is proven, and Live Photo occurrences remain atomic. Unresolved variants stay in review:
 
 ```bash
 swift run photoarchive plan \
@@ -370,6 +370,10 @@ For registered Google Takeout roots, the scanner reads only the sidecar `title` 
 Sidecar policy is consumer-oriented: users are not expected to open JSON/XMP files manually. Recognized sidecars are associated with their logical media asset automatically: Google Takeout JSON uses its verified `title` target, while unambiguous same-basename XMP/AAE files are linked locally. These sidecars do not block `organize --singleton-leaf-only` from moving the media asset, but the sidecar file itself is preserved in place rather than silently deleted. Unknown or ambiguous JSON remains unassociated and may block deletion of its source folder until it is explicitly reviewed or preserved.
 
 Exact-only Live Photo reconciliation also treats a whole incomplete occurrence (`still_only` or `video_only`) as automatically redundant when every resource in that occurrence has a byte-identical same-role counterpart outside Takeout. This does not require a complete Live Photo counterpart elsewhere and never removes only part of an occurrence; quarantine still re-hashes the candidate and keeper before moving anything.
+
+Canonical keeper selection does **not** collapse intentional backup replicas across every registered root into one global file. Archive and reference roots are protected from automatic removal. Within a primary local-library root, byte-identical standalone copies may keep the representation with better trusted capture evidence and then the shallower path; byte-identical duplicate Live Photo occurrences prefer a complete occurrence first and keep the entire selected still+paired-video representation. Import-source copies remain cleanup candidates only when a retained exact counterpart exists or source-folder semantics have already been preserved. Every automatic mutation is still re-verified by fresh full-file hashes before quarantine.
+
+A future local GUI should expose the private side of this decision directly: one duplicate group per row/section, with every physical copy's root and path, protected/keeper/candidate badges, and filters by location. This is deliberately a **local-only** view; agent-safe reports continue to expose opaque group/root IDs and counts without filenames or paths. The current human `scan` report already shows paths for the first duplicate groups and `--json` contains the complete local-private result, but a Krokiet-style grouped location view is the intended consumer UX.
 
 Library locations have an explicit root registry. `photoarchive root add`, `enable`, `disable`, `remove`, and `list` separate locations the user currently manages from roots merely observed by older scans. `root remove` never touches media: it prunes that root's current resource/hash/duplicate/source-folder evidence while retaining minimal root identity/marker history so a known removable archive can be recognized again. `root list --all` also shows removed and history-only roots.
 

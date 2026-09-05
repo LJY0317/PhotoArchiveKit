@@ -134,7 +134,7 @@ swift run photoarchive doctor
 swift run photoarchive scan --inbox "~/Photo Inbox"
 ```
 
-읽기 전용 preferred-representation plan을 생성할 수 있습니다. non-Takeout exact copy를 우선하고 Live Photo canonical coverage를 적용한 뒤 해결되지 않은 항목만 review로 남깁니다.
+읽기 전용 preferred-representation plan을 생성할 수 있습니다. exact duplicate에는 canonical keeper 정책을 적용합니다. archive/reference root는 보호되는 replica로 유지하고, primary local library에서는 같은 root 안의 대표 사본 하나를 고르며, import-source 사본은 exact coverage가 증명될 때만 줄입니다. Live Photo occurrence는 항상 atomic하게 유지하고 해결되지 않은 variant만 review로 남깁니다.
 
 ```bash
 swift run photoarchive plan \
@@ -370,6 +370,10 @@ Google Takeout root에서는 embedded media metadata로 신뢰할 수 있는 촬
 sidecar 정책은 일반 사용자 중심입니다. 사용자가 JSON/XMP를 직접 열어볼 필요 없이, Google Takeout JSON은 검증된 `title` target에, XMP/AAE는 같은 폴더에서 basename 관계가 모호하지 않은 media에 자동 연결합니다. recognized sidecar는 `organize --singleton-leaf-only`의 media 이동을 막지 않지만 sidecar 파일 자체는 몰래 삭제하지 않고 원래 위치에 보존합니다. 관계를 확인할 수 없는 JSON은 unrecognized 상태로 남아 source folder 삭제를 막을 수 있으므로 실제 삭제 직전에만 보존/정리 여부를 판단하면 됩니다.
 
 exact-only Live Photo reconciliation은 `still_only` 또는 `video_only`인 불완전 occurrence라도 그 occurrence의 모든 resource가 Takeout 밖에 같은 role의 byte-identical counterpart를 가지고 있으면 occurrence 전체를 `automatic_redundant`로 판단할 수 있습니다. 다른 곳에 complete Live Photo가 반드시 있어야 하는 것은 아니며 occurrence 일부만 제거하지 않습니다. quarantine apply 직전에는 candidate와 keeper를 다시 fresh SHA-256으로 검증합니다.
+
+canonical keeper 선택은 등록된 모든 root의 backup 사본을 전 세계적으로 하나만 남기도록 collapse하는 정책이 아닙니다. archive와 reference root는 자동 제거 대상에서 보호합니다. primary local-library root 안에서는 byte-identical standalone copy가 여러 개면 trusted capture evidence가 더 좋은 사본, 그 다음 더 얕은 path의 사본을 keeper로 선호할 수 있습니다. byte-identical Live Photo occurrence가 여러 개면 complete occurrence를 먼저 선호하고 선택된 still+paired-video 전체를 한 representation으로 유지합니다. import-source 사본은 보존되는 exact counterpart가 있거나 source-folder semantics가 이미 보존된 경우에만 cleanup 후보가 됩니다. 실제 quarantine 직전에는 여전히 candidate와 keeper의 full-file hash를 fresh 재검증합니다.
+
+향후 local GUI에서는 이 판단의 private 정보를 사람이 바로 볼 수 있어야 합니다. duplicate group 하나를 한 묶음으로 보여주고, 그 안의 모든 physical copy에 실제 root/path와 protected/keeper/candidate badge를 표시하며 location별 filter를 제공하는 방식이 적합합니다. 이 화면은 **로컬 전용**이고 agent-safe report에는 계속 opaque group/root ID와 count만 전달합니다. 현재 human `scan`도 앞부분 duplicate group의 path를 보여주고 `--json`에는 전체 local-private 결과가 있지만, 장기적으로는 Krokiet처럼 위치를 그룹 안에서 바로 비교하는 GUI가 소비자 UX에 더 적합합니다.
 
 라이브러리 위치에는 명시적인 root registry가 있습니다. `photoarchive root add`, `enable`, `disable`, `remove`, `list`로 현재 관리하는 위치와 과거 scan에서 한 번 관측된 history root를 구분합니다. `root remove`는 media를 절대 건드리지 않고 해당 root의 current resource/hash/duplicate/source-folder evidence만 catalog에서 정리하며, removable archive를 다시 알아볼 수 있도록 최소 root identity/marker history는 남깁니다. `root list --all`은 removed/history-only root도 보여줍니다.
 
