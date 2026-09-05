@@ -122,10 +122,9 @@ enum CanonicalKeeperPolicy {
                 rootsByID: rootsByID,
                 resourcesByKey: resourcesByKey
             ) {
-            case .protectedOrPreferredRoot, .cleanerFilename:
+            case .protectedOrPreferredRoot, .cleanerFilename, .recognizableFilename, .shallowerPath:
                 continue
-            case .recognizableFilename, .strongerCaptureEvidence, .shallowerPath,
-                    .deterministicTieBreak:
+            case .strongerCaptureEvidence, .deterministicTieBreak:
                 return .preference
             }
         }

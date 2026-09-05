@@ -1185,6 +1185,14 @@ struct PhotoArchiveSelfTest {
         try recognizableNameBytes.write(
             to: filenamePolicyRoot.appendingPathComponent("72FD56C3-50FF-4980-B882-549DA293DE44.JPG")
         )
+        let ambiguousNameBytes = Data("ambiguous-name-policy".utf8)
+        try ambiguousNameBytes.write(to: filenamePolicyRoot.appendingPathComponent("BPZM6194.JPG"))
+        try ambiguousNameBytes.write(to: filenamePolicyRoot.appendingPathComponent("LNEW5989.JPG"))
+        let shallowPathBytes = Data("shallow-path-policy".utf8)
+        let filenamePolicyNested = filenamePolicyRoot.appendingPathComponent("nested", isDirectory: true)
+        try fileManager.createDirectory(at: filenamePolicyNested, withIntermediateDirectories: true)
+        try shallowPathBytes.write(to: filenamePolicyRoot.appendingPathComponent("same-name.jpg"))
+        try shallowPathBytes.write(to: filenamePolicyNested.appendingPathComponent("same-name.jpg"))
         let explicitCopyMarkerBytes = Data("explicit-copy-marker-policy".utf8)
         try explicitCopyMarkerBytes.write(
             to: filenamePolicyRoot.appendingPathComponent("Photo on 4-16-25 at 4.32 PM 복사본.jpg")
@@ -1219,6 +1227,22 @@ struct PhotoArchiveSelfTest {
             recognizableNameItem.preferredResources.first?.relativePath == "IMG_5199.JPG",
             "a standard camera-style filename should weakly outrank an opaque UUID filename when bytes/root evidence tie"
         )
+        guard let ambiguousNameItem = filenamePolicyPlan.items.first(where: {
+            $0.preferredResources.contains { $0.relativePath == "BPZM6194.JPG" || $0.relativePath == "LNEW5989.JPG" }
+        }) else {
+            throw SelfTestFailure("ambiguous-name fixture did not produce an exact reconciliation item")
+        }
+        guard let shallowPathItem = filenamePolicyPlan.items.first(where: {
+            $0.preferredResources.contains { $0.relativePath == "same-name.jpg" }
+                || $0.candidateResources.contains { $0.relativePath == "nested/same-name.jpg" }
+        }) else {
+            throw SelfTestFailure("shallow-path fixture did not produce an exact reconciliation item")
+        }
+        try require(
+            shallowPathItem.preferredResources.first?.relativePath == "same-name.jpg"
+                && shallowPathItem.candidateResources.contains { $0.relativePath == "nested/same-name.jpg" },
+            "same-root exact copies with the same filename should prefer the shallower path"
+        )
         guard let explicitCopyMarkerItem = filenamePolicyPlan.items.first(where: {
             $0.preferredResources.contains { $0.relativePath == "Photo-on-4-16-25-at-4.32-PM.jpg" }
                 || $0.candidateResources.contains { $0.relativePath.contains("복사본") }
@@ -1239,7 +1263,7 @@ struct PhotoArchiveSelfTest {
         )
         try require(
             preferenceReview.itemCount == 1,
-            "preference-only review should hide strong copy-name decisions but keep the weak filename preference"
+            "preference-only review should hide confirmed filename/path rules and retain only the unresolved tie-break"
         )
         let preferenceGroup = try fileManager.contentsOfDirectory(
             at: preferenceReviewRoot,
@@ -1282,13 +1306,15 @@ struct PhotoArchiveSelfTest {
             targetURL: filenamePolicyQuarantineRoot
         )
         try require(
-            !filenamePolicyQuarantine.moves.contains { $0.itemID == recognizableNameItem.itemID },
-            "preference-sensitive keeper choices must not receive automatic quarantine authority"
+            !filenamePolicyQuarantine.moves.contains { $0.itemID == ambiguousNameItem.itemID },
+            "pure deterministic tie-break choices must not receive automatic quarantine authority"
         )
         try require(
             filenamePolicyQuarantine.moves.contains { $0.itemID == copyNameItem.itemID }
-                && filenamePolicyQuarantine.moves.contains { $0.itemID == explicitCopyMarkerItem.itemID },
-            "strong copy-name evidence should remain eligible for automatic quarantine preflight"
+                && filenamePolicyQuarantine.moves.contains { $0.itemID == explicitCopyMarkerItem.itemID }
+                && filenamePolicyQuarantine.moves.contains { $0.itemID == recognizableNameItem.itemID }
+                && filenamePolicyQuarantine.moves.contains { $0.itemID == shallowPathItem.itemID },
+            "confirmed copy-name, recognizable-name, and shallow-path rules should receive automatic quarantine preflight authority"
         )
 
         let localDuplicateLiveReport = syntheticLocalDuplicateLivePhotoReport()
