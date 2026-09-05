@@ -593,6 +593,23 @@ Mac / HDD / quarantine common hashes           0
 
 Session별 패턴도 분명했다. 첫 4,195-resource quarantine은 현재 Mac과 4,195/4,195가 exact match였고 HDD와는 0이었다. 두 번째 3,813-resource quarantine은 현재 HDD와 3,767 resource, Mac과 44 resource가 exact match였으며 2개 image resource만 현재 두 root 어느 쪽에도 exact counterpart가 없었다. Mac과 HDD 자체에는 exact overlap이 없으므로 세 집합 공통 exact hash도 0이다.
 
+## 2026-09-05 — Residual Takeout safe cleanup 재검증
+
+기존 quarantine 이후에도 nested Takeout root에 남아 있던 media를 현재 filesystem 기준으로 다시 비교했다. 단순 byte-only 집계에서는 121개 중 107개가 outer Mac library에 exact counterpart를 가지고 있었지만, 이 숫자를 곧바로 삭제 권한으로 사용하지 않고 PhotoArchiveKit의 current reconciliation/quarantine policy를 다시 적용했다.
+
+Dry-run 결과 실제 AUTO는 `2 item / 2 resource`뿐이었다. 나머지는 Live Photo/asset/provenance safety gate를 통과한 자동 제거 대상으로 승격되지 않았다. 이어 같은 root set으로 `quarantine --apply`를 실행해 AUTO 2 resource만 reversible quarantine으로 이동했다. apply report는 `filesModified=true`, manifest는 source 2개 부재와 destination 2개 존재를 확인했다.
+
+```text
+Takeout media before                         121
+raw exact counterpart outside Takeout        107
+current quarantine AUTO items                  2
+current quarantine AUTO resources              2
+Takeout media after                          119
+post-apply quarantine AUTO                     0
+```
+
+즉 raw SHA-256 overlap은 candidate evidence일 뿐 mutation authority가 아니며, 실제 자동 정리는 current logical-asset/Live-Photo policy를 통과한 resource에만 제한한다는 원칙을 real-library에서 다시 확인했다. permanent delete는 수행하지 않았다.
+
 ## 2026-09-05 — Foreground scan progress와 실제 HDD read-only 검증
 
 장시간 scan이 멈춘 것처럼 보이지 않도록 core에 structured `ScanProgress` event를 추가했다. CLI renderer는 progress를 stderr에만 쓰므로 `--json`/`--agent-json` stdout을 오염시키지 않는다. recursive enumeration 중에는 final total을 아직 모르므로 discovered count만 표시하고, enumeration이 끝난 뒤 metadata/hash 단계는 `completed/total`과 percentage로 전환한다. TTY에서는 한 줄을 redraw하고 non-TTY에서는 stage 변경, 5% bucket, 최대 시간 간격 기준으로만 line을 출력해 log spam을 제한한다. `--no-progress`는 renderer만 비활성화한다.
