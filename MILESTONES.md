@@ -566,6 +566,33 @@ inventory file exists                                                true
 
 `swift build`, `photoarchive-selftest`, public-tree privacy check, `git diff --check`를 통과했다. 이 milestone에서는 **사용자의 실제 외장 HDD media를 copy/move/delete하지 않았다.** 다음 real-library 검증은 사용자가 지정하는 실제 HDD 사진 최상위 root를 read-only `archive-index`로 먼저 측정하고, 첫 full pass와 즉시 incremental repeat의 wall-clock/cache-hit 차이를 비교하는 것이다. inventory write는 별도 explicit `--apply`로 유지한다.
 
+## 2026-09-05 — Mac / user-managed HDD / quarantined Takeout 3-way exact comparison
+
+현재 Mac local root, 사용자가 직접 관리하는 HDD archive root, 두 completed quarantine session에 보존된 Takeout resource를 3개 집합으로 두고 byte-exact overlap을 비교했다. HDD 쪽 sibling archive는 포함하지 않았고 지정된 archive root 하나만 사용했다. comparison scan은 media-read-only였으며 기존 exact hash 10,792개를 local SQLite cache에서 재사용했다.
+
+Sanitized result:
+
+```text
+current Mac media                         5,445
+current HDD archive media                 4,195
+quarantined Takeout resources             8,008
+
+Mac <-> HDD exact resources                   0
+Mac <-> HDD unique exact hashes               0
+
+current Mac resources with Takeout match  3,900  (71.63%)
+current HDD resources with Takeout match  3,772  (89.92%)
+
+quarantine occurrences matching Mac       4,239
+quarantine occurrences matching HDD       3,767
+quarantine occurrences matching neither       2
+Mac / HDD / quarantine common hashes           0
+```
+
+두 legacy quarantine manifest를 `restore-quarantine --agent-json` dry-run으로 다시 읽어 현재 quarantined byte를 catalog exact SHA-256 evidence와 fresh 비교했다. 첫 session 4,195 resource와 둘째 session 3,813 resource가 모두 검증을 통과했고 두 실행 모두 `filesModified=false`였다. 따라서 위 3-way result는 과거 catalog 기억만이 아니라 현재 quarantine filesystem byte와도 일치한다.
+
+Session별 패턴도 분명했다. 첫 4,195-resource quarantine은 현재 Mac과 4,195/4,195가 exact match였고 HDD와는 0이었다. 두 번째 3,813-resource quarantine은 현재 HDD와 3,767 resource, Mac과 44 resource가 exact match였으며 2개 image resource만 현재 두 root 어느 쪽에도 exact counterpart가 없었다. Mac과 HDD 자체에는 exact overlap이 없으므로 세 집합 공통 exact hash도 0이다.
+
 ## 2026-09-05 — Foreground scan progress와 실제 HDD read-only 검증
 
 장시간 scan이 멈춘 것처럼 보이지 않도록 core에 structured `ScanProgress` event를 추가했다. CLI renderer는 progress를 stderr에만 쓰므로 `--json`/`--agent-json` stdout을 오염시키지 않는다. recursive enumeration 중에는 final total을 아직 모르므로 discovered count만 표시하고, enumeration이 끝난 뒤 metadata/hash 단계는 `completed/total`과 percentage로 전환한다. TTY에서는 한 줄을 redraw하고 non-TTY에서는 stage 변경, 5% bucket, 최대 시간 간격 기준으로만 line을 출력해 log spam을 제한한다. `--no-progress`는 renderer만 비활성화한다.
