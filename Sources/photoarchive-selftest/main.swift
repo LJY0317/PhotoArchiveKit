@@ -92,6 +92,121 @@ struct PhotoArchiveSelfTest {
             first.exactDuplicateGroups.first?.groupID == second.exactDuplicateGroups.first?.groupID,
             "opaque duplicate group ID should remain stable across scans"
         )
+        try require(
+            second.summary.reusedExactHashCount == 2,
+            "unchanged exact-duplicate resources should reuse the local SQLite hash cache"
+        )
+
+        let userArchiveRoot = temporary.appendingPathComponent("UserArchive", isDirectory: true)
+        let tripFolder = userArchiveRoot
+            .appendingPathComponent("Trips", isDirectory: true)
+            .appendingPathComponent("Japan", isDirectory: true)
+        let familyFolder = userArchiveRoot.appendingPathComponent("Family", isDirectory: true)
+        try fileManager.createDirectory(at: tripFolder, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: familyFolder, withIntermediateDirectories: true)
+        _ = try RootMarkerStore.create(at: userArchiveRoot)
+        let tripPhoto = tripFolder.appendingPathComponent("trip.jpg")
+        let familyPhoto = familyFolder.appendingPathComponent("family.jpg")
+        try Data("synthetic-user-archive-trip".utf8).write(to: tripPhoto)
+        try Data("synthetic-user-archive-family".utf8).write(to: familyPhoto)
+
+        let archiveCatalog = temporary.appendingPathComponent("archive-catalog.sqlite3")
+        let archiveIndex = try await ArchiveRootIndexer.run(
+            rootURL: userArchiveRoot,
+            catalogURL: archiveCatalog,
+            writeSnapshot: true,
+            maxConcurrentProbes: 1
+        )
+        try require(archiveIndex.resourceCount == 2, "archive index should include both media resources")
+        try require(archiveIndex.folderCount == 3, "archive index should preserve the nested user folder hierarchy")
+        try require(archiveIndex.exactHashResourceCount == 2, "archive index should hash every media resource")
+        try require(archiveIndex.snapshotWritten, "archive index apply should write a portable inventory")
+        try require(!archiveIndex.mediaFilesModified, "archive inventory write must not report media mutation")
+        try require(
+            fileManager.fileExists(atPath: archiveIndex.inventoryPath),
+            "portable archive inventory file should exist"
+        )
+        try require(
+            try sqliteInt(
+                databaseURL: archiveCatalog,
+                sql: "SELECT COUNT(*) FROM collections WHERE collection_type = 'user_archive_folder'"
+            ) == 3,
+            "archive folder hierarchy should be persisted as user-authored collections"
+        )
+        try require(
+            try sqliteInt(
+                databaseURL: archiveCatalog,
+                sql: "SELECT COUNT(*) FROM memberships WHERE membership_origin = 'user_archive_folder'"
+            ) == 2,
+            "archive media assets should retain their leaf-folder memberships"
+        )
+
+        let inventoryURL = URL(fileURLWithPath: archiveIndex.inventoryPath)
+        let inventoryBefore = try Data(contentsOf: inventoryURL)
+        let freshComputerCatalog = temporary.appendingPathComponent("fresh-computer-catalog.sqlite3")
+        let freshComputerIndex = try await ArchiveRootIndexer.run(
+            rootURL: userArchiveRoot,
+            catalogURL: freshComputerCatalog,
+            writeSnapshot: false,
+            maxConcurrentProbes: 1
+        )
+        try require(
+            freshComputerIndex.reusedExactHashCount == 2,
+            "a fresh local catalog should reuse exact hashes from the portable archive inventory"
+        )
+        try require(!freshComputerIndex.mediaFilesModified, "archive index must remain media-read-only")
+        try require(
+            try Data(contentsOf: inventoryURL) == inventoryBefore,
+            "archive-index without --apply must not rewrite the portable inventory"
+        )
+        let archiveIndexAgentJSON = String(
+            decoding: try JSONEncoder().encode(AgentSafeArchiveRootInventoryReport(report: freshComputerIndex)),
+            as: UTF8.self
+        )
+        try require(!archiveIndexAgentJSON.contains(userArchiveRoot.path), "agent-safe archive index report exposed a root path")
+        try require(!archiveIndexAgentJSON.contains("trip.jpg"), "agent-safe archive index report exposed a filename")
+        let freshIntegrityIndex = try await ArchiveRootIndexer.run(
+            rootURL: userArchiveRoot,
+            catalogURL: freshComputerCatalog,
+            writeSnapshot: false,
+            reuseHashCache: false,
+            maxConcurrentProbes: 1
+        )
+        try require(
+            freshIntegrityIndex.reusedExactHashCount == 0,
+            "archive-index fresh mode should bypass both local and portable hash caches"
+        )
+
+        let movedTripPhoto = familyFolder.appendingPathComponent("trip.jpg")
+        try fileManager.moveItem(at: tripPhoto, to: movedTripPhoto)
+        let postMoveIndex = try await ArchiveRootIndexer.run(
+            rootURL: userArchiveRoot,
+            catalogURL: archiveCatalog,
+            writeSnapshot: false,
+            maxConcurrentProbes: 1
+        )
+        try require(
+            postMoveIndex.reusedExactHashCount == 2,
+            "same-volume manual moves should reuse cached hashes through filesystem identity"
+        )
+        try require(
+            postMoveIndex.folderCount == 1,
+            "archive index should reflect the current user-managed folder structure after a manual move"
+        )
+        try require(
+            try sqliteInt(
+                databaseURL: archiveCatalog,
+                sql: "SELECT COUNT(*) FROM collections WHERE collection_type = 'user_archive_folder'"
+            ) == 1,
+            "stale user-archive folder collections should be pruned after a manual move"
+        )
+        try require(
+            try sqliteText(
+                databaseURL: archiveCatalog,
+                sql: "SELECT name FROM collections WHERE collection_type = 'user_archive_folder' LIMIT 1"
+            ) == "Family",
+            "the remaining user-archive collection should match the current folder"
+        )
 
         if executableExists("czkawka_cli") {
             let czkawkaReport = try await scanner.scan(

@@ -73,6 +73,19 @@ public final class ArchiveScanner {
             )
             TakeoutSidecarImporter.applyCaptureTimes(to: &resources)
 
+            let reusedExactHashCount: Int
+            if options.reuseExactHashCache {
+                let localHashCacheHits = try catalog.reuseCachedExactHashes(resources: &resources)
+                let portableHashReuse = reusePortableArchiveHashes(
+                    resources: &resources,
+                    roots: roots
+                )
+                warnings.append(contentsOf: portableHashReuse.warnings)
+                reusedExactHashCount = localHashCacheHits + portableHashReuse.count
+            } else {
+                reusedExactHashCount = 0
+            }
+
             let privacyKey = try catalog.liveIdentifierPrivacyKey()
             for index in resources.indices {
                 if let identifier = resources[index].rawLivePhotoIdentifier {
@@ -109,8 +122,9 @@ public final class ArchiveScanner {
             try catalog.withTransaction {
                 try catalog.persistResources(sessionID: sessionID, resources: &resources)
                 _ = try catalog.persistAssets(sessionID: sessionID, resources: &resources)
-                let sourceFolderSemanticsCapturedRootIDs = try catalog.persistTakeoutSourceCollections(
-                    resources: resources
+                let sourceFolderSemanticsCapturedRootIDs = try catalog.persistSourceFolderCollections(
+                    resources: resources,
+                    roots: roots
                 )
 
                 let internalDuplicateGroups = duplicateGroups(from: resources)
@@ -142,7 +156,8 @@ public final class ArchiveScanner {
                     livePhotoAssetCount: reportParts.livePhotos.count,
                     exactDuplicateGroupCount: reportParts.duplicates.count,
                     eventSuggestionCount: reportParts.events.count,
-                    warningCount: reportParts.warnings.count
+                    warningCount: reportParts.warnings.count,
+                    reusedExactHashCount: reusedExactHashCount
                 )
                 try catalog.finishScan(
                     sessionID: sessionID,
@@ -312,6 +327,53 @@ public final class ArchiveScanner {
         }
     }
 
+    private func reusePortableArchiveHashes(
+        resources: inout [ProbedResource],
+        roots: [RootDescriptor]
+    ) -> (count: Int, warnings: [ScanWarning]) {
+        var reused = 0
+        var warnings: [ScanWarning] = []
+
+        for root in roots where root.kind == .archive {
+            guard let markerKey = root.markerKey else { continue }
+            let cache: [String: PortableHashEvidence]
+            do {
+                cache = try ArchiveRootInventoryStore.portableHashCache(
+                    rootURL: root.url,
+                    markerKey: markerKey
+                )
+            } catch {
+                warnings.append(ScanWarning(
+                    code: "archive_inventory_cache_invalid",
+                    message: "The portable archive inventory could not be used as a hash cache; files will be verified normally.",
+                    rootID: root.id
+                ))
+                continue
+            }
+
+            guard !cache.isEmpty else { continue }
+            for index in resources.indices where resources[index].root.id == root.id {
+                guard resources[index].mediaKind != .sidecar,
+                      resources[index].exactHash == nil,
+                      let evidence = cache[resources[index].relativePath],
+                      evidence.byteSize == resources[index].byteSize,
+                      modificationTimesMatch(evidence.modifiedAt, resources[index].modifiedAt)
+                else {
+                    continue
+                }
+                resources[index].exactHash = evidence.exactHash
+                reused += 1
+            }
+        }
+
+        return (reused, warnings)
+    }
+
+    private func modificationTimesMatch(_ lhs: Date?, _ rhs: Date?) -> Bool {
+        guard let lhs, let rhs else { return false }
+        return abs(lhs.timeIntervalSince1970 - rhs.timeIntervalSince1970) < 0.001
+    }
+
     private struct HashResult: Sendable {
         let index: Int
         let hash: Data?
@@ -353,11 +415,13 @@ public final class ArchiveScanner {
         maxConcurrency: Int
     ) async -> [ScanWarning] {
         let candidateIndices = Dictionary(grouping: resources.indices.filter {
-            resources[$0].mediaKind != .sidecar && resources[$0].byteSize > 0
+            resources[$0].mediaKind != .sidecar
+                && resources[$0].byteSize > 0
         }) { resources[$0].byteSize }
         .values
         .filter { $0.count > 1 }
         .flatMap { $0 }
+        .filter { resources[$0].exactHash == nil }
 
         return await hashCandidateIndices(
             candidateIndices,
@@ -400,7 +464,7 @@ public final class ArchiveScanner {
         }
 
         return await hashCandidateIndices(
-            candidateIndices.sorted(),
+            candidateIndices.filter { resources[$0].exactHash == nil }.sorted(),
             resources: &resources,
             maxConcurrency: maxConcurrency
         )

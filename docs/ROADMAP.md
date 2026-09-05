@@ -21,7 +21,7 @@ Roadmap은 작고 검증 가능한 layer를 우선한다. 어느 phase도 existi
 - [x] automatic-first event organization policy 및 prior-art boundary
 - [x] Live Photo `still-image-time` timed metadata strict validation
 - [x] versioned sanitized JSONL catalog export/restore test
-- [ ] stable file fact를 이용한 incremental scan optimization
+- [x] stable root/path + byte size + mtime(+ available filesystem ID)를 이용한 incremental exact-hash cache; removable archive는 root-scoped portable inventory로 새 host의 hash cache도 seed하고 `--fresh`로 전체 재검증 가능
 - [x] 한 root 안에서 반복되는 same-identifier resource를 directory/basename hint로 distinct Live Photo occurrence로 보수적으로 partition
 - [ ] duplicate-hashing mode와 무관하게 standalone logical asset identity 안정화
 - [ ] CI에 적합한 synthetic public Live Photo fixture
@@ -37,7 +37,7 @@ Roadmap은 작고 검증 가능한 layer를 우선한다. 어느 phase도 existi
 - [x] 최초 filename과 resource location history를 catalog에 영구 보존하고 기존 provenance/representation 관계와 함께 추적
 - [x] same-volume filesystem resource identity + `.photoarchive-root` marker를 이용해 rename/move 및 root relocation이 단순 path 누적으로 변하지 않게 함
 - [x] canonical iPhone-camera candidate를 local root 최상위로 옮기는 deterministic move/apply와, completed organization source history에만 제한된 verified `cleanup-empty-dirs` dry-run/apply
-- [ ] existing archive folder를 collection example로 import
+- [x] existing user-managed archive root의 current folder hierarchy를 `user_archive_folder` collection/membership으로 import하고 manual Finder move 뒤 stale hierarchy를 prune
 - [ ] event-level collection proposal
 - [ ] confidence band 및 policy preset
 - [x] source/destination marker binding, fresh exact-byte precondition, deterministic destination을 가진 immutable HDD archive plan format

@@ -25,6 +25,7 @@ agent는 opaque root/logical asset/group/plan ID, provenance category, resource 
 photoarchive scan --agent-json --inbox "/path/to/inbox"
 photoarchive plan --agent-json --local "/path/to/local" --takeout "/path/to/takeout"
 photoarchive organize-plan --agent-json --local "/path/to/local"
+photoarchive archive-index --agent-json "/path/to/user-managed/archive"
 photoarchive archive-plan --agent-json --to "/path/to/archive" --output "/local/private/archive-plan.json" --local "/path/to/local"
 photoarchive archive-copy --agent-json "/local/private/archive-plan.json"
 photoarchive organize --agent-json --local "/path/to/local"
@@ -35,7 +36,7 @@ photoarchive catalog export --agent-json --output "/local/private/catalog.jsonl"
 photoarchive catalog restore --agent-json --to "/local/private/restored.sqlite3" "/local/private/catalog.jsonl"
 ```
 
-`plan`은 exact/provenance evidence를 opaque reconciliation item으로 만들고, `organize-plan`은 camera-style filename의 rename/flat-move를 opaque organization item으로 만든다. `archive-plan`은 media를 수정하지 않지만 catalog path, source/destination marker binding, relative path, byte size, expected SHA-256을 담은 local-private immutable plan schema v2를 작성하고 agent-safe output에는 opaque plan/item/asset ID, reason code, count만 반환한다. `archive-copy`도 기본 dry-run이며 current catalog/source/destination evidence를 재검증한 결과의 count/status만 agent에 보여 준다. apply 뒤 local manifest/snapshot/archived-plan path와 hash는 agent-safe report에서 제거된다. `organize`, `quarantine`, `restore-quarantine`, `cleanup-empty-dirs`, `catalog restore` 역시 기본 dry-run이며 agent-safe output에는 item/resource/directory/record count와 outcome만 반환한다. 실제 media/filesystem mutation gate는 사람이 local CLI에서 명시적으로 붙이는 `--apply`이고, organization/archive path는 stable root marker를 요구한다. `catalog export`, `archive-plan`, archive-copy manifest/snapshot의 persisted artifact 본문은 agent-safe surface가 아니므로 agent가 읽지 않는다. 장기적으로 real-library archive apply에는 short-lived approval token을 추가할 수 있다.
+`plan`은 exact/provenance evidence를 opaque reconciliation item으로 만들고, `organize-plan`은 camera-style filename의 rename/flat-move를 opaque organization item으로 만든다. `archive-index`는 user-managed archive의 current folder hierarchy와 exact-hash cache를 local에서 갱신하고 agent에는 root ID, resource/folder count, cache-hit count, inventory-written boolean만 준다. persisted `.photoarchive/inventory-v1.jsonl`에는 relative path와 raw SHA-256 등이 있으므로 agent가 읽지 않는다. `archive-plan`은 media를 수정하지 않지만 catalog path, source/destination marker binding, relative path, byte size, expected SHA-256을 담은 local-private immutable plan schema v2를 작성하고 agent-safe output에는 opaque plan/item/asset ID, reason code, count만 반환한다. `archive-copy`도 기본 dry-run이며 current catalog/source/destination evidence를 재검증한 결과의 count/status만 agent에 보여 준다. apply 뒤 local manifest/snapshot/archived-plan path와 hash는 agent-safe report에서 제거된다. `organize`, `quarantine`, `restore-quarantine`, `cleanup-empty-dirs`, `catalog restore` 역시 기본 dry-run이며 agent-safe output에는 item/resource/directory/record count와 outcome만 반환한다. 실제 media/filesystem mutation gate는 사람이 local CLI에서 명시적으로 붙이는 `--apply`이고, organization/archive path는 stable root marker를 요구한다. `catalog export`, `archive-index` inventory, `archive-plan`, archive-copy manifest/snapshot의 persisted artifact 본문은 agent-safe surface가 아니므로 agent가 읽지 않는다. 장기적으로 real-library archive apply에는 short-lived approval token을 추가할 수 있다.
 
 agent-safe JSON report에는 다음이 포함된다.
 
@@ -47,6 +48,7 @@ agent-safe JSON report에는 다음이 포함된다.
 - opaque exact duplicate group
 - opaque event/asset relation
 - warning code
+- exact-hash cache hit count처럼 개인 file detail이 없는 performance count
 
 다음은 제외된다.
 

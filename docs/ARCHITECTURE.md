@@ -44,7 +44,9 @@ SQLite는 folder만으로 안전하게 표현하기 어려운 다음 상태를 �
 - provider object/album mapping
 - scan/archive session
 
-SQLite가 working database다. versioned JSONL export는 portable interchange 및 disaster-recovery representation으로 사용한다. 현재 `catalog export` snapshot은 absolute root path, raw exact hash, keyed Live Photo fingerprint, filesystem identifier, capture timestamp, provider object ID, generated scan/event cache를 제외하고 root provenance/marker binding, opaque resource·asset relationship, current/history relative path, original filename, collection hierarchy/membership을 보존한다. 따라서 raw/cache 값을 제거한 **portable sanitized snapshot**이지만 relative path·filename·collection label을 포함하는 local-private 파일이며 agent-safe/share-safe report는 아니다.
+SQLite가 authoritative working database다. 기본 위치는 Mac의 Application Support이고, removable HDD의 live SQLite를 기본 source of truth로 삼지 않는다. versioned JSONL `catalog export`는 portable interchange 및 disaster-recovery representation으로 사용한다. 현재 snapshot은 absolute root path, raw exact hash, keyed Live Photo fingerprint, filesystem identifier, capture timestamp, provider object ID, generated scan/event cache를 제외하고 root provenance/marker binding, opaque resource·asset relationship, current/history relative path, original filename, collection hierarchy/membership을 보존한다. 따라서 raw/cache 값을 제거한 **portable sanitized snapshot**이지만 relative path·filename·collection label을 포함하는 local-private 파일이며 agent-safe/share-safe report는 아니다.
+
+사용자가 이미 수동으로 관리하는 removable archive에는 별도의 root-scoped `.photoarchive/inventory-v1.jsonl`을 둘 수 있다. 이 파일은 전체 semantic catalog의 복제본이 아니라 **그 archive root 자체의 portable structure/hash cache**다. stable marker, relative path, current folder hierarchy, opaque asset/resource role, byte size, modification time, SHA-256 evidence를 담으므로 `catalog export`보다 민감하고 agent-safe가 아니다. 새 컴퓨터의 local SQLite가 비어 있어도 marker + path + size + mtime이 맞는 resource는 이 inventory hash를 재사용할 수 있다. mutation authority는 inventory/cache가 아니라 실행 직전 fresh byte verification이 가진다.
 
 `catalog restore`는 snapshot을 기존 SQLite 위에 merge하지 않고 새 catalog에만 복원한다. 기본은 dry-run이고 `--apply`에서만 새 DB를 만든다. stable root marker가 있는 root는 marker key -> root ID binding을 복원하고, marker가 없는 root는 restore 시 `ROOT_ID=PATH` binding으로 현재 local path에 연결할 수 있다. restored resource/asset은 raw hash나 Live Photo fingerprint를 snapshot에서 되살리지 않고 placeholder semantic key로 seed하며, 다음 정상 scan이 파일에서 fresh hash/linkage evidence를 다시 계산했을 때 같은 restored resource set이면 원래 opaque asset ID를 재사용한다.
 
@@ -123,6 +125,8 @@ data model은 simple UI가 default Inbox 하나로 시작하더라도 여러 roo
 의도한 model에서는 path를 identity가 아니라 configuration으로 취급한다. opaque root ID가 relative path를 소유하고 configured Inbox 또는 mount location은 바뀔 수 있다.
 
 현재 scanner는 path match를 유지하면서 optional `.photoarchive-root` marker key를 catalog root ID에 bind한다. marker가 있는 root directory가 다른 path로 이동하면 marker key로 기존 root ID를 찾아 canonical path만 갱신한다. marker가 없는 기존 root는 여전히 path 기반이므로 relocation 전에 `photoarchive root init --apply PATH`가 필요하다. unavailable root를 mass deletion으로 해석해서는 안 된다.
+
+`archive` root는 canonical bytes가 반드시 PhotoArchiveKit이 만든 folder layout에 있어야 한다는 뜻이 아니다. `photoarchive archive-index PATH`는 사용자가 직접 만든 nested folder tree를 그대로 읽고, supported media가 있는 directory와 parent hierarchy를 `user_archive_folder` collection으로 기록한다. Finder에서 수동 move가 발생한 뒤 재index하면 current hierarchy를 다시 계산하고 stale user-archive membership/collection을 제거한다. empty directory처럼 indexed media와 관계없는 structure는 semantic collection으로 만들지 않는다.
 
 ## Session model
 
@@ -207,9 +211,9 @@ classifier result는 deletion을 authorize하지 않는다.
 
 ### Exact resource duplicate
 
-기본 `automatic`/`native` path는 candidate file을 먼저 size로 group한 뒤 matching size group에 대해 full-file SHA-256을 계산한다. 이 신호는 perceptual similarity가 아니라 exact file-content identity다. agent-safe report에는 digest 대신 `D000017` 같은 opaque ID만 노출한다.
+기본 `automatic`/`native` path는 candidate file을 먼저 size로 group한 뒤 matching size group에 대해 full-file SHA-256을 계산한다. unchanged resource는 root/path + byte size + modification time이 같고, local filesystem identifier가 양쪽에 존재할 경우 그 identifier도 같은 때 local SQLite의 기존 SHA-256을 재사용한다. archive root는 동일한 marker가 확인된 portable inventory의 path/size/mtime hash cache도 local cache miss 뒤 사용할 수 있다. 이 cache는 performance accelerator일 뿐 destructive authority가 아니며 `archive-index --fresh`는 local/portable cache를 모두 우회해 모든 media byte를 다시 읽는다. agent-safe report에는 digest 대신 `D000017` 같은 opaque ID와 cache-hit count만 노출한다.
 
-선택적 `czkawka` exact engine은 Czkawka의 size -> prehash -> cached full-hash pipeline으로 candidate group을 먼저 찾고, PhotoArchiveKit이 그 candidate file만 native SHA-256으로 다시 읽어 catalog equality를 검증한다. raw Czkawka hash/cache는 agent에 노출하지 않는다. real-library benchmark에서는 이 이중 검증 경로가 native-only보다 빨라지지 않았으므로 `automatic`은 현재 native를 유지하고 Czkawka exact는 독립 cross-check 용도로 둔다. 향후 duplicate work를 피하는 integration 또는 native incremental hash cache가 구현되면 benchmark 후 default를 재검토한다.
+선택적 `czkawka` exact engine은 Czkawka의 size -> prehash -> cached full-hash pipeline으로 candidate group을 먼저 찾고, PhotoArchiveKit이 cache miss인 candidate file을 native SHA-256으로 검증한다. raw Czkawka hash/cache는 agent에 노출하지 않는다. real-library benchmark에서는 이전의 이중 검증 경로가 native-only보다 빨라지지 않았고 native incremental hash cache도 이제 구현되어 있으므로 `automatic`은 현재 native를 유지하고 Czkawka exact는 독립 cross-check 용도로 둔다.
 
 ### Exact logical Live Photo duplicate
 
@@ -255,6 +259,10 @@ stable root marker 기능은 구현됐지만 existing root에는 자동으로 ma
 ### Takeout source-folder semantics before physical collapse
 
 Takeout-only standalone exact duplicates may represent the same bytes repeated in year folders and album-like folders. Before reducing those copies to one physical representation, PhotoArchiveKit records the source-folder hierarchy as local `collections` and the logical asset's membership in each observed folder. Folder names and paths stay inside the local catalog and are not included in agent-safe output. Once every involved Takeout root reports `sourceFolderSemanticsCaptured`, the planner may keep one exact physical copy and quarantine only the excess copies; this does not claim every Takeout folder is a confirmed Google album, only that the original source organization has been preserved losslessly enough for later interpretation.
+
+### User-managed archive folder semantics
+
+기존 HDD의 사용자 분류 tree는 Takeout의 source-history와 다르게 **현재 사용자가 의도한 archive organization**으로 취급한다. `archive-index`는 media를 재배치하지 않고 현재 leaf folder membership을 catalog에 반영하며 parent hierarchy를 collection으로 보존한다. manual move 뒤 old membership은 history처럼 누적하지 않고 current structure에 맞게 prune한다. 이 root의 portable inventory는 다른 host가 local SQLite 없이도 current structure와 exact-hash cache를 빠르게 재구성하는 보조 state다.
 
 ### Similar/derived copy
 

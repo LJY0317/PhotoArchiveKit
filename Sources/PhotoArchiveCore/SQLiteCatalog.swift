@@ -48,6 +48,18 @@ struct ArchiveCopyCatalogEvidence {
     let exactHash: Data
 }
 
+struct CachedExactHashEvidence {
+    let byteSize: Int64
+    let modifiedAt: Date?
+    let fileSystemIdentifier: String?
+    let exactHash: Data
+}
+
+private struct CachedExactHashIndex {
+    var byRelativePath: [String: CachedExactHashEvidence] = [:]
+    var byFileSystemIdentifier: [String: CachedExactHashEvidence] = [:]
+}
+
 final class SQLiteCatalog {
     let url: URL
     private var database: OpaquePointer?
@@ -451,18 +463,56 @@ final class SQLiteCatalog {
         return liveAssetIDs
     }
 
-    func persistTakeoutSourceCollections(resources: [ProbedResource]) throws -> Set<String> {
-        var capturedRootIDs = Set<String>()
+    func persistSourceFolderCollections(
+        resources: [ProbedResource],
+        roots: [RootDescriptor]
+    ) throws -> Set<String> {
+        let capturedRootIDs = Set(roots.compactMap { root -> String? in
+            if root.provenance == .googleTakeout || root.kind == .archive {
+                return root.id
+            }
+            return nil
+        })
+        let archiveRootIDs = Set(roots.filter { $0.kind == .archive }.map(\.id))
+        var currentArchiveSourceKeys = Dictionary(
+            uniqueKeysWithValues: archiveRootIDs.map { ($0, Set<String>()) }
+        )
+
+        for rootID in archiveRootIDs {
+            try run(
+                """
+                DELETE FROM memberships
+                WHERE membership_origin = 'user_archive_folder'
+                  AND collection_id IN (
+                    SELECT sck.collection_id
+                    FROM source_collection_keys sck
+                    JOIN collections c ON c.id = sck.collection_id
+                    WHERE sck.source_key LIKE ? AND c.collection_type = 'user_archive_folder'
+                  )
+                """,
+                bindings: [.text(rootID + ":%")]
+            )
+        }
 
         for resource in resources {
-            guard resource.root.provenance == .googleTakeout,
-                  resource.mediaKind == .image || resource.mediaKind == .video,
+            let collectionType: String
+            let membershipOrigin: String
+            if resource.root.provenance == .googleTakeout {
+                collectionType = "google_takeout_source_folder"
+                membershipOrigin = "google_takeout_source_folder"
+            } else if resource.root.kind == .archive {
+                collectionType = "user_archive_folder"
+                membershipOrigin = "user_archive_folder"
+            } else {
+                continue
+            }
+
+            guard resource.mediaKind == .image || resource.mediaKind == .video,
                   let assetID = resource.persistentAssetID
             else {
                 continue
             }
 
-            capturedRootIDs.insert(resource.root.id)
             let directory = (resource.relativePath as NSString).deletingLastPathComponent
             guard !directory.isEmpty else { continue }
 
@@ -473,6 +523,9 @@ final class SQLiteCatalog {
                     ? component
                     : relativeDirectory + "/" + component
                 let sourceKey = resource.root.id + ":" + relativeDirectory
+                if resource.root.kind == .archive {
+                    currentArchiveSourceKeys[resource.root.id, default: []].insert(sourceKey)
+                }
 
                 let collectionID: String
                 if let existing = try queryText(
@@ -485,12 +538,13 @@ final class SQLiteCatalog {
                     try run(
                         """
                         INSERT INTO collections (id, name, parent_id, collection_type, created_at)
-                        VALUES (?, ?, ?, 'google_takeout_source_folder', ?)
+                        VALUES (?, ?, ?, ?, ?)
                         """,
                         bindings: [
                             .text(collectionID),
                             .text(component),
                             parentCollectionID.map(SQLiteBinding.text) ?? .null,
+                            .text(collectionType),
                             .double(Date().timeIntervalSince1970)
                         ]
                     )
@@ -507,16 +561,170 @@ final class SQLiteCatalog {
                 try run(
                     """
                     INSERT INTO memberships (asset_id, collection_id, membership_origin)
-                    VALUES (?, ?, 'google_takeout_source_folder')
+                    VALUES (?, ?, ?)
                     ON CONFLICT(asset_id, collection_id) DO UPDATE SET
                         membership_origin = excluded.membership_origin
                     """,
-                    bindings: [.text(assetID), .text(collectionID)]
+                    bindings: [.text(assetID), .text(collectionID), .text(membershipOrigin)]
                 )
             }
         }
 
+        for rootID in archiveRootIDs {
+            try pruneStaleUserArchiveCollections(
+                rootID: rootID,
+                currentSourceKeys: currentArchiveSourceKeys[rootID] ?? []
+            )
+        }
+
         return capturedRootIDs
+    }
+
+    private func pruneStaleUserArchiveCollections(
+        rootID: String,
+        currentSourceKeys: Set<String>
+    ) throws {
+        let existing: [(sourceKey: String, collectionID: String)] = try withStatement(
+            """
+            SELECT sck.source_key, sck.collection_id
+            FROM source_collection_keys sck
+            JOIN collections c ON c.id = sck.collection_id
+            WHERE sck.source_key LIKE ? AND c.collection_type = 'user_archive_folder'
+            """,
+            bindings: [.text(rootID + ":%")]
+        ) { statement in
+            var rows: [(String, String)] = []
+            while true {
+                let result = sqlite3_step(statement)
+                if result == SQLITE_DONE { break }
+                guard result == SQLITE_ROW,
+                      let sourceText = sqlite3_column_text(statement, 0),
+                      let collectionText = sqlite3_column_text(statement, 1)
+                else {
+                    throw sqliteError(sql: "SELECT user archive source collections")
+                }
+                rows.append((String(cString: sourceText), String(cString: collectionText)))
+            }
+            return rows
+        }
+
+        let stale = existing
+            .filter { !currentSourceKeys.contains($0.sourceKey) }
+            .sorted {
+                $0.sourceKey.split(separator: "/").count
+                    > $1.sourceKey.split(separator: "/").count
+            }
+        for row in stale {
+            try run(
+                "DELETE FROM source_collection_keys WHERE source_key = ?",
+                bindings: [.text(row.sourceKey)]
+            )
+            try run(
+                "DELETE FROM collections WHERE id = ?",
+                bindings: [.text(row.collectionID)]
+            )
+        }
+    }
+
+    func reuseCachedExactHashes(resources: inout [ProbedResource]) throws -> Int {
+        let rootIDs = Set(resources.map { $0.root.id })
+        var indexByRootID: [String: CachedExactHashIndex] = [:]
+        indexByRootID.reserveCapacity(rootIDs.count)
+        for rootID in rootIDs {
+            indexByRootID[rootID] = try cachedExactHashIndex(rootID: rootID)
+        }
+
+        var reused = 0
+        for index in resources.indices where resources[index].mediaKind != .sidecar {
+            guard resources[index].exactHash == nil,
+                  let rootIndex = indexByRootID[resources[index].root.id]
+            else {
+                continue
+            }
+
+            let pathEvidence = rootIndex.byRelativePath[resources[index].relativePath]
+            let evidence: CachedExactHashEvidence?
+            if let currentID = resources[index].fileSystemIdentifier,
+               let pathEvidence,
+               let cachedID = pathEvidence.fileSystemIdentifier,
+               cachedID != currentID {
+                evidence = rootIndex.byFileSystemIdentifier[currentID]
+            } else if let pathEvidence {
+                evidence = pathEvidence
+            } else if let currentID = resources[index].fileSystemIdentifier {
+                evidence = rootIndex.byFileSystemIdentifier[currentID]
+            } else {
+                evidence = nil
+            }
+
+            guard let evidence,
+                  evidence.byteSize == resources[index].byteSize,
+                  modificationTimesMatch(evidence.modifiedAt, resources[index].modifiedAt)
+            else {
+                continue
+            }
+
+            if let cachedID = evidence.fileSystemIdentifier,
+               let currentID = resources[index].fileSystemIdentifier,
+               cachedID != currentID {
+                continue
+            }
+
+            resources[index].exactHash = evidence.exactHash
+            reused += 1
+        }
+        return reused
+    }
+
+    private func cachedExactHashIndex(rootID: String) throws -> CachedExactHashIndex {
+        try withStatement(
+            """
+            SELECT r.relative_path, r.byte_size, r.modified_at, r.exact_hash,
+                   rfi.filesystem_identifier
+            FROM resources r
+            LEFT JOIN resource_file_ids rfi ON rfi.resource_id = r.id
+            WHERE r.root_id = ? AND r.exact_hash IS NOT NULL
+            """,
+            bindings: [.text(rootID)]
+        ) { statement in
+            var index = CachedExactHashIndex()
+            while true {
+                let result = sqlite3_step(statement)
+                if result == SQLITE_DONE { break }
+                guard result == SQLITE_ROW,
+                      let relativePathText = sqlite3_column_text(statement, 0),
+                      sqlite3_column_type(statement, 3) != SQLITE_NULL,
+                      let hashBytes = sqlite3_column_blob(statement, 3)
+                else {
+                    throw sqliteError(sql: "SELECT cached exact hash index")
+                }
+
+                let modifiedAt = sqlite3_column_type(statement, 2) == SQLITE_NULL
+                    ? nil
+                    : Date(timeIntervalSince1970: sqlite3_column_double(statement, 2))
+                let fileSystemIdentifier = sqlite3_column_text(statement, 4)
+                    .map { String(cString: $0) }
+                let evidence = CachedExactHashEvidence(
+                    byteSize: sqlite3_column_int64(statement, 1),
+                    modifiedAt: modifiedAt,
+                    fileSystemIdentifier: fileSystemIdentifier,
+                    exactHash: Data(
+                        bytes: hashBytes,
+                        count: Int(sqlite3_column_bytes(statement, 3))
+                    )
+                )
+                index.byRelativePath[String(cString: relativePathText)] = evidence
+                if let fileSystemIdentifier {
+                    index.byFileSystemIdentifier[fileSystemIdentifier] = evidence
+                }
+            }
+            return index
+        }
+    }
+
+    private func modificationTimesMatch(_ lhs: Date?, _ rhs: Date?) -> Bool {
+        guard let lhs, let rhs else { return false }
+        return abs(lhs.timeIntervalSince1970 - rhs.timeIntervalSince1970) < 0.001
     }
 
     func persistDuplicateGroups(
@@ -1176,6 +1384,61 @@ final class SQLiteCatalog {
                 byteSize: sqlite3_column_int64(statement, 5),
                 exactHash: Data(bytes: hashBytes, count: hashCount)
             )
+        }
+    }
+
+    func archiveRootInventoryRows(
+        rootID: String,
+        sessionID: String
+    ) throws -> [ArchiveRootInventoryCatalogRow] {
+        try withStatement(
+            """
+            SELECT r.id, ar.asset_id, r.relative_path, r.media_kind, ar.role,
+                   r.byte_size, r.modified_at, r.exact_hash
+            FROM resources r
+            LEFT JOIN asset_resources ar ON ar.resource_id = r.id
+            WHERE r.root_id = ? AND r.last_seen_session = ?
+            ORDER BY r.relative_path, r.id
+            """,
+            bindings: [.text(rootID), .text(sessionID)]
+        ) { statement in
+            var rows: [ArchiveRootInventoryCatalogRow] = []
+            while true {
+                let result = sqlite3_step(statement)
+                if result == SQLITE_DONE { break }
+                guard result == SQLITE_ROW,
+                      let resourceText = sqlite3_column_text(statement, 0),
+                      let relativeText = sqlite3_column_text(statement, 2),
+                      let mediaText = sqlite3_column_text(statement, 3),
+                      let mediaKind = MediaKind(rawValue: String(cString: mediaText))
+                else {
+                    throw sqliteError(sql: "SELECT archive root inventory rows")
+                }
+                let assetID = sqlite3_column_text(statement, 1).map { String(cString: $0) }
+                let role = sqlite3_column_text(statement, 4)
+                    .flatMap { ResourceRole(rawValue: String(cString: $0)) }
+                let modifiedAt = sqlite3_column_type(statement, 6) == SQLITE_NULL
+                    ? nil
+                    : Date(timeIntervalSince1970: sqlite3_column_double(statement, 6))
+                let exactHash: Data?
+                if sqlite3_column_type(statement, 7) != SQLITE_NULL,
+                   let bytes = sqlite3_column_blob(statement, 7) {
+                    exactHash = Data(bytes: bytes, count: Int(sqlite3_column_bytes(statement, 7)))
+                } else {
+                    exactHash = nil
+                }
+                rows.append(ArchiveRootInventoryCatalogRow(
+                    resourceID: String(cString: resourceText),
+                    assetID: assetID,
+                    relativePath: String(cString: relativeText),
+                    mediaKind: mediaKind,
+                    role: role,
+                    byteSize: sqlite3_column_int64(statement, 5),
+                    modifiedAt: modifiedAt,
+                    exactHash: exactHash
+                ))
+            }
+            return rows
         }
     }
 

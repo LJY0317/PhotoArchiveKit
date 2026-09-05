@@ -26,6 +26,8 @@ struct PhotoArchiveCLI {
                 try await runScan(arguments, mode: .archivePlan)
             case "archive-copy":
                 try await runArchiveCopy(arguments)
+            case "archive-index":
+                try await runArchiveIndex(arguments)
             case "organize":
                 try await runScan(arguments, mode: .organize)
             case "quarantine":
@@ -123,6 +125,70 @@ struct PhotoArchiveCLI {
             try printJSON(report)
         } else {
             printArchiveCopyReport(report)
+        }
+    }
+
+    private static func runArchiveIndex(_ arguments: [String]) async throws {
+        var catalogURL = PhotoArchivePaths.defaultCatalogURL
+        var apply = false
+        var outputJSON = false
+        var outputAgentJSON = false
+        var reuseHashCache = true
+        var maxConcurrency = min(max(ProcessInfo.processInfo.activeProcessorCount, 1), 8)
+        var paths: [String] = []
+
+        var index = 0
+        while index < arguments.count {
+            let argument = arguments[index]
+            switch argument {
+            case "--catalog":
+                catalogURL = fileURL(try value(after: argument, at: &index, in: arguments))
+            case "--apply":
+                apply = true
+            case "--json":
+                outputJSON = true
+            case "--agent-json":
+                outputAgentJSON = true
+            case "--fresh":
+                reuseHashCache = false
+            case "--jobs":
+                let raw = try value(after: argument, at: &index, in: arguments)
+                guard let value = Int(raw), value > 0, value <= 64 else {
+                    throw CLIError("--jobs must be between 1 and 64.")
+                }
+                maxConcurrency = value
+            case "--help", "-h":
+                printArchiveIndexHelp()
+                return
+            default:
+                if argument.hasPrefix("-") {
+                    throw CLIError("Unknown archive-index option: \(argument)")
+                }
+                paths.append(argument)
+            }
+            index += 1
+        }
+
+        guard paths.count == 1 else {
+            throw CLIError("archive-index requires exactly one existing archive root path.")
+        }
+        if outputJSON && outputAgentJSON {
+            throw CLIError("Use either --json or --agent-json, not both.")
+        }
+
+        let report = try await ArchiveRootIndexer.run(
+            rootURL: fileURL(paths[0]),
+            catalogURL: catalogURL,
+            writeSnapshot: apply,
+            reuseHashCache: reuseHashCache,
+            maxConcurrentProbes: maxConcurrency
+        )
+        if outputAgentJSON {
+            try printJSON(AgentSafeArchiveRootInventoryReport(report: report))
+        } else if outputJSON {
+            try printJSON(report)
+        } else {
+            printArchiveRootInventoryReport(report)
         }
     }
 
@@ -767,6 +833,25 @@ struct PhotoArchiveCLI {
         }
     }
 
+    private static func printArchiveRootInventoryReport(_ report: ArchiveRootInventoryReport) {
+        print(report.snapshotWritten
+            ? "PhotoArchiveKit archive root indexed and portable inventory written"
+            : "PhotoArchiveKit archive root indexed")
+        print("Root: \(report.rootID)")
+        print("Resources: \(report.resourceCount)")
+        print("Media resources: \(report.mediaResourceCount)")
+        print("Folders represented: \(report.folderCount)")
+        print("Exact hashes available: \(report.exactHashResourceCount)")
+        print("Exact hashes reused from cache: \(report.reusedExactHashCount)")
+        print("Portable inventory: \(report.inventoryPath)")
+        print("")
+        if report.snapshotWritten {
+            print("Only the hidden portable inventory was written to the archive root; media files were not moved, renamed, or deleted.")
+        } else {
+            print("No files were written to the archive root. Re-run with --apply to write the portable inventory after reviewing the index.")
+        }
+    }
+
     private static func printOrganizationApplyReport(_ report: OrganizationApplyReport) {
         print(report.dryRun ? "PhotoArchiveKit organization dry run" : "PhotoArchiveKit organization applied")
         print("Session: \(report.sessionID)")
@@ -876,6 +961,7 @@ struct PhotoArchiveCLI {
         print("Logical assets: \(report.summary.logicalAssetCount)")
         print("Live Photo assets: \(report.summary.livePhotoAssetCount)")
         print("Exact duplicate groups: \(report.summary.exactDuplicateGroupCount)")
+        print("Exact hashes reused from cache: \(report.summary.reusedExactHashCount)")
         print("Automatic event suggestions: \(report.summary.eventSuggestionCount)")
         print("Warnings: \(report.summary.warningCount)")
         print("")
@@ -1022,6 +1108,7 @@ struct PhotoArchiveCLI {
               photoarchive organize-plan [options] ROOT...
               photoarchive archive-plan --to PATH --output PLAN [options] ROOT...
               photoarchive archive-copy [--apply] [--to PATH] [--bind-root ROOT_ID=PATH] PLAN
+              photoarchive archive-index [--apply] [options] PATH
               photoarchive organize [--apply] [options] ROOT...
               photoarchive quarantine --to PATH [--apply] [options] ROOT...
               photoarchive restore-quarantine [--apply] [--catalog PATH] MANIFEST
@@ -1040,6 +1127,7 @@ struct PhotoArchiveCLI {
             Run 'photoarchive scan --help', 'photoarchive plan --help',
             'photoarchive organize-plan --help', 'photoarchive archive-plan --help',
             'photoarchive archive-copy --help',
+            'photoarchive archive-index --help',
             'photoarchive organize --help',
             'photoarchive quarantine --help', 'photoarchive restore-quarantine --help',
             'photoarchive cleanup-empty-dirs --help', or 'photoarchive catalog --help'
@@ -1069,6 +1157,36 @@ struct PhotoArchiveCLI {
             .photoarchive staging, supports idempotent resume, then scans the verified archive
             destination into the catalog and writes a portable catalog snapshot. Source media
             is never deleted or moved.
+            """
+        )
+    }
+
+    private static func printArchiveIndexHelp() {
+        print(
+            """
+            Usage:
+              photoarchive archive-index [options] PATH
+
+            Options:
+              --catalog PATH   Local authoritative SQLite catalog
+              --jobs NUMBER    Concurrent metadata probes, 1-64
+              --fresh          Ignore hash caches and re-read every media byte
+              --apply          Write PATH/.photoarchive/inventory-v1.jsonl after indexing
+              --json           Print local diagnostic JSON including the inventory path
+              --agent-json     Print privacy-minimized counts/status without paths or hashes
+              --help           Show this help
+
+            archive-index treats PATH as a user-managed archive root. PATH must already have
+            a stable .photoarchive-root marker. The scan recursively records existing folder
+            hierarchy as user-authored collection semantics and computes exact hashes for all
+            media resources. Unchanged files reuse the local SQLite hash cache; when present,
+            the portable root inventory can also seed hashes after the drive is attached to a
+            different computer. Cache evidence is only an accelerator: mutating workflows still
+            perform fresh byte verification before acting. Use --fresh for a full periodic
+            integrity pass that re-reads every media resource instead of trusting size/mtime.
+
+            The command never moves, renames, or deletes media. Without --apply it also writes
+            nothing to the archive root. --apply writes only the hidden portable inventory file.
             """
         )
     }

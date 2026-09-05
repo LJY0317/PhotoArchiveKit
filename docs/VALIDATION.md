@@ -75,6 +75,27 @@ Synthetic catalog에서 versioned JSONL export -> restore dry-run -> 새 SQLite 
 
 이 JSONL은 relative path, original filename, collection label을 보존하므로 agent-safe/share-safe 파일이 아니라 local-private disaster-recovery artifact다.
 
+## User-managed archive index / incremental hash cache 검증
+
+synthetic marker-initialized archive root에 `Trips/Japan`과 `Family` hierarchy를 만들고 `archive-index` core/CLI path를 검증했다. 첫 scan은 모든 media에 integrity SHA-256을 생성했고, SQLite에는 세 folder(`Trips`, `Trips/Japan`, `Family`)가 `user_archive_folder` collection으로 저장되며 두 logical asset이 각각 current leaf folder membership을 가졌다.
+
+검증 결과:
+
+```text
+first archive index: exact hash cache hits                                  0
+repeat on same local SQLite: unchanged hashes reused                        PASS
+portable .photoarchive/inventory-v1.jsonl write with explicit apply        PASS
+fresh empty SQLite catalog + same HDD inventory: portable hash reuse        PASS
+archive-index --fresh: local/portable cache hits                            0
+manual Finder-style move Trips/Japan -> Family                              PASS
+re-index current folder count                                                1
+stale Trips/Japan and Trips user-archive collections pruned                 PASS
+agent-safe archive-index report omits root path and filename                PASS
+hidden .photoarchive inventory excluded from media scan                     PASS
+```
+
+CLI smoke에서 media resource 2개 / represented folder 3개 fixture는 dry-run cache hit 0, 같은 catalog 재실행 cache hit 2, 새 catalog에서 portable inventory cache hit 2, `--fresh` cache hit 0을 재현했다. portable inventory는 relative path, byte size, modification time, opaque role/ID, raw SHA-256을 포함하는 **root-scoped local-private cache/map**이며 mutation authority가 아니다. `archive-copy`, quarantine 등 실제 mutation boundary는 계속 fresh SHA-256을 요구한다.
+
 ## Immutable archive plan 검증
 
 Synthetic marked source/destination fixture에서 `archive-plan`이 non-Takeout canonical exact copy 하나만 AUTO로 선택하고, plan 시점의 fresh SHA-256을 같은 scan/catalog에 저장된 exact evidence와 다시 비교한 뒤 local-private precondition으로 고정하는 것을 검증했다. scan 뒤 source byte를 같은 크기로 바꾸면 `sourceChanged`로 plan 생성이 거부된다. destination에 같은 filename이 이미 있으면 deterministic `_NN` suffix로 충돌을 피한다.
@@ -117,5 +138,6 @@ byte-identical file만으로 Image Capture와 Google Photos web 중 어디에서
 - Same-second capture, subsecond, burst, timezone change, metadata-free media
 - Archive pair -> PhotoKit -> Apple Photos -> Google Photos iOS -> download round trip
 - rclone upload/download 후 local full-byte comparison
+- 실제 사용자 HDD의 깊은 user-managed archive root를 `archive-index`로 read-only index하고, 첫 full hash pass와 incremental repeat의 wall-clock/I/O/cache-hit 비율 측정
 
 이 test가 끝나기 전에도 architecture는 ordinary file, explicit resource relationship, source provenance, many-to-many collection, local equality group을 삭제나 rewrite 없이 안전하게 보존할 수 있다.

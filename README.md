@@ -16,7 +16,7 @@ PhotoArchiveKit is a local-first, session-based toolkit for preserving and organ
 
 The project is intentionally small. It does not run a background daemon, host a gallery server, or move media behind an opaque storage format. Media remains in ordinary filesystem folders; a local SQLite catalog records relationships and decisions that folders cannot express.
 
-> **Project status:** early safety-first prototype. `scan`, `plan`, and `organize-plan` are read-only; `archive-plan` writes a local-private immutable plan; `archive-copy` defaults to a full dry-run and can explicitly copy/verify only AUTO archive items through resumable staging. `quarantine` supports reversible exact-duplicate moves, while marker-gated `organize` can apply only automatic iPhone-camera rename/flatten items. Permanent deletion, a real-library HDD archive apply, independent replica verification, and cloud upload are not completed yet.
+> **Project status:** early safety-first prototype. `scan`, `plan`, and `organize-plan` are read-only; `archive-index` can index an existing user-managed archive without moving media and writes its root-scoped portable inventory only with explicit `--apply`; `archive-plan` writes a local-private immutable plan; `archive-copy` defaults to a full dry-run and can explicitly copy/verify only AUTO archive items through resumable staging. `quarantine` supports reversible exact-duplicate moves, while marker-gated `organize` can apply only automatic iPhone-camera rename/flatten items. Permanent deletion, a full real-library HDD archive apply, independent replica verification, and cloud upload are not completed yet.
 
 ## Why this exists
 
@@ -57,6 +57,9 @@ The initial CLI can:
 - extract timezone-aware EXIF and QuickTime capture times when available;
 - suggest date-based event folders by clustering assets separated by a configurable time gap;
 - persist resources, logical assets, provenance, duplicate groups, source collection mappings, original filenames, path history, and scan sessions in SQLite;
+- index an existing **user-managed archive root** with `archive-index`: preserve the current nested folder hierarchy as user-authored collection semantics, leave all media in place, prune stale folder memberships after manual Finder moves, and compute exact hashes for every media resource;
+- reuse exact SHA-256 evidence for unchanged files from the Mac-local SQLite catalog, and for archive roots optionally seed that cache from the root's hidden `.photoarchive/inventory-v1.jsonl`; `archive-index --fresh` bypasses both caches and re-reads every media resource;
+- keep the fast authoritative working catalog on the Mac while allowing each removable archive root to carry its own root-scoped portable inventory containing relative structure and integrity evidence for another computer; this inventory is an accelerator/portable map, never mutation authority;
 - export that catalog's portable semantic subset as versioned JSONL and dry-run/restore it into a new SQLite catalog without carrying raw hashes, Live Photo fingerprints, filesystem IDs, absolute root paths, capture timestamps, provider object IDs, or generated scan/event caches;
 - keep same-volume resource identity stable across rename/move and recognize a moved source root through an optional `.photoarchive-root` marker;
 - generate a read-only `organize-plan` for only `IMG_####` / `IMG_E####` camera-style names, using capture wall-clock names such as `YYYY-MM-DD_HH-mm-ss[_NN]` while preserving custom filenames;
@@ -126,7 +129,7 @@ swift run photoarchive plan \
   --takeout "~/Pictures/Takeout"
 ```
 
-For an AI agent, use `--agent-json` with `scan`, `plan`, `organize-plan`, `archive-plan`, `archive-copy`, `organize`, `quarantine`, `restore-quarantine`, `cleanup-empty-dirs`, or the `catalog` command reports; local diagnostic `--json` can contain paths. Persisted archive-plan, archive-copy manifest, and JSONL snapshot files themselves are **not** agent-safe because safe replay/disaster recovery requires local-private paths, filenames, catalog paths, marker bindings, and integrity preconditions.
+For an AI agent, use `--agent-json` with `scan`, `plan`, `organize-plan`, `archive-index`, `archive-plan`, `archive-copy`, `organize`, `quarantine`, `restore-quarantine`, `cleanup-empty-dirs`, or the `catalog` command reports; local diagnostic `--json` can contain paths. Persisted archive-plan, archive-copy manifest, archive-root inventory, and JSONL snapshot files themselves are **not** agent-safe because safe replay/disaster recovery requires local-private paths, filenames, catalog paths, marker bindings, or integrity preconditions.
 
 Preview a quarantine without moving anything:
 
@@ -187,6 +190,39 @@ Only after the preflight succeeds, add `--apply`. AUTO resources are copied thro
 swift run photoarchive archive-copy --apply --agent-json \
   "~/Library/Application Support/PhotoArchiveKit/archive-plan.json"
 ```
+
+If the HDD already contains a carefully hand-organized photo tree, index that tree instead of forcing it into PhotoArchiveKit's generated folder layout. First place a stable marker at the **photo root itself**, not necessarily at the volume root:
+
+```bash
+swift run photoarchive root init --apply "/Volumes/My HDD/deep/path/My Photos"
+swift run photoarchive archive-index --agent-json "/Volumes/My HDD/deep/path/My Photos"
+```
+
+`archive-index` recursively records the current folders that contain supported media as user-authored collection hierarchy in the Mac-local SQLite catalog. Media is not moved, renamed, deleted, or rewritten. A normal repeat scan reuses cached exact hashes when stable file facts still match. On the same volume, filesystem identity also lets a manual Finder move/rename reuse the old hash even when the relative path changed. High-risk mutations never trust that cache alone; they still perform fresh byte verification.
+
+After reviewing the index, an explicit `--apply` writes only a hidden root-scoped portable inventory:
+
+```bash
+swift run photoarchive archive-index --apply --agent-json \
+  "/Volumes/My HDD/deep/path/My Photos"
+```
+
+The recommended split is intentional:
+
+```text
+Mac internal SSD                              Removable archive root
+~/Library/Application Support/PhotoArchiveKit  My Photos/
+└── catalog.sqlite3                            ├── Family/
+    authoritative working catalog             ├── Trips/
+                                                └── .photoarchive/
+                                                    ├── root marker
+                                                    └── inventory-v1.jsonl
+                                                        root-scoped portable map/cache
+```
+
+The Mac SQLite database remains the authoritative **working** catalog because SQLite random I/O and transaction state belong on reliable local storage. The archive inventory travels with only that archive root and contains relative paths, byte sizes, modification times, opaque IDs, roles, and SHA-256 evidence, so it is **local-private** and should not be shared with an AI agent. When the HDD is attached to a computer with a fresh local catalog, the inventory can seed unchanged-file hashes and avoid re-reading all media bytes. Use `archive-index --fresh` periodically, or whenever a full integrity audit is desired, to ignore both local and portable caches and re-hash every media resource.
+
+The root inventory and `catalog export` serve different purposes. `inventory-v1.jsonl` is root-scoped and intentionally carries raw integrity evidence for fast reattachment; `catalog export` is a broader disaster-recovery semantic snapshot and deliberately omits raw hashes and other reproducible local caches.
 
 Export a versioned disaster-recovery snapshot of the catalog's portable semantic state:
 
@@ -282,6 +318,19 @@ Other options:
 - `--no-exact-duplicates` — skip local SHA-256 comparison.
 - `--event-gap-hours NUMBER` — begin a new automatic event after this gap; default is six hours.
 - `--jobs NUMBER` — limit concurrent metadata probes.
+
+### `photoarchive archive-index`
+
+Indexes one existing marker-initialized user-managed archive root without reorganizing it.
+
+- default: update the Mac-local SQLite catalog only; do not write anything into the archive root;
+- `--apply`: additionally write `.photoarchive/inventory-v1.jsonl` inside that root;
+- `--fresh`: ignore both local SQLite and portable-inventory hash caches and re-read every media byte;
+- `--jobs NUMBER`: limit concurrent metadata probes;
+- `--json`: local-private diagnostic including the inventory path;
+- `--agent-json`: path/hash-free counts and status only.
+
+The current folder collection model represents folders that contain supported media (including their parent hierarchy); empty folders with no indexed media are not semantic collections.
 
 ### `photoarchive doctor`
 

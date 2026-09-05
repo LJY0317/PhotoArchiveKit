@@ -16,7 +16,7 @@ PhotoArchiveKit은 iPhone 사진·동영상·Live Photo를 특정 사진 클라�
 
 프로젝트는 의도적으로 가볍게 유지합니다. 백그라운드 daemon을 실행하거나 별도 gallery server를 운영하지 않으며, 미디어를 불투명한 전용 저장 형식 안으로 옮기지 않습니다. 사진과 동영상은 일반 파일시스템 폴더에 남고, 폴더만으로 표현할 수 없는 관계와 결정만 로컬 SQLite catalog에 기록합니다.
 
-> **현재 상태:** 초기 safety-first prototype입니다. `scan`, `plan`, `organize-plan`은 읽기 전용이고, `archive-plan`은 local-private immutable plan을 씁니다. `archive-copy`는 기본 full dry-run이며 명시적 apply에서만 AUTO archive item을 resumable staging을 거쳐 copy/verify합니다. `quarantine`은 reversible exact-duplicate 이동을 지원하고 marker-gated `organize`는 automatic iPhone-camera rename/flatten item만 apply합니다. 영구 삭제, real-library HDD archive 실제 적용, 독립 replica 검증, cloud upload는 아직 완료되지 않았습니다.
+> **현재 상태:** 초기 safety-first prototype입니다. `scan`, `plan`, `organize-plan`은 읽기 전용이고, `archive-index`는 이미 사용자가 직접 분류한 archive를 media 이동 없이 index하며 명시적 `--apply`에서만 그 root 전용 portable inventory를 씁니다. `archive-plan`은 local-private immutable plan을 쓰고, `archive-copy`는 기본 full dry-run이며 명시적 apply에서만 AUTO archive item을 resumable staging을 거쳐 copy/verify합니다. `quarantine`은 reversible exact-duplicate 이동을 지원하고 marker-gated `organize`는 automatic iPhone-camera rename/flatten item만 apply합니다. 영구 삭제, 전체 real-library HDD archive 적용, 독립 replica 검증, cloud upload는 아직 완료되지 않았습니다.
 
 ## 왜 필요한가
 
@@ -57,6 +57,9 @@ byte 보존 복제본          provenance와 이력
 - 가능한 경우 timezone을 포함한 EXIF·QuickTime 촬영시각 추출
 - 설정 가능한 시간 간격을 기준으로 날짜형 event folder 자동 제안
 - resource, 논리 asset, provenance, duplicate group, source collection mapping, 최초 filename, path history, scan session을 SQLite에 저장
+- 기존에 사용자가 직접 관리하던 **archive root**를 `archive-index`로 index: 현재 하위 folder hierarchy를 user-authored collection semantics로 보존하고, media는 그대로 둔 채 수동 Finder 이동 뒤 stale folder membership을 정리하며, 모든 media resource의 exact hash를 확보
+- 변경되지 않은 파일은 Mac-local SQLite의 SHA-256 evidence를 재사용하고, archive root에서는 hidden `.photoarchive/inventory-v1.jsonl`의 portable hash cache도 사용할 수 있음. `archive-index --fresh`는 두 cache를 모두 무시하고 media byte 전체를 다시 읽음
+- 빠른 authoritative working catalog는 Mac에 두되, removable archive root마다 relative 구조와 integrity evidence를 가진 root-scoped portable inventory를 함께 둘 수 있음. 이 inventory는 다른 컴퓨터에서 재스캔을 가속하는 구조도/cache이지 mutation authority가 아님
 - catalog의 portable semantic subset을 versioned JSONL로 export하고 raw hash·Live Photo fingerprint·filesystem ID·absolute root path·capture timestamp·provider object ID·generated scan/event cache 없이 새 SQLite catalog로 dry-run/restore
 - 같은 volume 안의 rename/move에서는 physical resource identity를 유지하고, optional `.photoarchive-root` marker로 이동된 source root도 동일 root로 다시 인식
 - `IMG_####` / `IMG_E####` camera-style 이름만 대상으로 `YYYY-MM-DD_HH-mm-ss[_NN]` 촬영시각 기반 flat rename `organize-plan` 생성; custom filename은 보존
@@ -126,7 +129,7 @@ swift run photoarchive plan \
   --takeout "~/Pictures/Takeout"
 ```
 
-AI agent는 `scan`, `plan`, `organize-plan`, `archive-plan`, `archive-copy`, `organize`, `quarantine`, `restore-quarantine`, `cleanup-empty-dirs`와 `catalog` command의 report에서 `--agent-json`을 사용해야 하며, path를 포함할 수 있는 local diagnostic `--json`은 agent에 전달하지 않습니다. persisted archive-plan, archive-copy manifest, JSONL snapshot 파일 자체는 안전한 replay/disaster recovery에 local-private path·filename·catalog path·marker binding·integrity precondition이 필요하므로 **agent-safe가 아닙니다**.
+AI agent는 `scan`, `plan`, `organize-plan`, `archive-index`, `archive-plan`, `archive-copy`, `organize`, `quarantine`, `restore-quarantine`, `cleanup-empty-dirs`와 `catalog` command의 report에서 `--agent-json`을 사용해야 하며, path를 포함할 수 있는 local diagnostic `--json`은 agent에 전달하지 않습니다. persisted archive-plan, archive-copy manifest, archive-root inventory, JSONL snapshot 파일 자체는 안전한 replay/disaster recovery에 local-private path·filename·catalog path·marker binding 또는 integrity precondition이 필요하므로 **agent-safe가 아닙니다**.
 
 아무 파일도 이동하지 않고 quarantine 후보를 먼저 검증합니다.
 
@@ -187,6 +190,39 @@ preflight가 성공한 뒤에만 `--apply`를 추가합니다. AUTO resource는 
 swift run photoarchive archive-copy --apply --agent-json \
   "~/Library/Application Support/PhotoArchiveKit/archive-plan.json"
 ```
+
+외장 HDD에 이미 사용자가 오랫동안 직접 분류한 사진 folder tree가 있다면, PhotoArchiveKit의 새 `Media/YYYY` 구조로 강제로 옮기기보다 그 기존 tree 자체를 archive로 index합니다. volume root가 아니라 **실제 사진 최상위 folder 자체**에 stable marker를 둡니다.
+
+```bash
+swift run photoarchive root init --apply "/Volumes/My HDD/deep/path/My Photos"
+swift run photoarchive archive-index --agent-json "/Volumes/My HDD/deep/path/My Photos"
+```
+
+`archive-index`는 supported media가 들어 있는 현재 folder와 그 parent hierarchy를 user-authored collection으로 Mac-local SQLite에 기록합니다. media를 move/rename/delete/rewrite하지 않습니다. 일반 재스캔은 stable file fact가 그대로면 기존 exact hash를 재사용하고, 같은 volume 안에서 Finder로 move/rename한 경우 relative path가 바뀌어도 filesystem identity로 기존 hash를 다시 연결할 수 있습니다. 다만 destructive/mutating workflow는 이 cache만 믿지 않고 실행 직전에 fresh byte verification을 다시 합니다.
+
+index를 확인한 뒤 명시적으로 `--apply`를 붙였을 때만 HDD에 hidden root-scoped inventory를 씁니다.
+
+```bash
+swift run photoarchive archive-index --apply --agent-json \
+  "/Volumes/My HDD/deep/path/My Photos"
+```
+
+권장 state 배치는 다음처럼 역할을 분리합니다.
+
+```text
+Mac 내부 SSD                                  removable archive root
+~/Library/Application Support/PhotoArchiveKit  My Photos/
+└── catalog.sqlite3                            ├── Family/
+    authoritative working catalog             ├── Trips/
+                                                └── .photoarchive/
+                                                    ├── root marker
+                                                    └── inventory-v1.jsonl
+                                                        root-scoped portable map/cache
+```
+
+Mac SQLite는 빠르고 안정적인 local transaction/random I/O를 위한 **working catalog의 기준본**입니다. HDD의 inventory는 그 HDD 사진 root만 설명하며 relative path, byte size, modification time, opaque ID, role, SHA-256 evidence를 포함하므로 **local-private**이며 AI agent에 전달하지 않습니다. 다른 컴퓨터에서 새 local catalog로 같은 HDD를 붙여도 이 inventory가 unchanged-file hash를 seed할 수 있어 media byte 전체를 다시 읽는 비용을 줄입니다. 주기적 integrity audit이 필요할 때는 `archive-index --fresh`로 local/portable cache를 모두 무시하고 전체 media를 다시 hash합니다.
+
+HDD root inventory와 `catalog export`는 역할이 다릅니다. `inventory-v1.jsonl`은 한 archive root 전용이고 빠른 재연결을 위해 raw integrity evidence를 의도적으로 보관합니다. 반면 `catalog export`는 전체 semantic disaster-recovery snapshot이며 raw hash와 재생성 가능한 local cache를 의도적으로 제외합니다.
 
 catalog의 portable semantic state를 versioned disaster-recovery snapshot으로 내보낼 수 있습니다.
 
@@ -282,6 +318,19 @@ option 없이 입력한 path는 Inbox로 처리합니다.
 - `--no-exact-duplicates` — 로컬 SHA-256 비교 생략
 - `--event-gap-hours NUMBER` — 이 시간보다 긴 공백이 있으면 새 event로 분리, 기본값 6시간
 - `--jobs NUMBER` — 동시에 실행할 metadata probe 수 제한
+
+### `photoarchive archive-index`
+
+marker가 초기화된 기존 user-managed archive root 하나를 재배치 없이 index합니다.
+
+- 기본: Mac-local SQLite만 갱신하고 archive root에는 아무 파일도 쓰지 않음
+- `--apply`: root 안에 `.photoarchive/inventory-v1.jsonl`도 기록
+- `--fresh`: local SQLite/portable inventory hash cache를 모두 무시하고 media byte 전체를 다시 읽음
+- `--jobs NUMBER`: concurrent metadata probe 제한
+- `--json`: inventory path를 포함할 수 있는 local-private diagnostic
+- `--agent-json`: path/hash를 제거한 count/status만 출력
+
+현재 folder collection model은 supported media가 들어 있는 folder와 그 parent hierarchy를 보존하며, indexed media가 전혀 없는 empty folder는 semantic collection으로 만들지 않습니다.
 
 ### `photoarchive doctor`
 

@@ -518,6 +518,54 @@ archive-copy full-plan dry-run filesModified                           false
 
 따라서 marker-gated lightweight verifier로 계산했던 `AUTO 7,283 / 9,098 resource`가 실제 immutable schema-v2 plan으로 그대로 재현됐고, archive-copy의 독립 current-catalog/source-byte preflight도 9,098 resource 전부 통과했다. `exit 137`은 DevSpace workspace/session 문제나 media evidence 불일치가 아니라 PhotoArchiveKit hashing loop의 resident-memory accumulation으로 닫는다. 전체 9,098-resource apply는 아직 수행하지 않고 다음 real mutation도 logical-item bounded batch로 확대한다.
 
+## 2026-09-05 — User-managed archive index와 portable incremental hash cache
+
+사용자가 외장 HDD 깊은 경로에 이미 직접 분류한 사진 folder tree를 유지하고 실제 media copy도 Finder 등으로 직접 수행하는 workflow를 반영해, PhotoArchiveKit이 generated `Media/YYYY` layout을 강제하지 않고 **기존 archive 구조를 그대로 index**할 수 있는 경로를 추가했다.
+
+`photoarchive archive-index PATH`는 marker-initialized archive root 하나를 recursive scan하며 media를 move/rename/delete/rewrite하지 않는다. supported media가 들어 있는 folder와 그 parent hierarchy를 local SQLite의 `user_archive_folder` collection으로 기록하고 logical asset을 current leaf folder에 연결한다. 사용자가 Finder에서 파일을 다른 folder로 옮긴 뒤 다시 index하면 이전 user-archive membership과 더 이상 존재하지 않는 semantic folder collection을 prune하여 catalog가 **현재 사용자의 분류 구조**를 반영한다. indexed media와 관계없는 empty directory는 semantic collection으로 만들지 않는다.
+
+성능을 위해 exact hash evidence를 두 tier로 cache한다.
+
+```text
+1. Mac-local authoritative SQLite
+   same root/path + byte size + mtime
+   + 양쪽에 filesystem ID가 있으면 ID도 동일
+
+2. removable archive root의 .photoarchive/inventory-v1.jsonl
+   same stable marker + relative path + byte size + mtime
+   -> fresh local catalog에서도 SHA-256 seed 가능
+```
+
+portable inventory는 root-relative structure, opaque resource/asset relation, role, byte size, modification time, raw SHA-256을 포함하는 **local-private root-scoped map/cache**다. 전체 semantic disaster-recovery용 `catalog export`와 역할이 다르며 agent-safe/share-safe artifact가 아니다. agent-safe `archive-index` report에는 path/filename/hash 대신 root/resource/folder/cache-hit count와 status만 노출한다. cache는 mutation authority가 아니므로 quarantine/archive-copy 등 mutation boundary의 fresh SHA-256 검증은 그대로 유지한다. `archive-index --fresh`는 두 cache를 모두 우회해 media byte 전체를 다시 읽는다.
+
+Synthetic core validation:
+
+```text
+user archive resources                                               2
+represented hierarchy: Trips, Trips/Japan, Family                    3
+first exact-hash cache reuse                                         0
+same local SQLite repeat exact-hash reuse                             2
+portable inventory written only with explicit apply                  PASS
+fresh empty local catalog + portable inventory reuse                 2
+--fresh cache reuse                                                   0
+manual move Trips/Japan -> Family, filesystem-ID hash reuse          PASS
+post-move represented folder count                                    1
+stale user-archive collections pruned                                PASS
+agent-safe report omits root path / filename / raw hash              PASS
+```
+
+Executable CLI smoke도 disposable filesystem에서 같은 결과를 재현했다.
+
+```text
+dry         resources=2 folders=3 reused=0 snapshot=false
+apply       resources=2 folders=3 reused=2 snapshot=true
+fresh-cache resources=2 folders=3 reused=2 snapshot=false
+fresh-full  resources=2 folders=3 reused=0 snapshot=false
+inventory file exists                                                true
+```
+
+`swift build`, `photoarchive-selftest`, public-tree privacy check, `git diff --check`를 통과했다. 이 milestone에서는 **사용자의 실제 외장 HDD media를 copy/move/delete하지 않았다.** 다음 real-library 검증은 사용자가 지정하는 실제 HDD 사진 최상위 root를 read-only `archive-index`로 먼저 측정하고, 첫 full pass와 즉시 incremental repeat의 wall-clock/cache-hit 차이를 비교하는 것이다. inventory write는 별도 explicit `--apply`로 유지한다.
+
 ## 2026-09-04 — Product North Star 고정
 
 최초 제품 목적을 `docs/PROJECT_NORTH_STAR.md`와 `AGENTS.md`의 explicit scope gate로 고정했다.

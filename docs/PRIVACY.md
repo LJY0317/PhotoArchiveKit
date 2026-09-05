@@ -52,6 +52,20 @@ catalog는 private application state다. `.gitignore`로 제외하며 sanitizati
 
 반면 새 catalog가 archive와 다시 연결될 수 있도록 opaque root/resource/asset ID, root kind/provenance, optional stable root-marker key, relative resource/location path, original filename, asset-resource role, collection hierarchy/membership, Takeout source-folder mapping은 보존한다. 따라서 이 snapshot의 `sanitized`는 **재생성 가능한 raw/cache와 absolute machine path를 제거했다는 뜻**이며, agent-safe/share-safe라는 뜻이 아니다. relative path·filename·collection label은 여전히 개인 정보일 수 있으므로 snapshot은 local-private backup으로 취급하고 AI agent에는 snapshot 본문이 아니라 `catalog ... --agent-json`의 count/status report만 전달한다.
 
+### Archive-root portable inventory
+
+`photoarchive archive-index --apply`가 removable archive root의 `.photoarchive/inventory-v1.jsonl`에 쓰는 inventory는 위 `catalog export`와 반대 목적의 artifact다. 전체 semantic disaster-recovery state를 sanitized하게 담는 대신, **한 archive root를 다른 host에서 빠르게 다시 attach/index하기 위한 local-private structure/hash cache**다.
+
+포함할 수 있는 값:
+
+- stable root marker와 opaque root/resource/asset ID
+- relative path와 user-managed folder hierarchy
+- resource role/media kind
+- exact byte size와 modification timestamp
+- raw SHA-256
+
+따라서 inventory 본문은 agent-safe/share-safe가 아니며 AI agent에 전달하지 않는다. `archive-index --agent-json`은 path/hash를 제거하고 resource/folder/cache-hit count와 status만 반환한다. portable/local hash cache는 mutation authority가 아니며 destructive/mutating operation은 별도 fresh byte verification을 계속 요구한다. `archive-index --fresh`는 integrity audit을 위해 두 cache를 모두 우회한다.
+
 ### Immutable archive plan
 
 `photoarchive archive-plan`이 쓰는 persisted JSON도 agent-safe 파일이 아니다. `archive-copy`가 scan 시점의 결정을 독립적으로 재검증하려면 working catalog path, source/destination canonical path, stable root-marker key, resource relative path, exact byte size, destination relative path, expected SHA-256이 필요하다. 이 값들은 local replay authority이므로 plan 파일은 local-private으로 취급한다. AI agent에는 plan 본문이 아니라 `archive-plan --agent-json`의 opaque plan/item/asset ID, decision/reason, resource count만 전달한다.

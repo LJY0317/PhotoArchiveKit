@@ -44,6 +44,7 @@ public enum ExactDuplicateEngine: String, Codable, CaseIterable, Sendable {
 public struct ScanOptions: Sendable {
     public var computeExactDuplicates: Bool
     public var computeArchiveIntegrityPreconditions: Bool
+    public var reuseExactHashCache: Bool
     public var exactDuplicateEngine: ExactDuplicateEngine
     public var eventGap: TimeInterval
     public var maxConcurrentProbes: Int
@@ -51,12 +52,14 @@ public struct ScanOptions: Sendable {
     public init(
         computeExactDuplicates: Bool = true,
         computeArchiveIntegrityPreconditions: Bool = false,
+        reuseExactHashCache: Bool = true,
         exactDuplicateEngine: ExactDuplicateEngine = .automatic,
         eventGap: TimeInterval = 6 * 60 * 60,
         maxConcurrentProbes: Int = min(max(ProcessInfo.processInfo.activeProcessorCount, 1), 8)
     ) {
         self.computeExactDuplicates = computeExactDuplicates
         self.computeArchiveIntegrityPreconditions = computeArchiveIntegrityPreconditions
+        self.reuseExactHashCache = reuseExactHashCache
         self.exactDuplicateEngine = exactDuplicateEngine
         self.eventGap = eventGap
         self.maxConcurrentProbes = max(1, maxConcurrentProbes)
@@ -349,6 +352,7 @@ public struct ScanSummary: Codable, Sendable, Equatable {
     public let exactDuplicateGroupCount: Int
     public let eventSuggestionCount: Int
     public let warningCount: Int
+    public let reusedExactHashCount: Int
 
     public init(
         rootCount: Int,
@@ -357,7 +361,8 @@ public struct ScanSummary: Codable, Sendable, Equatable {
         livePhotoAssetCount: Int,
         exactDuplicateGroupCount: Int,
         eventSuggestionCount: Int,
-        warningCount: Int
+        warningCount: Int,
+        reusedExactHashCount: Int = 0
     ) {
         self.rootCount = rootCount
         self.resourceCount = resourceCount
@@ -366,6 +371,7 @@ public struct ScanSummary: Codable, Sendable, Equatable {
         self.exactDuplicateGroupCount = exactDuplicateGroupCount
         self.eventSuggestionCount = eventSuggestionCount
         self.warningCount = warningCount
+        self.reusedExactHashCount = reusedExactHashCount
     }
 }
 
