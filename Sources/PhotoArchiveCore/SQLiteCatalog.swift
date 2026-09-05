@@ -70,6 +70,23 @@ struct RootRegistryRow {
     let currentResourceCount: Int
 }
 
+private struct CachedScanSessionRow {
+    let sessionID: String
+    let startedAt: Date
+    let completedAt: Date
+    let rootCount: Int
+    let resourceCount: Int
+    let assetCount: Int
+    let warningCount: Int
+}
+
+private struct CachedScanResourceRow {
+    let report: ScannedResourceReport
+    let exactHash: Data?
+    let timedMetadataStatus: LivePhotoTimedMetadataStatus?
+    let metadataProbeFailed: Bool
+}
+
 final class SQLiteCatalog {
     let url: URL
     private var database: OpaquePointer?
@@ -360,6 +377,21 @@ final class SQLiteCatalog {
                     ]
                 )
             }
+
+            try run(
+                """
+                INSERT INTO resource_live_metadata_status (resource_id, status, last_seen_session)
+                VALUES (?, ?, ?)
+                ON CONFLICT(resource_id) DO UPDATE SET
+                    status = excluded.status,
+                    last_seen_session = excluded.last_seen_session
+                """,
+                bindings: [
+                    .text(resourceID),
+                    .text(resources[index].livePhotoTimedMetadataStatus.rawValue),
+                    .text(sessionID)
+                ]
+            )
             try run(
                 """
                 INSERT INTO resource_locations (
@@ -1169,6 +1201,12 @@ final class SQLiteCatalog {
                 UNIQUE(root_id, filesystem_identifier)
             );
 
+            CREATE TABLE IF NOT EXISTS resource_live_metadata_status (
+                resource_id TEXT PRIMARY KEY REFERENCES resources(id) ON DELETE CASCADE,
+                status TEXT NOT NULL,
+                last_seen_session TEXT NOT NULL REFERENCES scan_sessions(id)
+            );
+
             CREATE TABLE IF NOT EXISTS resource_locations (
                 resource_id TEXT NOT NULL REFERENCES resources(id) ON DELETE CASCADE,
                 root_id TEXT NOT NULL REFERENCES source_roots(id) ON DELETE CASCADE,
@@ -1283,8 +1321,22 @@ final class SQLiteCatalog {
                 ON resources(byte_size);
             CREATE INDEX IF NOT EXISTS resources_live_fingerprint_idx
                 ON resources(live_identifier_fingerprint);
+            CREATE INDEX IF NOT EXISTS resources_root_idx
+                ON resources(root_id);
             CREATE INDEX IF NOT EXISTS resource_locations_last_seen_idx
                 ON resource_locations(last_seen_session);
+            CREATE INDEX IF NOT EXISTS asset_resources_resource_session_idx
+                ON asset_resources(resource_id, last_seen_session);
+            CREATE INDEX IF NOT EXISTS asset_resources_session_idx
+                ON asset_resources(last_seen_session);
+            CREATE INDEX IF NOT EXISTS logical_assets_session_idx
+                ON logical_assets(last_seen_session);
+            CREATE INDEX IF NOT EXISTS exact_duplicate_groups_session_idx
+                ON exact_duplicate_groups(last_seen_session);
+            CREATE INDEX IF NOT EXISTS exact_duplicate_members_session_idx
+                ON exact_duplicate_members(last_seen_session, group_id);
+            CREATE INDEX IF NOT EXISTS sidecar_links_session_idx
+                ON sidecar_links(last_seen_session);
             CREATE INDEX IF NOT EXISTS provider_objects_asset_idx
                 ON provider_objects(asset_id);
             """
@@ -1495,6 +1547,540 @@ final class SQLiteCatalog {
             }
             return rows
         }
+    }
+
+    func latestReusableActiveRootsScanReport() throws -> ScanReport? {
+        let activeRoots = try rootRegistryRows(includeHistory: false)
+            .filter { $0.state == .active }
+        guard !activeRoots.isEmpty else { return nil }
+
+        let activeRootIDs = Set(activeRoots.map(\.rootID))
+        let sessions = try cachedCompletedScanSessions(limit: 32)
+        for session in sessions where session.rootCount == activeRoots.count {
+            let observation = try cachedSessionObservationSummary(sessionID: session.sessionID)
+            guard observation.resourceCount == session.resourceCount,
+                  observation.rootIDs == activeRootIDs
+            else {
+                continue
+            }
+            return try cachedScanReport(session: session, roots: activeRoots)
+        }
+        return nil
+    }
+
+    private func cachedCompletedScanSessions(limit: Int) throws -> [CachedScanSessionRow] {
+        try withStatement(
+            """
+            SELECT id, started_at, completed_at, root_count, resource_count, asset_count, warning_count
+            FROM scan_sessions
+            WHERE status = 'complete' AND completed_at IS NOT NULL
+            ORDER BY completed_at DESC
+            LIMIT ?
+            """,
+            bindings: [.int64(Int64(limit))]
+        ) { statement in
+            var rows: [CachedScanSessionRow] = []
+            while true {
+                let result = sqlite3_step(statement)
+                if result == SQLITE_DONE { break }
+                guard result == SQLITE_ROW,
+                      let idText = sqlite3_column_text(statement, 0)
+                else {
+                    throw sqliteError(sql: "SELECT reusable scan sessions")
+                }
+                rows.append(CachedScanSessionRow(
+                    sessionID: String(cString: idText),
+                    startedAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 1)),
+                    completedAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 2)),
+                    rootCount: Int(sqlite3_column_int64(statement, 3)),
+                    resourceCount: Int(sqlite3_column_int64(statement, 4)),
+                    assetCount: Int(sqlite3_column_int64(statement, 5)),
+                    warningCount: Int(sqlite3_column_int64(statement, 6))
+                ))
+            }
+            return rows
+        }
+    }
+
+    private func cachedSessionObservationSummary(
+        sessionID: String
+    ) throws -> (resourceCount: Int, rootIDs: Set<String>) {
+        try withStatement(
+            """
+            SELECT root_id, COUNT(*)
+            FROM resources
+            WHERE last_seen_session = ?
+            GROUP BY root_id
+            """,
+            bindings: [.text(sessionID)]
+        ) { statement in
+            var count = 0
+            var rootIDs = Set<String>()
+            while true {
+                let result = sqlite3_step(statement)
+                if result == SQLITE_DONE { break }
+                guard result == SQLITE_ROW,
+                      let rootText = sqlite3_column_text(statement, 0)
+                else {
+                    throw sqliteError(sql: "SELECT reusable scan observation summary")
+                }
+                rootIDs.insert(String(cString: rootText))
+                count += Int(sqlite3_column_int64(statement, 1))
+            }
+            return (count, rootIDs)
+        }
+    }
+
+    private func cachedScanReport(
+        session: CachedScanSessionRow,
+        roots rootRows: [RootRegistryRow]
+    ) throws -> ScanReport {
+        let rootsByID = Dictionary(uniqueKeysWithValues: rootRows.map { ($0.rootID, $0) })
+        let resourceRows = try cachedScanResources(
+            sessionID: session.sessionID,
+            rootsByID: rootsByID
+        )
+        guard resourceRows.count == session.resourceCount else {
+            throw CatalogError.invalidCatalogValue(
+                "The cached scan snapshot is incomplete; run duplicate-review with --refresh."
+            )
+        }
+
+        let resources = resourceRows.map(\.report)
+        let resourceRowsByID = Dictionary(uniqueKeysWithValues: resourceRows.map {
+            ($0.report.resourceID, $0)
+        })
+        let duplicateGroups = try cachedDuplicateGroups(
+            sessionID: session.sessionID,
+            resourcesByID: resourceRowsByID
+        )
+        let livePairStatus = try cachedLiveAssetPairStatus(sessionID: session.sessionID)
+        let livePhotos = cachedLivePhotoReports(
+            resources: resourceRows,
+            pairStatusByAssetID: livePairStatus
+        )
+
+        let occurrencesByRoot = Dictionary(grouping: livePhotos.flatMap(\.occurrences), by: \.rootID)
+        let cachedRoots = try rootRows.map { root -> RootScanReport in
+            let rootResources = resourceRows.filter { $0.report.rootID == root.rootID }
+            let rootOccurrences = occurrencesByRoot[root.rootID] ?? []
+            let recognizedSidecars = try cachedRecognizedSidecarCount(
+                sessionID: session.sessionID,
+                rootID: root.rootID
+            )
+            let sidecarCount = rootResources.count { $0.report.mediaKind == .sidecar }
+            return RootScanReport(
+                rootID: root.rootID,
+                label: root.label,
+                kind: root.kind,
+                provenance: root.provenance,
+                canonicalPath: root.canonicalPath,
+                stableMarkerKey: try queryText(
+                    "SELECT marker_key FROM root_markers WHERE root_id = ?",
+                    bindings: [.text(root.rootID)]
+                ),
+                mediaFileCount: rootResources.count {
+                    $0.report.mediaKind == .image || $0.report.mediaKind == .video
+                },
+                completeLivePhotos: rootOccurrences.count { $0.status == .complete },
+                stillOnlyLiveResources: rootOccurrences
+                    .filter { $0.status == .stillOnly }
+                    .reduce(0) { $0 + $1.resources.count },
+                videoOnlyLiveResources: rootOccurrences
+                    .filter { $0.status == .videoOnly }
+                    .reduce(0) { $0 + $1.resources.count },
+                standaloneImages: rootResources.count { $0.report.role == .standaloneImage },
+                standaloneVideos: rootResources.count { $0.report.role == .standaloneVideo },
+                sidecars: sidecarCount,
+                recognizedSidecars: recognizedSidecars,
+                unrecognizedSidecars: max(sidecarCount - recognizedSidecars, 0),
+                metadataProbeFailures: rootResources.count { $0.metadataProbeFailed },
+                sourceFolderSemanticsCaptured: root.provenance == .googleTakeout || root.kind == .archive
+            )
+        }
+        .sorted { ($0.label, $0.rootID) < ($1.label, $1.rootID) }
+
+        return ScanReport(
+            sessionID: session.sessionID,
+            startedAt: session.startedAt,
+            completedAt: session.completedAt,
+            catalogPath: url.path,
+            summary: ScanSummary(
+                rootCount: cachedRoots.count,
+                resourceCount: resources.count,
+                logicalAssetCount: session.assetCount,
+                livePhotoAssetCount: livePhotos.count,
+                exactDuplicateGroupCount: duplicateGroups.count,
+                eventSuggestionCount: 0,
+                warningCount: session.warningCount,
+                reusedExactHashCount: 0
+            ),
+            roots: cachedRoots,
+            resources: resources,
+            livePhotos: livePhotos,
+            exactDuplicateGroups: duplicateGroups,
+            eventSuggestions: [],
+            recognizedSidecars: [],
+            notices: [],
+            warnings: [],
+            filesModified: false
+        )
+    }
+
+    private func cachedScanResources(
+        sessionID: String,
+        rootsByID: [String: RootRegistryRow]
+    ) throws -> [CachedScanResourceRow] {
+        try withStatement(
+            """
+            SELECT r.id, ar.asset_id, r.root_id, r.relative_path, r.file_name,
+                   r.media_kind, ar.role, r.byte_size,
+                   r.capture_local_time, r.capture_utc_offset, r.capture_instant,
+                   r.capture_source, r.capture_confidence, r.exact_hash,
+                   rlms.status, r.metadata_probe_failed
+            FROM resources r
+            LEFT JOIN asset_resources ar
+              ON ar.resource_id = r.id AND ar.last_seen_session = ?
+            LEFT JOIN resource_live_metadata_status rlms
+              ON rlms.resource_id = r.id AND rlms.last_seen_session = ?
+            WHERE r.last_seen_session = ?
+            ORDER BY r.root_id, r.relative_path
+            """,
+            bindings: [.text(sessionID), .text(sessionID), .text(sessionID)]
+        ) { statement in
+            var rows: [CachedScanResourceRow] = []
+            while true {
+                let result = sqlite3_step(statement)
+                if result == SQLITE_DONE { break }
+                guard result == SQLITE_ROW,
+                      let resourceText = sqlite3_column_text(statement, 0),
+                      let rootText = sqlite3_column_text(statement, 2),
+                      let relativeText = sqlite3_column_text(statement, 3),
+                      let fileNameText = sqlite3_column_text(statement, 4),
+                      let mediaText = sqlite3_column_text(statement, 5),
+                      let mediaKind = MediaKind(rawValue: String(cString: mediaText))
+                else {
+                    throw sqliteError(sql: "SELECT reusable scan resources")
+                }
+
+                let rootID = String(cString: rootText)
+                guard let root = rootsByID[rootID] else {
+                    throw CatalogError.invalidCatalogValue(
+                        "The cached scan references a root that is no longer active."
+                    )
+                }
+                let role: ResourceRole
+                if let roleText = sqlite3_column_text(statement, 6),
+                   let parsedRole = ResourceRole(rawValue: String(cString: roleText)) {
+                    role = parsedRole
+                } else if mediaKind == .sidecar {
+                    role = .sidecar
+                } else {
+                    throw CatalogError.invalidCatalogValue(
+                        "The cached scan is missing a media resource role."
+                    )
+                }
+
+                let captureTime: CaptureTime?
+                if let sourceText = sqlite3_column_text(statement, 11),
+                   let confidenceText = sqlite3_column_text(statement, 12),
+                   let source = CaptureTimeSource(rawValue: String(cString: sourceText)),
+                   let confidence = CaptureTimeConfidence(rawValue: String(cString: confidenceText)) {
+                    captureTime = CaptureTime(
+                        localTimestamp: sqlite3_column_text(statement, 8)
+                            .map { String(cString: $0) },
+                        utcOffset: sqlite3_column_text(statement, 9)
+                            .map { String(cString: $0) },
+                        instant: sqlite3_column_type(statement, 10) == SQLITE_NULL
+                            ? nil
+                            : Date(timeIntervalSince1970: sqlite3_column_double(statement, 10)),
+                        source: source,
+                        confidence: confidence
+                    )
+                } else {
+                    captureTime = nil
+                }
+
+                let exactHash: Data?
+                if sqlite3_column_type(statement, 13) != SQLITE_NULL,
+                   let bytes = sqlite3_column_blob(statement, 13) {
+                    exactHash = Data(bytes: bytes, count: Int(sqlite3_column_bytes(statement, 13)))
+                } else {
+                    exactHash = nil
+                }
+                let timedStatus = sqlite3_column_text(statement, 14)
+                    .flatMap { LivePhotoTimedMetadataStatus(rawValue: String(cString: $0)) }
+                let assetID = sqlite3_column_text(statement, 1).map { String(cString: $0) }
+                let report = ScannedResourceReport(
+                    resourceID: String(cString: resourceText),
+                    assetID: assetID,
+                    rootID: rootID,
+                    rootLabel: root.label,
+                    relativePath: String(cString: relativeText),
+                    fileName: String(cString: fileNameText),
+                    mediaKind: mediaKind,
+                    role: role,
+                    byteSize: sqlite3_column_int64(statement, 7),
+                    captureTime: captureTime
+                )
+                rows.append(CachedScanResourceRow(
+                    report: report,
+                    exactHash: exactHash,
+                    timedMetadataStatus: timedStatus,
+                    metadataProbeFailed: sqlite3_column_int64(statement, 15) != 0
+                ))
+            }
+            return rows
+        }
+    }
+
+    private func cachedDuplicateGroups(
+        sessionID: String,
+        resourcesByID: [String: CachedScanResourceRow]
+    ) throws -> [ExactDuplicateGroupReport] {
+        try withStatement(
+            """
+            SELECT edg.id, edg.byte_size, edm.resource_id
+            FROM exact_duplicate_groups edg
+            JOIN exact_duplicate_members edm ON edm.group_id = edg.id
+            WHERE edg.last_seen_session = ? AND edm.last_seen_session = ?
+            ORDER BY edg.sequence_number, edm.resource_id
+            """,
+            bindings: [.text(sessionID), .text(sessionID)]
+        ) { statement in
+            var order: [String] = []
+            var byteSizes: [String: Int64] = [:]
+            var members: [String: [ResourceReference]] = [:]
+            while true {
+                let result = sqlite3_step(statement)
+                if result == SQLITE_DONE { break }
+                guard result == SQLITE_ROW,
+                      let groupText = sqlite3_column_text(statement, 0),
+                      let resourceText = sqlite3_column_text(statement, 2)
+                else {
+                    throw sqliteError(sql: "SELECT reusable exact duplicate groups")
+                }
+                let groupID = String(cString: groupText)
+                let resourceID = String(cString: resourceText)
+                guard let row = resourcesByID[resourceID] else {
+                    throw CatalogError.invalidCatalogValue(
+                        "The cached duplicate membership no longer matches the scan snapshot."
+                    )
+                }
+                if members[groupID] == nil { order.append(groupID) }
+                byteSizes[groupID] = sqlite3_column_int64(statement, 1)
+                members[groupID, default: []].append(resourceReference(row.report))
+            }
+            return order.compactMap { groupID in
+                guard let byteSize = byteSizes[groupID], let groupMembers = members[groupID] else {
+                    return nil
+                }
+                return ExactDuplicateGroupReport(
+                    groupID: groupID,
+                    byteSize: byteSize,
+                    members: groupMembers.sorted(by: cachedResourceReferenceSort)
+                )
+            }
+        }
+    }
+
+    private func cachedLiveAssetPairStatus(
+        sessionID: String
+    ) throws -> [String: LivePhotoOccurrenceStatus] {
+        try withStatement(
+            """
+            SELECT id, pair_status
+            FROM logical_assets
+            WHERE last_seen_session = ? AND kind = 'live_photo'
+            """,
+            bindings: [.text(sessionID)]
+        ) { statement in
+            var values: [String: LivePhotoOccurrenceStatus] = [:]
+            while true {
+                let result = sqlite3_step(statement)
+                if result == SQLITE_DONE { break }
+                guard result == SQLITE_ROW,
+                      let idText = sqlite3_column_text(statement, 0),
+                      let statusText = sqlite3_column_text(statement, 1),
+                      let status = LivePhotoOccurrenceStatus(rawValue: String(cString: statusText))
+                else {
+                    continue
+                }
+                values[String(cString: idText)] = status
+            }
+            return values
+        }
+    }
+
+    private func cachedLivePhotoReports(
+        resources: [CachedScanResourceRow],
+        pairStatusByAssetID: [String: LivePhotoOccurrenceStatus]
+    ) -> [LivePhotoAssetReport] {
+        let liveRows = resources.filter {
+            ($0.report.role == .photo || $0.report.role == .pairedVideo)
+                && $0.report.assetID != nil
+        }
+        let byAsset = Dictionary(grouping: liveRows) { $0.report.assetID! }
+
+        return byAsset.map { assetID, assetRows in
+            let byRoot = Dictionary(grouping: assetRows) { $0.report.rootID }
+            let occurrences = byRoot.values
+                .flatMap { cachedPartitionLiveOccurrences($0) }
+                .map { occurrenceRows -> LivePhotoOccurrenceReport in
+                    let first = occurrenceRows[0].report
+                    let stillCount = occurrenceRows.count { $0.report.role == .photo }
+                    let videoCount = occurrenceRows.count { $0.report.role == .pairedVideo }
+                    return LivePhotoOccurrenceReport(
+                        rootID: first.rootID,
+                        rootLabel: first.rootLabel,
+                        status: cachedLiveOccurrenceStatus(
+                            occurrenceRows,
+                            allAssetRows: assetRows,
+                            aggregatePairStatus: pairStatusByAssetID[assetID]
+                        ),
+                        stillCount: stillCount,
+                        videoCount: videoCount,
+                        resources: occurrenceRows
+                            .map { resourceReference($0.report) }
+                            .sorted(by: cachedResourceReferenceSort)
+                    )
+                }
+                .sorted {
+                    let lhsPath = $0.resources.map(\.relativePath).sorted().first ?? ""
+                    let rhsPath = $1.resources.map(\.relativePath).sorted().first ?? ""
+                    return ($0.rootID, lhsPath) < ($1.rootID, rhsPath)
+                }
+            return LivePhotoAssetReport(
+                assetID: assetID,
+                occurrenceCount: occurrences.count,
+                stillCopyCount: assetRows.count { $0.report.role == .photo },
+                videoCopyCount: assetRows.count { $0.report.role == .pairedVideo },
+                occurrences: occurrences
+            )
+        }
+        .sorted { $0.assetID < $1.assetID }
+    }
+
+    private func cachedPartitionLiveOccurrences(
+        _ resources: [CachedScanResourceRow]
+    ) -> [[CachedScanResourceRow]] {
+        let byDirectory = Dictionary(grouping: resources) {
+            ($0.report.relativePath as NSString).deletingLastPathComponent
+        }
+        var occurrences: [[CachedScanResourceRow]] = []
+        for directoryRows in byDirectory.values {
+            let byStem = Dictionary(grouping: directoryRows) {
+                ((($0.report.relativePath as NSString).lastPathComponent) as NSString)
+                    .deletingPathExtension
+                    .lowercased()
+            }
+            var consumed = Set<String>()
+            for stemRows in byStem.values {
+                let stills = stemRows.filter { $0.report.role == .photo }
+                let videos = stemRows.filter { $0.report.role == .pairedVideo }
+                guard stills.count == 1, videos.count == 1 else { continue }
+                let pair = [stills[0], videos[0]].sorted(by: cachedResourceRowSort)
+                occurrences.append(pair)
+                consumed.formUnion(pair.map { $0.report.resourceID })
+            }
+            let remainder = directoryRows
+                .filter { !consumed.contains($0.report.resourceID) }
+                .sorted(by: cachedResourceRowSort)
+            if !remainder.isEmpty { occurrences.append(remainder) }
+        }
+        return occurrences.sorted {
+            let lhs = $0.first?.report.relativePath ?? ""
+            let rhs = $1.first?.report.relativePath ?? ""
+            return lhs < rhs
+        }
+    }
+
+    private func cachedLiveOccurrenceStatus(
+        _ occurrence: [CachedScanResourceRow],
+        allAssetRows: [CachedScanResourceRow],
+        aggregatePairStatus: LivePhotoOccurrenceStatus?
+    ) -> LivePhotoOccurrenceStatus {
+        let stillCount = occurrence.count { $0.report.role == .photo }
+        let videos = occurrence.filter { $0.report.role == .pairedVideo }
+        let countStatus = AssetAssembler.occurrenceStatus(
+            stillCount: stillCount,
+            videoCount: videos.count
+        )
+        guard countStatus == .complete, let video = videos.first else {
+            return countStatus
+        }
+
+        if let timedStatus = video.timedMetadataStatus {
+            switch timedStatus {
+            case .valid: return .complete
+            case .missing: return .stillImageTimeMissing
+            case .invalid: return .stillImageTimeInvalid
+            case .unreadable, .notApplicable: return .stillImageTimeUnreadable
+            }
+        }
+
+        if let aggregatePairStatus, aggregatePairStatus != .complete {
+            switch aggregatePairStatus {
+            case .stillImageTimeMissing, .stillImageTimeInvalid, .stillImageTimeUnreadable:
+                return aggregatePairStatus
+            default:
+                break
+            }
+        }
+
+        if aggregatePairStatus == .complete {
+            let allVideos = allAssetRows.filter { $0.report.role == .pairedVideo }
+            let hashes = allVideos.compactMap(\.exactHash)
+            if hashes.count == allVideos.count, Set(hashes).count == 1 {
+                return .complete
+            }
+        }
+
+        // Catalogs created before resource_live_metadata_status existed cannot
+        // identify which non-identical paired-video variant carried a valid
+        // still-image-time marker. Keep that occurrence out of automatic cleanup.
+        return .stillImageTimeUnreadable
+    }
+
+    private func cachedRecognizedSidecarCount(
+        sessionID: String,
+        rootID: String
+    ) throws -> Int {
+        Int(try queryText(
+            """
+            SELECT CAST(COUNT(*) AS TEXT)
+            FROM sidecar_links sl
+            JOIN resources r ON r.id = sl.sidecar_resource_id
+            WHERE sl.last_seen_session = ? AND r.root_id = ? AND r.last_seen_session = ?
+            """,
+            bindings: [.text(sessionID), .text(rootID), .text(sessionID)]
+        ) ?? "0") ?? 0
+    }
+
+    private func resourceReference(_ resource: ScannedResourceReport) -> ResourceReference {
+        ResourceReference(
+            rootID: resource.rootID,
+            rootLabel: resource.rootLabel,
+            relativePath: resource.relativePath,
+            role: resource.role,
+            byteSize: resource.byteSize
+        )
+    }
+
+    private func cachedResourceRowSort(
+        _ lhs: CachedScanResourceRow,
+        _ rhs: CachedScanResourceRow
+    ) -> Bool {
+        (lhs.report.rootLabel, lhs.report.relativePath)
+            < (rhs.report.rootLabel, rhs.report.relativePath)
+    }
+
+    private func cachedResourceReferenceSort(
+        _ lhs: ResourceReference,
+        _ rhs: ResourceReference
+    ) -> Bool {
+        (lhs.rootLabel, lhs.relativePath, lhs.role.rawValue)
+            < (rhs.rootLabel, rhs.relativePath, rhs.role.rawValue)
     }
 
     func removeRootFromCurrentCatalog(rootID: String) throws -> Int {

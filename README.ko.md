@@ -142,17 +142,24 @@ swift run photoarchive plan \
   --takeout "~/Pictures/Takeout"
 ```
 
-media를 복사하지 않고 사람이 Finder에서 AUTO exact 결정을 검토하려면 `duplicate-review`로 symbolic link만 들어 있는 local-private review workspace를 만들 수 있습니다. 각 group은 `KEEPER`, `CANDIDATE`, `locations.txt`로 구성되며 원본 media는 move/rename/delete/copy하지 않습니다. `--candidate-root`로 특정 등록 root에서 정리될 후보만 좁힐 수 있습니다.
+media를 복사하지 않고 사람이 Finder에서 AUTO exact 결정을 검토하려면 `duplicate-review`로 symbolic link만 들어 있는 local-private review workspace를 만들 수 있습니다. 각 group은 `KEEPER`, `CANDIDATE`, `locations.txt`로 구성되며 원본 media는 move/rename/delete/copy하지 않습니다. 기본 동작은 현재 active root registry와 여전히 일치하는 가장 최근 complete scan snapshot을 재사용하므로, 이미 계산한 review를 다시 열기 위해 전체 media library를 다시 읽지 않습니다. `--candidate-root`로 특정 등록 root에서 정리될 후보만 좁힐 수 있습니다. 실제 library가 바뀌어 fresh scan이 필요할 때만 `--refresh`를 사용하며, ROOT를 따로 주지 않으면 active 등록 root를 다시 scan합니다.
 
 ```bash
 swift run photoarchive duplicate-review \
   --output "~/Desktop/PhotoArchiveKit-Duplicate-Review" \
-  --candidate-root "~/Pictures" \
-  --local "~/Pictures" \
-  --takeout "~/Pictures/Takeout"
+  --candidate-root "~/Pictures"
 ```
 
-AI agent는 `scan`, `archive-coverage`, `plan`, `organize-plan`, `archive-index`, `archive-plan`, `archive-copy`, `organize`, `quarantine`, `restore-quarantine`, `cleanup-empty-dirs`와 `catalog` command의 report에서 `--agent-json`을 사용해야 하며, path를 포함할 수 있는 local diagnostic `--json`은 agent에 전달하지 않습니다. persisted archive-plan, archive-copy manifest, archive-root inventory, JSONL snapshot 파일 자체는 안전한 replay/disaster recovery에 local-private path·filename·catalog path·marker binding 또는 integrity precondition이 필요하므로 **agent-safe가 아닙니다**.
+library가 실제로 바뀐 뒤 먼저 새 scan을 하고 싶다면:
+
+```bash
+swift run photoarchive duplicate-review \
+  --refresh \
+  --output "~/Desktop/PhotoArchiveKit-Duplicate-Review-Fresh" \
+  --candidate-root "~/Pictures"
+```
+
+AI agent는 `scan`, `archive-coverage`, `plan`, `duplicate-review`, `organize-plan`, `archive-index`, `archive-plan`, `archive-copy`, `organize`, `quarantine`, `restore-quarantine`, `cleanup-empty-dirs`와 `catalog` command의 report에서 `--agent-json`을 사용해야 하며, path를 포함할 수 있는 local diagnostic `--json`은 agent에 전달하지 않습니다. persisted archive-plan, archive-copy manifest, archive-root inventory, JSONL snapshot 파일 자체는 안전한 replay/disaster recovery에 local-private path·filename·catalog path·marker binding 또는 integrity precondition이 필요하므로 **agent-safe가 아닙니다**.
 
 media를 옮기지 않고 현재 Mac/Takeout/HDD coverage를 확인합니다.
 

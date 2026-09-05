@@ -122,6 +122,32 @@ struct PhotoArchiveSelfTest {
             })
         )
         let second = try await scanner.scan(roots: roots)
+        let mainCatalogURL = temporary.appendingPathComponent("catalog.sqlite3")
+        _ = try RootRegistry.add(
+            url: rootA,
+            kind: .reference,
+            provenance: .localLibrary,
+            catalogURL: mainCatalogURL
+        )
+        _ = try RootRegistry.add(
+            url: rootB,
+            kind: .importSource,
+            provenance: .googleTakeout,
+            catalogURL: mainCatalogURL
+        )
+        guard let cachedSecond = try scanner.latestReusableActiveRootsScanReport() else {
+            throw SelfTestFailure("latest complete active-root scan should be reusable from the catalog")
+        }
+        try require(
+            cachedSecond.sessionID == second.sessionID
+                && cachedSecond.summary.resourceCount == second.summary.resourceCount,
+            "cached active-root scan should reproduce the latest complete observation snapshot"
+        )
+        try require(
+            ReconciliationPlanner.makePlan(from: cachedSecond).summary
+                == ReconciliationPlanner.makePlan(from: second).summary,
+            "cached active-root scan should preserve reconciliation decisions"
+        )
 
         let takeoutSidecarRoot = temporary.appendingPathComponent("TakeoutSidecar", isDirectory: true)
         try fileManager.createDirectory(at: takeoutSidecarRoot, withIntermediateDirectories: true)

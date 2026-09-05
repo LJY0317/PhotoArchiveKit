@@ -649,6 +649,7 @@ struct PhotoArchiveCLI {
         var archivePlanOutputURL: URL?
         var duplicateReviewOutputURL: URL?
         var duplicateReviewCandidateRoot: String?
+        var duplicateReviewRefresh = false
         var applyMutation = false
         var roots: [ScanRoot] = []
 
@@ -713,6 +714,11 @@ struct PhotoArchiveCLI {
                     throw CLIError("--candidate-root is only valid with duplicate-review.")
                 }
                 duplicateReviewCandidateRoot = try value(after: argument, at: &index, in: arguments)
+            case "--refresh":
+                guard mode == .duplicateReview else {
+                    throw CLIError("--refresh is only valid with duplicate-review.")
+                }
+                duplicateReviewRefresh = true
             case "--apply":
                 guard mode == .quarantine || mode == .organize else {
                     throw CLIError("--apply is only valid with the quarantine or organize command.")
@@ -781,8 +787,27 @@ struct PhotoArchiveCLI {
             index += 1
         }
 
-        guard !roots.isEmpty else {
-            throw CLIError("No source roots were supplied. Run 'photoarchive scan --help'.")
+        if mode == .duplicateReview && !duplicateReviewRefresh && !roots.isEmpty {
+            throw CLIError(
+                "duplicate-review uses the latest reusable active-root catalog snapshot by default. "
+                    + "Remove ROOT arguments, or add --refresh to perform a fresh scan."
+            )
+        }
+        if mode == .duplicateReview && duplicateReviewRefresh && roots.isEmpty {
+            roots = try RootRegistry.list(catalogURL: catalogURL)
+                .filter { $0.state == .active }
+                .map {
+                    ScanRoot(
+                        url: fileURL($0.canonicalPath),
+                        kind: $0.kind,
+                        provenance: $0.provenance
+                    )
+                }
+        }
+        if mode != .duplicateReview || duplicateReviewRefresh {
+            guard !roots.isEmpty else {
+                throw CLIError("No source roots were supplied. Run 'photoarchive scan --help'.")
+            }
         }
         if preserveNameIfDateUntrusted && !singletonLeafOnly {
             throw CLIError("--preserve-name-if-date-untrusted requires --singleton-leaf-only.")
@@ -795,6 +820,41 @@ struct PhotoArchiveCLI {
         }
         if outputJSON && outputAgentJSON {
             throw CLIError("Use either --json or --agent-json, not both.")
+        }
+
+        if mode == .duplicateReview && !duplicateReviewRefresh {
+            guard computeExactDuplicates else {
+                throw CLIError("duplicate-review requires exact duplicate comparison.")
+            }
+            guard let duplicateReviewOutputURL else {
+                throw CLIError("duplicate-review requires --output PATH.")
+            }
+            let scanner = try ArchiveScanner(catalogURL: catalogURL)
+            guard let report = try scanner.latestReusableActiveRootsScanReport() else {
+                throw CLIError(
+                    "No reusable complete scan snapshot matches the currently active roots. "
+                        + "Run duplicate-review with --refresh once to refresh the catalog."
+                )
+            }
+            let plan = ReconciliationPlanner.makePlan(from: report)
+            let review = try DuplicateReviewWorkspace.create(
+                report: report,
+                plan: plan,
+                outputURL: duplicateReviewOutputURL,
+                candidateRootTarget: duplicateReviewCandidateRoot
+            )
+            if outputAgentJSON {
+                try printJSON(AgentSafeDuplicateReviewWorkspaceReport(report: review))
+            } else if outputJSON {
+                try printJSON(review)
+            } else {
+                print("Created local Finder review workspace from the latest reusable catalog snapshot: \(review.workspacePath)")
+                print("Review groups: \(review.itemCount)")
+                print("Keeper links: \(review.keeperLinkCount)")
+                print("Candidate links: \(review.candidateLinkCount)")
+                print("Original media files were not modified. Use --refresh to rescan active roots first.")
+            }
+            return
         }
 
         let progressRenderer = ScanProgressRenderer(enabled: showProgress)
@@ -1425,7 +1485,7 @@ struct PhotoArchiveCLI {
               photoarchive scan [options] ROOT...
               photoarchive archive-coverage [options] ROOT...
               photoarchive plan [options] ROOT...
-              photoarchive duplicate-review --output PATH [--candidate-root ROOT_ID_OR_PATH] [options] ROOT...
+              photoarchive duplicate-review --output PATH [--candidate-root ROOT_ID_OR_PATH] [--refresh] [options] [ROOT...]
               photoarchive organize-plan [options] ROOT...
               photoarchive archive-plan --to PATH --output PLAN [options] ROOT...
               photoarchive archive-copy [--apply] [--to PATH] [--bind-root ROOT_ID=PATH] PLAN
@@ -1656,7 +1716,7 @@ struct PhotoArchiveCLI {
         } else if command == "organize-plan" {
             mutationOptions = "  --singleton-leaf-only      Limit to clean nested folders containing exactly one planned logical asset\n  --preserve-name-if-date-untrusted\n                              With --singleton-leaf-only, propose flattening untrusted-date standalone camera files without renaming them\n"
         } else if command == "duplicate-review" {
-            mutationOptions = "  --output PATH              New local-private Finder review workspace (required)\n  --candidate-root VALUE     Include only AUTO items whose candidate copies are all in this root ID/path\n"
+            mutationOptions = "  --output PATH              New local-private Finder review workspace (required)\n  --candidate-root VALUE     Include only AUTO items whose candidate copies are all in this root ID/path\n  --refresh                  Fresh-scan active registered roots (or explicitly supplied ROOTs) before review\n"
         } else {
             mutationOptions = ""
         }
@@ -1692,11 +1752,13 @@ struct PhotoArchiveCLI {
             """
         } else if command == "duplicate-review" {
             operationNotes = """
-            duplicate-review performs a current exact scan, builds the reconciliation plan,
-            and writes a local-private Finder workspace containing symbolic links grouped into
-            KEEPER and CANDIDATE folders plus a local locations.txt. It never copies, moves,
-            renames, or deletes original media. The workspace is for human review only and is
-            intentionally not agent-safe because it contains local filenames and paths.
+            duplicate-review normally reuses the latest complete catalog snapshot whose roots
+            still match the active root registry, so opening a previously computed exact review
+            does not reread the whole media library. --refresh performs a fresh scan first.
+            The command writes a local-private Finder workspace containing symbolic links grouped
+            into KEEPER and CANDIDATE folders plus a local locations.txt. It never copies, moves,
+            renames, or deletes original media. Cached review is not mutation authority; quarantine
+            must still freshly verify candidate bytes before moving anything.
             """
         } else {
             operationNotes = ""

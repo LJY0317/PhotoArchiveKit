@@ -142,17 +142,24 @@ swift run photoarchive plan \
   --takeout "~/Pictures/Takeout"
 ```
 
-For local human review without copying media, `duplicate-review` can materialize the AUTO exact decisions as a Finder-friendly workspace of symbolic links. Each group contains `KEEPER` and `CANDIDATE` folders plus a local-private `locations.txt`; originals are not moved, renamed, deleted, or duplicated. `--candidate-root` can narrow the workspace to cleanup candidates from one registered root.
+For local human review without copying media, `duplicate-review` can materialize the AUTO exact decisions as a Finder-friendly workspace of symbolic links. Each group contains `KEEPER` and `CANDIDATE` folders plus a local-private `locations.txt`; originals are not moved, renamed, deleted, or duplicated. By default it reuses the latest complete scan snapshot that still matches the active root registry, so opening an already-computed review does not reread the full media library. `--candidate-root` can narrow the workspace to cleanup candidates from one registered root. Use `--refresh` only when you want a fresh media scan first; with no explicit ROOT arguments, `--refresh` scans the active registered roots.
 
 ```bash
 swift run photoarchive duplicate-review \
   --output "~/Desktop/PhotoArchiveKit-Duplicate-Review" \
-  --candidate-root "~/Pictures" \
-  --local "~/Pictures" \
-  --takeout "~/Pictures/Takeout"
+  --candidate-root "~/Pictures"
 ```
 
-For an AI agent, use `--agent-json` with `scan`, `archive-coverage`, `plan`, `organize-plan`, `archive-index`, `archive-plan`, `archive-copy`, `organize`, `quarantine`, `restore-quarantine`, `cleanup-empty-dirs`, or the `catalog` command reports; local diagnostic `--json` can contain paths. Persisted archive-plan, archive-copy manifest, archive-root inventory, and JSONL snapshot files themselves are **not** agent-safe because safe replay/disaster recovery requires local-private paths, filenames, catalog paths, marker bindings, or integrity preconditions.
+Refresh first when the library has materially changed:
+
+```bash
+swift run photoarchive duplicate-review \
+  --refresh \
+  --output "~/Desktop/PhotoArchiveKit-Duplicate-Review-Fresh" \
+  --candidate-root "~/Pictures"
+```
+
+For an AI agent, use `--agent-json` with `scan`, `archive-coverage`, `plan`, `duplicate-review`, `organize-plan`, `archive-index`, `archive-plan`, `archive-copy`, `organize`, `quarantine`, `restore-quarantine`, `cleanup-empty-dirs`, or the `catalog` command reports; local diagnostic `--json` can contain paths. Persisted archive-plan, archive-copy manifest, archive-root inventory, and JSONL snapshot files themselves are **not** agent-safe because safe replay/disaster recovery requires local-private paths, filenames, catalog paths, marker bindings, or integrity preconditions.
 
 Check current Mac/Takeout/HDD coverage without moving media:
 

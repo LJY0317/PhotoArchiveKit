@@ -118,6 +118,9 @@ public enum ReconciliationPlanner {
             (CanonicalResourceKey(rootID: $0.rootID, relativePath: $0.relativePath), $0)
         })
         let duplicateGroupByResource = duplicateGroupIndex(report.exactDuplicateGroups)
+        let duplicateGroupsByID = Dictionary(uniqueKeysWithValues: report.exactDuplicateGroups.map {
+            ($0.groupID, $0)
+        })
         let liveResourceKeys = Set(
             report.livePhotos
                 .flatMap(\.occurrences)
@@ -142,7 +145,8 @@ public enum ReconciliationPlanner {
             report: report,
             rootsByID: rootsByID,
             resourcesByKey: resourcesByKey,
-            duplicateGroupByResource: duplicateGroupByResource
+            duplicateGroupByResource: duplicateGroupByResource,
+            duplicateGroupsByID: duplicateGroupsByID
         ))
 
         drafts.sort { lhs, rhs in
@@ -358,7 +362,8 @@ public enum ReconciliationPlanner {
         report: ScanReport,
         rootsByID: [String: RootScanReport],
         resourcesByKey: [CanonicalResourceKey: ScannedResourceReport],
-        duplicateGroupByResource: [ResourceKey: String]
+        duplicateGroupByResource: [ResourceKey: String],
+        duplicateGroupsByID: [String: ExactDuplicateGroupReport]
     ) -> [DraftItem] {
         var output: [DraftItem] = []
 
@@ -383,7 +388,7 @@ public enum ReconciliationPlanner {
 
             let exactMixedTakeout = takeoutResources.filter { resource in
                 guard let groupID = duplicateGroupByResource[resourceKey(resource)],
-                      let group = report.exactDuplicateGroups.first(where: { $0.groupID == groupID })
+                      let group = duplicateGroupsByID[groupID]
                 else {
                     return false
                 }
@@ -404,10 +409,10 @@ public enum ReconciliationPlanner {
                     return occurrence.resources.allSatisfy { resource in
                         preferredExactCounterpart(
                             for: resource,
-                            report: report,
                             rootsByID: rootsByID,
                             resourcesByKey: resourcesByKey,
-                            duplicateGroupByResource: duplicateGroupByResource
+                            duplicateGroupByResource: duplicateGroupByResource,
+                            duplicateGroupsByID: duplicateGroupsByID
                         ) != nil
                     }
                 }
@@ -416,10 +421,10 @@ public enum ReconciliationPlanner {
                     let preferred = uniqueResources(safeResources.compactMap { resource in
                         preferredExactCounterpart(
                             for: resource,
-                            report: report,
                             rootsByID: rootsByID,
                             resourcesByKey: resourcesByKey,
-                            duplicateGroupByResource: duplicateGroupByResource
+                            duplicateGroupByResource: duplicateGroupByResource,
+                            duplicateGroupsByID: duplicateGroupsByID
                         )
                     })
                     let preferredRootIDs = Set(preferred.map(\.rootID))
@@ -503,13 +508,13 @@ public enum ReconciliationPlanner {
 
     private static func preferredExactCounterpart(
         for resource: ResourceReference,
-        report: ScanReport,
         rootsByID: [String: RootScanReport],
         resourcesByKey: [CanonicalResourceKey: ScannedResourceReport],
-        duplicateGroupByResource: [ResourceKey: String]
+        duplicateGroupByResource: [ResourceKey: String],
+        duplicateGroupsByID: [String: ExactDuplicateGroupReport]
     ) -> ResourceReference? {
         guard let groupID = duplicateGroupByResource[resourceKey(resource)],
-              let group = report.exactDuplicateGroups.first(where: { $0.groupID == groupID })
+              let group = duplicateGroupsByID[groupID]
         else {
             return nil
         }
