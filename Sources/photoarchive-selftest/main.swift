@@ -1232,6 +1232,24 @@ struct PhotoArchiveSelfTest {
             preferenceGroup.map { fileManager.fileExists(atPath: $0.appendingPathComponent("comparison.txt").path) } == true,
             "duplicate review should write a local-private metadata comparison summary"
         )
+        if let preferenceGroup {
+            let comparisonText = try String(
+                contentsOf: preferenceGroup.appendingPathComponent("comparison.txt"),
+                encoding: .utf8
+            )
+            try require(
+                comparisonText.contains("PhotoArchiveKit 중복 파일 비교")
+                    && comparisonText.contains("파일 내용 근거")
+                    && comparisonText.contains("남길 후보 선택 이유")
+                    && comparisonText.contains("비교 요약"),
+                "duplicate comparison summary should use Korean user-facing labels"
+            )
+            try require(
+                !comparisonText.contains("embedded capture metadata:")
+                    && !comparisonText.contains("keeper reason:"),
+                "duplicate comparison summary should not retain the old English comparison labels"
+            )
+        }
 
         let localDuplicateLiveReport = syntheticLocalDuplicateLivePhotoReport()
         let localDuplicateLivePlan = ReconciliationPlanner.makePlan(from: localDuplicateLiveReport)

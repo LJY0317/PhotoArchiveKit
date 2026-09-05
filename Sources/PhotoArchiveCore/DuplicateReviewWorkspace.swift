@@ -402,19 +402,19 @@ public enum DuplicateReviewWorkspace {
         fileManager: FileManager
     ) throws {
         var lines: [String] = [
-            "PhotoArchiveKit duplicate comparison",
+            "PhotoArchiveKit 중복 파일 비교",
             "",
-            "status: \(status.rawValue)",
-            "content evidence: EXACT BYTES IDENTICAL for every keeper/candidate resource matched by this exact decision",
-            "embedded metadata: identical for byte-identical matched resources (embedded metadata is part of those bytes)",
-            "important: Finder may show different sizes for the symbolic links in this review folder; that is link-path storage, not media quality or original media size.",
-            "mutation safety: this review evidence is not deletion authority; quarantine must freshly verify bytes again before moving media.",
+            "상태: \(localizedStatus(status))",
+            "파일 내용 근거: 이 exact 중복 판정에서 대응되는 남길 후보/정리 후보 리소스는 바이트 단위로 완전히 동일합니다 (EXACT BYTES IDENTICAL).",
+            "파일 내부 메타데이터: 대응되는 파일은 바이트가 동일하므로 파일 내부에 저장된 메타데이터도 동일합니다.",
+            "중요: Finder가 이 review 폴더의 가상본(심볼릭 링크) 크기를 서로 다르게 표시할 수 있습니다. 이는 링크가 저장하는 대상 경로 길이 차이이며 미디어 화질이나 실제 원본 파일 크기 차이가 아닙니다.",
+            "변경 작업 안전성: 이 review 결과만으로 파일을 삭제하거나 이동하지 않습니다. 실제 quarantine 직전에는 대상 파일의 바이트를 다시 검증합니다.",
             ""
         ]
 
         if item.kind == .livePhotoAsset,
            item.reason == .canonicalLocalLivePhotoOccurrence {
-            lines.append("keeper reason: STRONG — retain the complete Live Photo occurrence; redundant exact-covered resources stay candidates only as an atomic media decision.")
+            lines.append("남길 후보 선택 이유: 강한 근거 — 완전한 Live Photo 조합을 보존합니다. exact 중복으로 확인된 불필요 리소스도 Live Photo 단위를 깨지 않는 범위에서만 정리 후보가 됩니다.")
         } else if item.preferredResources.count == 1,
                   let preferred = item.preferredResources.first {
             let rationales = item.candidateResources.map {
@@ -431,23 +431,26 @@ public enum DuplicateReviewWorkspace {
                 rootsByID: rootsByID,
                 resourcesByKey: scannedResourcesByKey
             )
-            lines.append("keeper reason: \(strength.rawValue.uppercased()) — \(unique.joined(separator: ", "))")
+            let localizedRationales = unique.compactMap {
+                CanonicalKeeperPolicy.PreferenceRationale(rawValue: $0).map(localizedRationale)
+            }
+            lines.append("남길 후보 선택 이유: \(localizedStrength(strength)) — \(localizedRationales.joined(separator: ", "))")
             if rationales.allSatisfy({ $0 == .deterministicTieBreak }) {
-                lines.append("keeper interpretation: EQUIVALENT COPY — PhotoArchiveKit found no provenance-relevant preference in its current policy, so keeper/candidate is only a deterministic tie-break.")
+                lines.append("해석: 사실상 동등한 사본 — PhotoArchiveKit이 현재 검사하는 출처·파일 정보에서는 어느 쪽을 우선할 만한 의미 있는 근거를 찾지 못했습니다. 현재 남길 후보/정리 후보 구분은 결과를 항상 일정하게 만들기 위한 기계적인 동률 해소일 뿐입니다.")
             }
         } else {
-            lines.append("keeper reason: multiple-resource policy decision; inspect the resource rows below.")
+            lines.append("남길 후보 선택 이유: 여러 리소스를 함께 판단한 정책 결과입니다. 아래의 각 리소스 정보를 확인하세요.")
         }
         lines.append("")
-        lines.append("Metadata scope currently compared:")
-        lines.append("- original target byte size")
-        lines.append("- embedded/capture metadata represented by the scan")
-        lines.append("- filename and parent path")
-        lines.append("- filesystem creation date (birth time; weak provenance evidence, not proof of first-ever creation/download)")
-        lines.append("- filesystem modification date")
-        lines.append("- filesystem identity")
-        lines.append("- extended attributes (names and byte values compared locally; values are not printed here)")
-        lines.append("- ACLs, APFS snapshots, backup history, and external cloud/history records are outside this comparison")
+        lines.append("현재 PhotoArchiveKit이 비교하는 메타데이터 범위:")
+        lines.append("- 실제 원본 대상 파일의 바이트 크기")
+        lines.append("- 파일 내부 메타데이터와 scan이 기록한 촬영 시각 근거")
+        lines.append("- 파일명과 부모 폴더 경로")
+        lines.append("- 파일시스템 생성 시각(birth time): 약한 출처 근거일 뿐 최초 생성·다운로드 시각의 증명은 아님")
+        lines.append("- 파일시스템 수정 시각")
+        lines.append("- 파일시스템 파일 식별자")
+        lines.append("- 확장 속성(xattr): 이름과 값의 바이트를 로컬에서 비교하되 값 자체는 이 문서에 출력하지 않음")
+        lines.append("- ACL, APFS snapshot, 백업 이력, 외부 클라우드/서비스 이력은 현재 비교 범위 밖")
         lines.append("")
 
         let preferredFacts = item.preferredResources.compactMap { resource -> (ResourceReference, ReviewFileFacts)? in
@@ -480,17 +483,17 @@ public enum DuplicateReviewWorkspace {
         }
 
         for (index, pair) in preferredFacts.enumerated() {
-            lines.append(contentsOf: factLines(label: "KEEPER \(index + 1)", facts: pair.1))
+            lines.append(contentsOf: factLines(label: "남길 후보 (KEEPER) \(index + 1)", facts: pair.1))
         }
         for (index, pair) in candidateFacts.enumerated() {
-            lines.append(contentsOf: factLines(label: "CANDIDATE \(index + 1)", facts: pair.1))
+            lines.append(contentsOf: factLines(label: "정리 후보 (CANDIDATE) \(index + 1)", facts: pair.1))
         }
 
         if preferredFacts.count == 1, candidateFacts.count == 1 {
-            lines.append("Comparison summary:")
+            lines.append("비교 요약:")
             lines.append(contentsOf: comparisonLines(preferred: preferredFacts[0].1, candidate: candidateFacts[0].1))
         } else {
-            lines.append("Comparison summary: multi-resource group; compare each role above. A complete Live Photo may intentionally contain an additional paired video that has no candidate counterpart.")
+            lines.append("비교 요약: 여러 리소스로 구성된 그룹입니다. 위의 각 역할별 리소스를 함께 확인하세요. 완전한 Live Photo는 정리 후보에 대응 파일이 없는 paired video를 남길 후보 쪽에 의도적으로 더 포함할 수 있습니다.")
         }
 
         try (lines.joined(separator: "\n") + "\n").write(
@@ -536,14 +539,14 @@ public enum DuplicateReviewWorkspace {
     private static func factLines(label: String, facts: ReviewFileFacts) -> [String] {
         [
             "\(label):",
-            "  filename: \(facts.fileName)",
-            "  parent: \(facts.parentRelativePath)",
-            "  original target size: \(facts.byteSize) bytes",
-            "  filesystem created: \(formatDate(facts.creationDate))",
-            "  filesystem modified: \(formatDate(facts.modificationDate))",
-            "  embedded capture: \(formatCaptureTime(facts.captureTime))",
-            "  filesystem identity: \(facts.fileSystemIdentifier ?? "unavailable")",
-            "  extended attributes: \(facts.extendedAttributes.map { String($0.count) } ?? "unavailable")",
+            "  파일명: \(facts.fileName)",
+            "  부모 폴더: \(facts.parentRelativePath)",
+            "  실제 원본 대상 크기: \(facts.byteSize) 바이트",
+            "  파일시스템 생성 시각: \(formatDate(facts.creationDate))",
+            "  파일시스템 수정 시각: \(formatDate(facts.modificationDate))",
+            "  scan 촬영 시각 근거: \(formatCaptureTime(facts.captureTime))",
+            "  파일시스템 식별자: \(facts.fileSystemIdentifier ?? "확인 불가")",
+            "  확장 속성(xattr) 개수: \(facts.extendedAttributes.map { String($0.count) } ?? "확인 불가")",
             ""
         ]
     }
@@ -553,25 +556,26 @@ public enum DuplicateReviewWorkspace {
         candidate: ReviewFileFacts
     ) -> [String] {
         var lines: [String] = []
-        lines.append("- original target size: \(preferred.byteSize == candidate.byteSize ? "same" : "different")")
-        lines.append("- filename: \(preferred.fileName == candidate.fileName ? "same" : "different")")
-        lines.append("- parent path: \(preferred.parentRelativePath == candidate.parentRelativePath ? "same" : "different")")
+        lines.append("- 실제 원본 대상 크기: \(preferred.byteSize == candidate.byteSize ? "동일" : "다름")")
+        lines.append("- 파일명: \(preferred.fileName == candidate.fileName ? "동일" : "다름")")
+        lines.append("- 부모 폴더 경로: \(preferred.parentRelativePath == candidate.parentRelativePath ? "동일" : "다름")")
         let preferredExtension = (preferred.fileName as NSString).pathExtension
         let candidateExtension = (candidate.fileName as NSString).pathExtension
         let extensionComparison: String
         if preferredExtension == candidateExtension {
-            extensionComparison = "same"
+            extensionComparison = "동일"
         } else if preferredExtension.lowercased() == candidateExtension.lowercased() {
-            extensionComparison = "case-only difference (same file format)"
+            extensionComparison = "대소문자만 다름 (동일한 파일 형식)"
         } else {
-            extensionComparison = "different"
+            extensionComparison = "다름"
         }
-        lines.append("- filename extension: \(extensionComparison)")
-        lines.append("- filesystem creation date: \(dateComparison(preferred.creationDate, candidate.creationDate))")
-        lines.append("- filesystem modification date: \(dateComparison(preferred.modificationDate, candidate.modificationDate))")
-        lines.append("- embedded capture metadata: \(captureComparison(preferred.captureTime, candidate.captureTime))")
-        lines.append("- filesystem identity: \(preferred.fileSystemIdentifier == candidate.fileSystemIdentifier ? "same" : "different (expected for distinct copies)")")
-        lines.append("- extended attributes: \(extendedAttributeComparison(preferred.extendedAttributes, candidate.extendedAttributes))")
+        lines.append("- 파일 확장자: \(extensionComparison)")
+        lines.append("- 파일시스템 생성 시각: \(dateComparison(preferred.creationDate, candidate.creationDate))")
+        lines.append("- 파일시스템 수정 시각: \(dateComparison(preferred.modificationDate, candidate.modificationDate))")
+        lines.append("- 파일 내부 메타데이터: 동일 (파일 바이트가 동일하므로 내부 메타데이터도 동일)")
+        lines.append("- scan 촬영 시각 근거: \(captureComparison(preferred.captureTime, candidate.captureTime))")
+        lines.append("- 파일시스템 식별자: \(preferred.fileSystemIdentifier == candidate.fileSystemIdentifier ? "동일" : "다름 (서로 다른 파일 객체라면 정상적인 차이)")")
+        lines.append("- 확장 속성(xattr): \(extendedAttributeComparison(preferred.extendedAttributes, candidate.extendedAttributes))")
 
         let provenanceRelevantSame = preferred.byteSize == candidate.byteSize
             && preferred.fileName == candidate.fileName
@@ -581,32 +585,39 @@ public enum DuplicateReviewWorkspace {
             && preferred.captureTime == candidate.captureTime
             && preferred.extendedAttributes == candidate.extendedAttributes
         if provenanceRelevantSame {
-            lines.append("- RESULT: No provenance-relevant differences were detected in the metadata PhotoArchiveKit currently inspects. The two filesystem objects are still distinct copies, but this evidence does not provide a meaningful original-vs-copy preference.")
+            lines.append("- 결론: PhotoArchiveKit이 현재 검사하는 출처 관련 메타데이터 범위에서는 의미 있는 차이를 찾지 못했습니다. 두 항목은 파일시스템상 서로 다른 사본이지만, 현재 증거만으로 어느 쪽이 역사적인 원본인지 우선할 근거가 없습니다.")
         } else {
-            lines.append("- RESULT: Files are byte-identical, but one or more filesystem/provenance metadata fields differ. Those differences may help choose a preferred copy without implying a quality difference.")
+            lines.append("- 결론: 파일 내용은 바이트 단위로 동일하지만 파일시스템/출처 관련 메타데이터 중 하나 이상이 다릅니다. 이 차이는 어느 사본을 남길지 고르는 참고 근거가 될 수 있지만 화질·음질 차이를 뜻하지는 않습니다.")
         }
         return lines
     }
 
     private static func formatDate(_ date: Date?) -> String {
-        guard let date else { return "unavailable" }
+        guard let date else { return "확인 불가" }
         return ISO8601DateFormatter().string(from: date)
     }
 
     private static func formatCaptureTime(_ capture: CaptureTime?) -> String {
-        guard let capture else { return "unavailable" }
-        let instant = capture.instant.map { ISO8601DateFormatter().string(from: $0) } ?? "no instant"
-        return "\(capture.source.rawValue) / \(capture.confidence.rawValue) / \(instant)"
+        guard let capture else { return "확인 불가" }
+        let instant = capture.instant.map { ISO8601DateFormatter().string(from: $0) } ?? "절대 시각 없음"
+        if capture.source == .fileCreationDate {
+            return "파일시스템 생성 시각을 fallback으로 사용 (파일 내부 촬영 시각 아님) / 신뢰도: \(localizedCaptureConfidence(capture.confidence)) / \(instant)"
+        }
+        return "\(localizedCaptureSource(capture.source)) / 신뢰도: \(localizedCaptureConfidence(capture.confidence)) / \(instant)"
     }
 
     private static func dateComparison(_ lhs: Date?, _ rhs: Date?) -> String {
-        guard let lhs, let rhs else { return lhs == nil && rhs == nil ? "both unavailable" : "availability differs" }
-        if datesMatch(lhs, rhs) { return "same" }
-        return lhs < rhs ? "keeper earlier" : "candidate earlier"
+        guard let lhs, let rhs else { return lhs == nil && rhs == nil ? "양쪽 모두 확인 불가" : "한쪽만 확인 가능" }
+        if datesMatch(lhs, rhs) { return "동일" }
+        return lhs < rhs ? "남길 후보 쪽이 더 이른 시각" : "정리 후보 쪽이 더 이른 시각"
     }
 
     private static func captureComparison(_ lhs: CaptureTime?, _ rhs: CaptureTime?) -> String {
-        lhs == rhs ? "same" : "different"
+        if lhs?.source == .fileCreationDate || rhs?.source == .fileCreationDate {
+            let relationship = dateComparison(lhs?.instant, rhs?.instant)
+            return "파일시스템 생성 시각 fallback 포함 (파일 내부 촬영 메타데이터 차이라는 뜻이 아님); fallback 값 비교: \(relationship)"
+        }
+        return lhs == rhs ? "동일" : "다름"
     }
 
     private static func datesMatch(_ lhs: Date?, _ rhs: Date?) -> Bool {
@@ -618,12 +629,58 @@ public enum DuplicateReviewWorkspace {
         _ lhs: [String: Data]?,
         _ rhs: [String: Data]?
     ) -> String {
-        guard let lhs, let rhs else { return "unavailable" }
-        if lhs == rhs { return "same" }
+        guard let lhs, let rhs else { return "확인 불가" }
+        if lhs == rhs { return "동일" }
         let lhsNames = Set(lhs.keys)
         let rhsNames = Set(rhs.keys)
-        if lhsNames == rhsNames { return "same attribute names, different value(s)" }
-        return "different attribute set"
+        if lhsNames == rhsNames { return "속성 이름은 같지만 하나 이상의 값이 다름" }
+        return "속성 집합 자체가 다름"
+    }
+
+    private static func localizedStatus(_ status: FreshnessStatus) -> String {
+        switch status {
+        case .current: return "현재 상태와 일치 (CURRENT)"
+        case .stale: return "과거 판정 이후 변경됨 (STALE)"
+        case .offline: return "필요한 저장 위치를 현재 사용할 수 없음 (OFFLINE)"
+        }
+    }
+
+    private static func localizedStrength(_ strength: CanonicalKeeperPolicy.ReviewStrength) -> String {
+        switch strength {
+        case .strong: return "강한 근거"
+        case .preference: return "선호 기준"
+        }
+    }
+
+    private static func localizedRationale(_ rationale: CanonicalKeeperPolicy.PreferenceRationale) -> String {
+        switch rationale {
+        case .protectedOrPreferredRoot: return "더 우선하거나 보호되는 저장 위치"
+        case .cleanerFilename: return "복사본 표식이 없는 더 깔끔한 파일명"
+        case .recognizableFilename: return "출처·용도를 더 알아보기 쉬운 파일명"
+        case .strongerCaptureEvidence: return "더 신뢰도 높은 촬영 시각 근거"
+        case .shallowerPath: return "더 얕고 단순한 폴더 경로"
+        case .deterministicTieBreak: return "의미 있는 우열이 없어 결과를 일정하게 만들기 위한 동률 해소"
+        }
+    }
+
+    private static func localizedCaptureSource(_ source: CaptureTimeSource) -> String {
+        switch source {
+        case .exifDateTimeOriginal: return "EXIF 원본 촬영 시각"
+        case .quickTimeCreationDate: return "QuickTime 생성 시각"
+        case .googleTakeoutPhotoTakenTime: return "Google Takeout 촬영 시각"
+        case .fileCreationDate: return "파일시스템 생성 시각"
+        case .unknown: return "출처 불명"
+        }
+    }
+
+    private static func localizedCaptureConfidence(_ confidence: CaptureTimeConfidence) -> String {
+        switch confidence {
+        case .trusted: return "높음"
+        case .providerSidecar: return "provider sidecar"
+        case .incompleteTimezone: return "시간대 정보 불완전"
+        case .fallback: return "fallback"
+        case .unknown: return "불명"
+        }
     }
 
     private static func extendedAttributes(at url: URL) -> [String: Data]? {
@@ -664,24 +721,24 @@ public enum DuplicateReviewWorkspace {
 
     private static func writeReadme(to outputURL: URL) throws {
         let text = """
-        PhotoArchiveKit exact-duplicate review workspace
+        PhotoArchiveKit exact 중복 검토 작업공간
 
-        This folder contains symbolic links only. Original media bytes were not copied, moved, renamed, or deleted.
+        이 폴더에는 심볼릭 링크(가상본)만 있습니다. 원본 미디어는 복사, 이동, 이름 변경, 삭제되지 않았습니다.
 
-        Each numbered folder is one previous automatic exact-duplicate decision with a current freshness state:
-        - CURRENT: size, modification time, filesystem identity, and root identity still match the catalog evidence.
-        - STALE: one or more files/root facts changed or disappeared. Run duplicate-review --refresh before trusting the old decision.
-        - OFFLINE: a required root is not currently available. Reconnect it before refreshing or acting.
+        번호가 붙은 각 폴더는 하나의 exact 중복 판정 그룹이며 현재 상태를 함께 표시합니다.
+        - CURRENT: 실제 파일 크기, 수정 시각, 파일시스템 식별자, root 식별 정보가 catalog 기록과 여전히 일치합니다.
+        - STALE: 하나 이상의 파일 또는 root 정보가 이전 판정 뒤 변경되었거나 사라졌습니다. 이전 판정을 믿기 전에 duplicate-review --refresh가 필요합니다.
+        - OFFLINE: 필요한 저장 위치를 현재 사용할 수 없습니다. 먼저 해당 저장 위치를 다시 연결해야 합니다.
 
-        CURRENT groups contain:
-        - KEEPER: the copy PhotoArchiveKit currently prefers to keep.
-        - CANDIDATE: byte-identical copy/copies eligible for quarantine only after fresh cryptographic verification.
-        - comparison.txt: local-private target size, keeper rationale, and metadata-difference summary. Finder's symbolic-link size is not the original media size.
+        CURRENT 그룹의 구성:
+        - KEEPER: PhotoArchiveKit이 현재 남기는 쪽으로 선호하는 사본입니다.
+        - CANDIDATE: 바이트가 동일한 정리 후보입니다. 실제 quarantine 직전에는 다시 암호학적 검증을 수행합니다.
+        - comparison.txt: 실제 원본 대상 크기, 남길 후보 선택 이유, 메타데이터 차이 요약을 담은 로컬 전용 문서입니다. Finder에 보이는 가상본 자체의 크기는 원본 미디어 크기가 아닙니다.
 
-        STALE/OFFLINE groups use OLD_KEEPER and OLD_CANDIDATE because those names describe historical decisions only.
-        - locations.txt: local-private original paths for Finder review.
+        STALE/OFFLINE 그룹은 과거 판정이라는 뜻으로 OLD_KEEPER / OLD_CANDIDATE 이름을 사용합니다.
+        - locations.txt: Finder 검토를 위한 실제 원본 위치를 담은 로컬 전용 문서입니다.
 
-        Use Finder thumbnails or Quick Look on the links. Do not treat this workspace itself as a backup.
+        현재 Finder prototype에서는 가상본의 썸네일 또는 Quick Look을 사용할 수 있습니다. 이 작업공간 자체를 백업으로 취급하지 마세요.
         """
         try (text + "\n").write(
             to: outputURL.appendingPathComponent("README.txt"),
@@ -692,15 +749,15 @@ public enum DuplicateReviewWorkspace {
 
     private static func writeNeedsRefresh(status: FreshnessStatus, to groupURL: URL) throws {
         let action = status == .offline
-            ? "Reconnect the unavailable root, then run duplicate-review --refresh before trusting this decision."
-            : "Run duplicate-review --refresh before trusting this decision."
+            ? "사용할 수 없는 저장 위치를 다시 연결한 뒤 duplicate-review --refresh를 실행하세요."
+            : "이 판정을 다시 신뢰하기 전에 duplicate-review --refresh를 실행하세요."
         let text = """
-        \(status.rawValue) / NEEDS REFRESH
+        \(localizedStatus(status)) / 갱신 필요
 
-        This group's previous exact-duplicate decision is not current enough for normal review.
+        이 그룹의 이전 exact 중복 판정은 현재 상태를 충분히 반영하지 못하므로 정상 검토 대상으로 사용할 수 없습니다.
         \(action)
 
-        Do not quarantine files based on this group's OLD_KEEPER / OLD_CANDIDATE labels.
+        이 그룹의 OLD_KEEPER / OLD_CANDIDATE 표시만 근거로 파일을 quarantine하지 마세요.
         """
         try (text + "\n").write(
             to: groupURL.appendingPathComponent("NEEDS-REFRESH.txt"),
