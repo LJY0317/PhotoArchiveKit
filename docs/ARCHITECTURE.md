@@ -128,9 +128,15 @@ data model은 simple UI가 default Inbox 하나로 시작하더라도 여러 roo
 
 `archive` root는 canonical bytes가 반드시 PhotoArchiveKit이 만든 folder layout에 있어야 한다는 뜻이 아니다. `photoarchive archive-index PATH`는 사용자가 직접 만든 nested folder tree를 그대로 읽고, supported media가 있는 directory와 parent hierarchy를 `user_archive_folder` collection으로 기록한다. Finder에서 수동 move가 발생한 뒤 재index하면 current hierarchy를 다시 계산하고 stale user-archive membership/collection을 제거한다. empty directory처럼 indexed media와 관계없는 structure는 semantic collection으로 만들지 않는다.
 
+현재 user-managed archive workflow에서는 Finder를 통한 수동 HDD copy/분류를 정상 경로로 허용한다. `archive-index`는 **그 archive root 하나의 현재 상태**를 갱신하고, `archive-coverage`는 Mac/Takeout/archive/reference 등 **그 session에 등록한 root들 사이의 현재 보존 관계**를 다시 계산한다. 등록·scan한 적 없는 임의 source folder는 catalog가 자동으로 발견하지 않는다.
+
+`archive-coverage`는 exact duplicate group을 이용해 root별 exact-covered/exact-unique resource 수와 root pair별 exact overlap을 계산한다. Live Photo는 file 하나의 hash coverage만으로 안전하다고 간주하지 않고 같은 logical asset의 다른 root occurrence가 `complete`, partial/ambiguous, still-only, video-only, none 중 어디에 해당하는지를 별도로 보고한다. 이 report는 media-read-only이며 mutation authority가 아니다.
+
 ## Session model
 
 watcher나 sync daemon은 없다. 작업은 explicit session으로 진행한다.
+
+GUI가 생기더라도 current-state truth는 동일한 session/rescan model을 유지하는 것이 기본이다. 앱 실행, 사용자의 Refresh, 외장 root attach 같은 시점에 등록 root만 재검사할 수 있다. 미래에 macOS FSEvents를 사용하더라도 그것은 "어느 등록 hierarchy가 바뀌었는지" 알려주는 invalidation hint로만 취급하고, catalog truth는 targeted/full rescan으로 확정한다. 전역 filesystem을 상시 감시하거나 등록되지 않은 폴더를 자동 수집하는 모델은 기본값이 아니다.
 
 ```text
 scan
@@ -166,6 +172,8 @@ Long-running foreground scans expose structured `ScanProgress` events from the c
 ## 자동 분류
 
 manual drag-and-drop은 fallback이어야 하며 normal path가 되어서는 안 된다.
+
+위의 user-managed HDD workflow와 달리, 아래 자동 분류 단계에서 말하는 manual drag-and-drop 최소화는 **새 Inbox를 프로그램이 자동 분류하는 문제**에 대한 원칙이다. 사용자가 archive의 최종 folder taxonomy와 copy 대상을 직접 결정하는 현재 HDD workflow까지 자동화해야 한다는 뜻은 아니다.
 
 ### Stage 1: deterministic grouping
 

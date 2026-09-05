@@ -16,7 +16,16 @@ PhotoArchiveKit is a local-first, session-based toolkit for preserving and organ
 
 The project is intentionally small. It does not run a background daemon, host a gallery server, or move media behind an opaque storage format. Media remains in ordinary filesystem folders; a local SQLite catalog records relationships and decisions that folders cannot express.
 
-> **Project status:** early safety-first prototype. `scan`, `plan`, and `organize-plan` are read-only; `archive-index` can index an existing user-managed archive without moving media and writes its root-scoped portable inventory only with explicit `--apply`; `archive-plan` writes a local-private immutable plan; `archive-copy` defaults to a full dry-run and can explicitly copy/verify only AUTO archive items through resumable staging. `quarantine` supports reversible exact-duplicate moves, while marker-gated `organize` can apply only automatic iPhone-camera rename/flatten items. Permanent deletion, a full real-library HDD archive apply, independent replica verification, and cloud upload are not completed yet.
+> **Project status:** early safety-first prototype. `scan`, `archive-coverage`, `plan`, and `organize-plan` are media-read-only; `archive-index` can refresh an existing user-managed archive without moving media and writes its root-scoped portable inventory only with explicit `--apply`. The current user-managed HDD workflow is intentionally simple: copy or organize files in Finder, re-index the archive root, then run `archive-coverage` across every root that should count as a current copy. PhotoArchiveKit does not discover arbitrary unregistered folders or run a background filesystem watcher. Permanent deletion, independent replica verification, and cloud upload are not completed yet.
+
+### Recommended current workflow
+
+1. Register the roots that should participate in the comparison, such as a Mac library, a nested Google Takeout root, and a user-managed HDD photo root.
+2. Let the user copy or organize archive media in Finder. PhotoArchiveKit does not need to own the HDD folder layout.
+3. Run `archive-index` after manual HDD changes so the local catalog reflects the archive root's current files and folder hierarchy.
+4. Run `archive-coverage` with all roots that should count as current storage. It reports exact cross-root coverage and whether Live Photo occurrences have complete, partial/ambiguous, or missing counterparts elsewhere.
+
+An `archive-index` refresh updates that archive root; it does not magically discover a source folder that has never been registered or scanned. `archive-coverage` performs the current multi-root comparison explicitly. This keeps filesystem observation separate from mutation and avoids treating an unavailable external drive as a deletion.
 
 ## Why this exists
 
@@ -54,6 +63,8 @@ The initial CLI can:
 - report completeness separately for every root, so a complete copy elsewhere does not hide a broken local copy;
 - find exact duplicate files using local SHA-256 comparisons only when file sizes match;
 - expose duplicate groups as stable opaque IDs instead of raw hashes;
+- replace the membership snapshot of an exact duplicate group whenever that group is observed again, so a previously seen member cannot leak into the current group after the filesystem changed;
+- run `archive-coverage` as a media-read-only current-state comparison across two or more registered roots: report per-root exact-covered versus exact-unique resource counts, pairwise exact-group overlap, and Live Photo counterpart status (`complete`, `split/ambiguous`, still-only, video-only, or none) on other roots;
 - extract timezone-aware EXIF and QuickTime capture times when available;
 - suggest date-based event folders by clustering assets separated by a configurable time gap;
 - persist resources, logical assets, provenance, duplicate groups, source collection mappings, original filenames, path history, and scan sessions in SQLite;
@@ -130,7 +141,18 @@ swift run photoarchive plan \
   --takeout "~/Pictures/Takeout"
 ```
 
-For an AI agent, use `--agent-json` with `scan`, `plan`, `organize-plan`, `archive-index`, `archive-plan`, `archive-copy`, `organize`, `quarantine`, `restore-quarantine`, `cleanup-empty-dirs`, or the `catalog` command reports; local diagnostic `--json` can contain paths. Persisted archive-plan, archive-copy manifest, archive-root inventory, and JSONL snapshot files themselves are **not** agent-safe because safe replay/disaster recovery requires local-private paths, filenames, catalog paths, marker bindings, or integrity preconditions.
+For an AI agent, use `--agent-json` with `scan`, `archive-coverage`, `plan`, `organize-plan`, `archive-index`, `archive-plan`, `archive-copy`, `organize`, `quarantine`, `restore-quarantine`, `cleanup-empty-dirs`, or the `catalog` command reports; local diagnostic `--json` can contain paths. Persisted archive-plan, archive-copy manifest, archive-root inventory, and JSONL snapshot files themselves are **not** agent-safe because safe replay/disaster recovery requires local-private paths, filenames, catalog paths, marker bindings, or integrity preconditions.
+
+Check current Mac/Takeout/HDD coverage without moving media:
+
+```bash
+swift run photoarchive archive-coverage --agent-json \
+  --local "~/Pictures" \
+  --takeout "~/Pictures/Takeout" \
+  --archive "/Volumes/My HDD/deep/path/My Photos"
+```
+
+Only roots supplied to this session participate in the current coverage result. If media was copied from another Mac folder or another external device that PhotoArchiveKit has never scanned, register that location as an appropriate `--local`, `--import`, or `--reference` root when you want it included in the comparison.
 
 Preview a quarantine without moving anything:
 

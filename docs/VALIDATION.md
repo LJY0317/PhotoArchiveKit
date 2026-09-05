@@ -100,6 +100,26 @@ hidden .photoarchive inventory excluded from media scan                     PASS
 
 CLI smoke에서 media resource 2개 / represented folder 3개 fixture는 dry-run cache hit 0, 같은 catalog 재실행 cache hit 2, 새 catalog에서 portable inventory cache hit 2, `--fresh` cache hit 0을 재현했다. portable inventory는 relative path, byte size, modification time, opaque role/ID, raw SHA-256을 포함하는 **root-scoped local-private cache/map**이며 mutation authority가 아니다. `archive-copy`, quarantine 등 실제 mutation boundary는 계속 fresh SHA-256을 요구한다.
 
+## Archive coverage / current duplicate membership 검증
+
+`archive-coverage`는 두 개 이상의 등록 root를 current media-read-only scan한 결과에서 계산한다. standalone/photo/video resource의 exact cross-root coverage와 Live Photo logical-asset counterpart completeness를 분리해 보고한다. exact resource는 SHA-256 duplicate group, Live Photo counterpart status는 같은 logical asset의 다른-root occurrence completeness를 사용한다.
+
+Synthetic/CLI 검증:
+
+```text
+two-root exact fixture: pairwise shared groups                         1
+root A exact-covered / exact-unique                                 1 / 0
+root B exact-covered / exact-unique                                 1 / 0
+A+B group -> A+C rescan: stable opaque group ID                       PASS
+A+B group -> A+C rescan: persisted current members                     2
+ambiguous repeated Live Photo peer reported complete                  NO
+ambiguous repeated Live Photo peer reported split/ambiguous          PASS
+agent-safe coverage omits root path and filename                     PASS
+filesModified                                                       false
+```
+
+현재 real catalog의 작은 two-root read-only 재검증에서도 reference media 2개가 모두 exact-covered였고 pairwise shared exact group 2개를 보고했다. 같은 session에서 `exact_duplicate_groups.last_seen_session`이 current session인 group들에 대해 다른 session의 stale member가 남은 수는 0이었다. 개인 path/filename/hash는 이 문서에 기록하지 않는다.
+
 ## Immutable archive plan 검증
 
 Synthetic marked source/destination fixture에서 `archive-plan`이 non-Takeout canonical exact copy 하나만 AUTO로 선택하고, plan 시점의 fresh SHA-256을 같은 scan/catalog에 저장된 exact evidence와 다시 비교한 뒤 local-private precondition으로 고정하는 것을 검증했다. scan 뒤 source byte를 같은 크기로 바꾸면 `sourceChanged`로 plan 생성이 거부된다. destination에 같은 filename이 이미 있으면 deterministic `_NN` suffix로 충돌을 피한다.

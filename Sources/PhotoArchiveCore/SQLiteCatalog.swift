@@ -775,6 +775,15 @@ final class SQLiteCatalog {
                 )
             }
 
+            // A duplicate group's membership is a snapshot of the latest scan that
+            // observed that exact hash group. Replace the whole membership set so an
+            // older member from a root that is not part of the current scan cannot be
+            // carried forward into a newly observed/current group.
+            try run(
+                "DELETE FROM exact_duplicate_members WHERE group_id = ?",
+                bindings: [.text(groupID)]
+            )
+
             result[group.contentHash] = groupID
             for resource in group.resources {
                 guard let resourceID = resource.persistentResourceID else { continue }

@@ -16,7 +16,16 @@ PhotoArchiveKit은 iPhone 사진·동영상·Live Photo를 특정 사진 클라�
 
 프로젝트는 의도적으로 가볍게 유지합니다. 백그라운드 daemon을 실행하거나 별도 gallery server를 운영하지 않으며, 미디어를 불투명한 전용 저장 형식 안으로 옮기지 않습니다. 사진과 동영상은 일반 파일시스템 폴더에 남고, 폴더만으로 표현할 수 없는 관계와 결정만 로컬 SQLite catalog에 기록합니다.
 
-> **현재 상태:** 초기 safety-first prototype입니다. `scan`, `plan`, `organize-plan`은 읽기 전용이고, `archive-index`는 이미 사용자가 직접 분류한 archive를 media 이동 없이 index하며 명시적 `--apply`에서만 그 root 전용 portable inventory를 씁니다. `archive-plan`은 local-private immutable plan을 쓰고, `archive-copy`는 기본 full dry-run이며 명시적 apply에서만 AUTO archive item을 resumable staging을 거쳐 copy/verify합니다. `quarantine`은 reversible exact-duplicate 이동을 지원하고 marker-gated `organize`는 automatic iPhone-camera rename/flatten item만 apply합니다. 영구 삭제, 전체 real-library HDD archive 적용, 독립 replica 검증, cloud upload는 아직 완료되지 않았습니다.
+> **현재 상태:** 초기 safety-first prototype입니다. `scan`, `archive-coverage`, `plan`, `organize-plan`은 media에 대해 읽기 전용이고, `archive-index`는 사용자가 직접 관리하는 archive를 media 이동 없이 최신 상태로 index하며 명시적 `--apply`에서만 그 root 전용 portable inventory를 씁니다. 현재 user-managed HDD workflow는 단순합니다. 사용자가 Finder로 직접 copy/분류하고, archive root를 다시 index한 뒤, 현재 사본으로 인정할 모든 root를 `archive-coverage`로 함께 비교합니다. PhotoArchiveKit은 등록되지 않은 임의 폴더를 자동 탐색하거나 background filesystem watcher를 실행하지 않습니다. 영구 삭제, 독립 replica 검증, cloud upload는 아직 완료되지 않았습니다.
+
+### 현재 권장 workflow
+
+1. Mac library, nested Google Takeout, user-managed HDD photo root처럼 비교에 포함할 root를 명시적으로 등록합니다.
+2. HDD media copy/분류는 사용자가 Finder에서 직접 해도 됩니다. PhotoArchiveKit이 HDD 폴더 구조를 소유할 필요는 없습니다.
+3. 수동 HDD 변경 뒤 `archive-index`를 다시 실행하면 local catalog가 archive root의 현재 파일과 folder hierarchy를 반영합니다.
+4. 현재 사본으로 인정할 모든 root를 넣어 `archive-coverage`를 실행합니다. root별 exact 보존 상태와 Live Photo가 다른 root에 완전/부분·ambiguous/누락 상태로 존재하는지를 확인할 수 있습니다.
+
+`archive-index`는 해당 archive root를 갱신할 뿐, 한 번도 등록·scan하지 않은 source folder까지 자동 발견하지는 않습니다. 현재 multi-root backup 관계는 `archive-coverage` session에서 명시적으로 다시 계산합니다. 이 구조는 외장 HDD가 잠시 분리된 상태를 삭제로 오해하지 않게 해 줍니다.
 
 ## 왜 필요한가
 
@@ -54,6 +63,8 @@ byte 보존 복제본          provenance와 이력
 - 다른 root에 완전한 사본이 있어도 현재 root의 누락을 숨기지 않도록 root별 completeness 보고
 - 크기가 같은 후보에 한해 로컬 SHA-256으로 exact duplicate 탐색
 - 실제 hash 대신 재사용 가능한 opaque duplicate group ID 출력
+- exact duplicate group이 새 scan에서 다시 관측되면 member snapshot 전체를 현재 관측값으로 교체하여 과거에 존재했던 member가 current group에 섞이지 않도록 유지
+- `archive-coverage`로 두 개 이상의 등록 root를 media-read-only 비교: root별 exact-covered/exact-unique resource 수, root pair별 exact group overlap, 다른 root에 있는 Live Photo counterpart의 complete/split-or-ambiguous/still-only/video-only/none 상태를 보고
 - 가능한 경우 timezone을 포함한 EXIF·QuickTime 촬영시각 추출
 - 설정 가능한 시간 간격을 기준으로 날짜형 event folder 자동 제안
 - resource, 논리 asset, provenance, duplicate group, source collection mapping, 최초 filename, path history, scan session을 SQLite에 저장
@@ -130,7 +141,18 @@ swift run photoarchive plan \
   --takeout "~/Pictures/Takeout"
 ```
 
-AI agent는 `scan`, `plan`, `organize-plan`, `archive-index`, `archive-plan`, `archive-copy`, `organize`, `quarantine`, `restore-quarantine`, `cleanup-empty-dirs`와 `catalog` command의 report에서 `--agent-json`을 사용해야 하며, path를 포함할 수 있는 local diagnostic `--json`은 agent에 전달하지 않습니다. persisted archive-plan, archive-copy manifest, archive-root inventory, JSONL snapshot 파일 자체는 안전한 replay/disaster recovery에 local-private path·filename·catalog path·marker binding 또는 integrity precondition이 필요하므로 **agent-safe가 아닙니다**.
+AI agent는 `scan`, `archive-coverage`, `plan`, `organize-plan`, `archive-index`, `archive-plan`, `archive-copy`, `organize`, `quarantine`, `restore-quarantine`, `cleanup-empty-dirs`와 `catalog` command의 report에서 `--agent-json`을 사용해야 하며, path를 포함할 수 있는 local diagnostic `--json`은 agent에 전달하지 않습니다. persisted archive-plan, archive-copy manifest, archive-root inventory, JSONL snapshot 파일 자체는 안전한 replay/disaster recovery에 local-private path·filename·catalog path·marker binding 또는 integrity precondition이 필요하므로 **agent-safe가 아닙니다**.
+
+media를 옮기지 않고 현재 Mac/Takeout/HDD coverage를 확인합니다.
+
+```bash
+swift run photoarchive archive-coverage --agent-json \
+  --local "~/Pictures" \
+  --takeout "~/Pictures/Takeout" \
+  --archive "/Volumes/My HDD/deep/path/My Photos"
+```
+
+이 session에 넘긴 root만 current coverage 계산에 포함됩니다. 다른 Mac folder나 다른 외장장치에서 가져온 media의 source location까지 비교하려면 그 위치를 적절한 `--local`, `--import`, `--reference` root로 한 번은 등록·scan해야 합니다.
 
 아무 파일도 이동하지 않고 quarantine 후보를 먼저 검증합니다.
 

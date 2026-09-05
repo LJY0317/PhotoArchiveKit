@@ -18,6 +18,8 @@ struct PhotoArchiveCLI {
             switch command {
             case "scan":
                 try await runScan(arguments, mode: .scan)
+            case "archive-coverage":
+                try await runScan(arguments, mode: .archiveCoverage)
             case "plan":
                 try await runScan(arguments, mode: .plan)
             case "organize-plan":
@@ -484,6 +486,7 @@ struct PhotoArchiveCLI {
 
     private enum WorkflowMode {
         case scan
+        case archiveCoverage
         case plan
         case organizePlan
         case archivePlan
@@ -599,6 +602,7 @@ struct PhotoArchiveCLI {
                 let command: String
                 switch mode {
                 case .scan: command = "scan"
+                case .archiveCoverage: command = "archive-coverage"
                 case .plan: command = "plan"
                 case .organizePlan: command = "organize-plan"
                 case .archivePlan: command = "archive-plan"
@@ -618,6 +622,12 @@ struct PhotoArchiveCLI {
 
         guard !roots.isEmpty else {
             throw CLIError("No source roots were supplied. Run 'photoarchive scan --help'.")
+        }
+        if mode == .archiveCoverage && roots.count < 2 {
+            throw CLIError("archive-coverage requires at least two roots to compare.")
+        }
+        if mode == .archiveCoverage && !computeExactDuplicates {
+            throw CLIError("archive-coverage requires exact duplicate comparison.")
         }
         if outputJSON && outputAgentJSON {
             throw CLIError("Use either --json or --agent-json, not both.")
@@ -645,6 +655,18 @@ struct PhotoArchiveCLI {
                 progressHandler: progressHandler
             )
         )
+
+        if mode == .archiveCoverage {
+            let coverage = ArchiveCoverageBuilder.makeReport(from: report)
+            if outputAgentJSON {
+                try printJSON(AgentSafeArchiveCoverageReport(report: coverage))
+            } else if outputJSON {
+                try printJSON(coverage)
+            } else {
+                printArchiveCoverageReport(coverage)
+            }
+            return
+        }
 
         if mode == .plan {
             let plan = ReconciliationPlanner.makePlan(from: report)
@@ -877,6 +899,37 @@ struct PhotoArchiveCLI {
             print("Only the hidden portable inventory was written to the archive root; media files were not moved, renamed, or deleted.")
         } else {
             print("No files were written to the archive root. Re-run with --apply to write the portable inventory after reviewing the index.")
+        }
+    }
+
+    private static func printArchiveCoverageReport(_ report: ArchiveCoverageReport) {
+        print("PhotoArchiveKit archive coverage")
+        print("Session: \(report.sessionID)")
+        print("Media files modified: \(report.filesModified)")
+        print("")
+
+        for root in report.roots {
+            print("[\(root.rootID)] \(root.label)")
+            print("  media resources: \(root.mediaResourceCount)")
+            print("  exact-covered elsewhere: \(root.exactCoveredElsewhereResourceCount)")
+            print("  exact-unique to this root: \(root.exactUniqueToRootResourceCount)")
+            print("  Live Photo occurrences: \(root.livePhotos.occurrenceCount)")
+            print("    complete elsewhere: \(root.livePhotos.completeElsewhere)")
+            print("    split/ambiguous elsewhere: \(root.livePhotos.splitOrAmbiguousElsewhere)")
+            print("    still only elsewhere: \(root.livePhotos.stillOnlyElsewhere)")
+            print("    video only elsewhere: \(root.livePhotos.videoOnlyElsewhere)")
+            print("    no counterpart elsewhere: \(root.livePhotos.noCounterpart)")
+            for peer in root.exactPeers {
+                print("  exact peer \(peer.peerRootID): \(peer.sharedExactGroupCount) groups, \(peer.coveredResourceCount) local resources covered")
+            }
+            print("")
+        }
+
+        if !report.pairwiseExact.isEmpty {
+            print("Pairwise exact overlap:")
+            for pair in report.pairwiseExact {
+                print("  \(pair.leftRootID) <-> \(pair.rightRootID): \(pair.sharedExactGroupCount) groups")
+            }
         }
     }
 
@@ -1132,6 +1185,7 @@ struct PhotoArchiveCLI {
 
             Usage:
               photoarchive scan [options] ROOT...
+              photoarchive archive-coverage [options] ROOT...
               photoarchive plan [options] ROOT...
               photoarchive organize-plan [options] ROOT...
               photoarchive archive-plan --to PATH --output PLAN [options] ROOT...
@@ -1148,11 +1202,11 @@ struct PhotoArchiveCLI {
               photoarchive doctor
               photoarchive version
 
-            Scan and plan are read-only. Quarantine also defaults to a verified dry run;
+            Scan, archive-coverage, and plan are media-read-only. Quarantine also defaults to a verified dry run;
             only an explicit --apply moves automatic exact-duplicate candidates into a
             user-supplied local quarantine directory. It never permanently deletes media.
 
-            Run 'photoarchive scan --help', 'photoarchive plan --help',
+            Run 'photoarchive scan --help', 'photoarchive archive-coverage --help', 'photoarchive plan --help',
             'photoarchive organize-plan --help', 'photoarchive archive-plan --help',
             'photoarchive archive-copy --help',
             'photoarchive archive-index --help',
@@ -1371,6 +1425,13 @@ struct PhotoArchiveCLI {
             stable .photoarchive-root marker. Live Photo still+paired-video resources use
             one destination basename, and post-move filesystem identity/size is verified.
             A local restore manifest is written under Application Support.
+            """
+        } else if command == "archive-coverage" {
+            operationNotes = """
+            archive-coverage requires at least two registered roots and performs a current
+            media-read-only scan before reporting current exact cross-root coverage. It also
+            summarizes whether each Live Photo occurrence has a complete, partial, ambiguous,
+            or missing counterpart on other roots. It never moves, renames, or deletes media.
             """
         } else {
             operationNotes = ""

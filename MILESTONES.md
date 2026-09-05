@@ -593,6 +593,22 @@ Mac / HDD / quarantine common hashes           0
 
 Session별 패턴도 분명했다. 첫 4,195-resource quarantine은 현재 Mac과 4,195/4,195가 exact match였고 HDD와는 0이었다. 두 번째 3,813-resource quarantine은 현재 HDD와 3,767 resource, Mac과 44 resource가 exact match였으며 2개 image resource만 현재 두 root 어느 쪽에도 exact counterpart가 없었다. Mac과 HDD 자체에는 exact overlap이 없으므로 세 집합 공통 exact hash도 0이다.
 
+## 2026-09-05 — Current-state coverage report와 stale duplicate membership 수정
+
+real workflow에서 과거에 사라진 resource가 SQLite `exact_duplicate_members`에 남아 ad-hoc current-state 집계에 섞일 수 있는 사례를 확인했다. exact hash group의 stable opaque ID/history는 유지하되, **같은 group이 새 scan에서 다시 관측되면 member set 전체를 그 scan의 membership snapshot으로 교체**하도록 수정했다. 별도 synthetic catalog에서 A+B exact group을 만든 뒤 A+C만 재scan했을 때 동일 group ID를 유지하면서 member count가 2로 교체되는 것을 self-test로 고정했다.
+
+또한 `photoarchive archive-coverage`를 추가했다. command는 두 개 이상의 등록 root를 fresh media-read-only scan하고 다음을 current session 기준으로 보고한다.
+
+```text
+per root: media resources / exact-covered elsewhere / exact-unique to root
+per peer pair: shared exact duplicate group count
+Live Photo occurrence: complete elsewhere / split-or-ambiguous / still-only / video-only / none
+```
+
+Agent-safe report는 path, filename, raw hash, exact byte size, capture timestamp를 노출하지 않는다. disposable two-root CLI smoke에서 exact group 1개, 양쪽 covered resource 1개, unique 0개, `filesModified=false`를 확인했고 전체 synthetic self-test도 통과했다.
+
+이어 현재 real catalog에 대해 작은 두-root read-only coverage를 다시 실행했다. 비교 reference의 media 2개는 모두 다른 root에 exact counterpart가 있었고 pairwise shared exact group은 2개였다. 같은 session에서 current duplicate group 전체를 점검했을 때 group의 `last_seen_session`과 다른 stale member는 0개였다. media 수정은 없었다. 개인 path/filename/hash는 기록하지 않는다. Background watcher나 daemon은 추가하지 않았다.
+
 ## 2026-09-05 — Residual Takeout safe cleanup 재검증
 
 기존 quarantine 이후에도 nested Takeout root에 남아 있던 media를 현재 filesystem 기준으로 다시 비교했다. 단순 byte-only 집계에서는 121개 중 107개가 outer Mac library에 exact counterpart를 가지고 있었지만, 이 숫자를 곧바로 삭제 권한으로 사용하지 않고 PhotoArchiveKit의 current reconciliation/quarantine policy를 다시 적용했다.

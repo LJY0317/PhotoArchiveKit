@@ -128,6 +128,56 @@ struct PhotoArchiveSelfTest {
             "unchanged exact-duplicate resources should reuse the local SQLite hash cache"
         )
 
+        let initialCoverage = ArchiveCoverageBuilder.makeReport(from: first)
+        try require(initialCoverage.roots.count == 2, "coverage should report both scanned roots")
+        try require(
+            initialCoverage.roots.allSatisfy {
+                $0.exactCoveredElsewhereResourceCount == 1
+                    && $0.exactUniqueToRootResourceCount == 0
+            },
+            "each synthetic exact copy should be covered by the other root"
+        )
+        try require(
+            initialCoverage.pairwiseExact.count == 1
+                && initialCoverage.pairwiseExact[0].sharedExactGroupCount == 1,
+            "coverage should expose one cross-root exact group"
+        )
+        let initialCoverageAgentJSON = String(
+            decoding: try JSONEncoder().encode(AgentSafeArchiveCoverageReport(report: initialCoverage)),
+            as: UTF8.self
+        )
+        try require(!initialCoverageAgentJSON.contains(rootA.path), "agent-safe coverage exposed root A path")
+        try require(!initialCoverageAgentJSON.contains(rootB.path), "agent-safe coverage exposed root B path")
+        try require(!initialCoverageAgentJSON.contains("one.jpg"), "agent-safe coverage exposed a filename")
+
+        let rootC = temporary.appendingPathComponent("C", isDirectory: true)
+        try fileManager.createDirectory(at: rootC, withIntermediateDirectories: true)
+        _ = try RootMarkerStore.create(at: rootC)
+        let fileC = rootC.appendingPathComponent("third-copy.jpg")
+        try bytes.write(to: fileC)
+        let staleMembershipCatalog = temporary.appendingPathComponent("stale-membership.sqlite3")
+        let staleMembershipScanner = try ArchiveScanner(catalogURL: staleMembershipCatalog)
+        let staleMembershipFirstScan = try await staleMembershipScanner.scan(roots: roots)
+        let replacementMembershipScan = try await staleMembershipScanner.scan(roots: [
+            ScanRoot(url: rootA, kind: .reference, provenance: .localLibrary),
+            ScanRoot(url: rootC, kind: .reference, provenance: .unknown)
+        ])
+        try require(
+            replacementMembershipScan.exactDuplicateGroups.first?.groupID
+                == staleMembershipFirstScan.exactDuplicateGroups.first?.groupID,
+            "the same exact hash should retain its opaque duplicate group ID"
+        )
+        guard let replacementGroupID = replacementMembershipScan.exactDuplicateGroups.first?.groupID else {
+            throw SelfTestFailure("replacement duplicate scan did not contain a group")
+        }
+        try require(
+            try sqliteInt(
+                databaseURL: staleMembershipCatalog,
+                sql: "SELECT COUNT(*) FROM exact_duplicate_members WHERE group_id = '\(replacementGroupID)'"
+            ) == 2,
+            "a newly observed duplicate group must replace stale members from older roots"
+        )
+
         let userArchiveRoot = temporary.appendingPathComponent("UserArchive", isDirectory: true)
         let tripFolder = userArchiveRoot
             .appendingPathComponent("Trips", isDirectory: true)
@@ -1095,6 +1145,21 @@ struct PhotoArchiveSelfTest {
         try require(cleanupApplied.cleanupManifestPath != nil, "empty-directory cleanup should record a local manifest")
 
         let coverageReport = syntheticCanonicalCoverageReport()
+        let archiveCoverageReport = ArchiveCoverageBuilder.makeReport(from: coverageReport)
+        guard let localLiveCoverage = archiveCoverageReport.roots.first(where: { $0.rootID == "RLOCAL" }) else {
+            throw SelfTestFailure("archive coverage is missing the synthetic local root")
+        }
+        guard let takeoutLiveCoverage = archiveCoverageReport.roots.first(where: { $0.rootID == "RTAKEOUT" }) else {
+            throw SelfTestFailure("archive coverage is missing the synthetic Takeout root")
+        }
+        try require(
+            localLiveCoverage.livePhotos.splitOrAmbiguousElsewhere == 1,
+            "an ambiguous repeated Takeout Live Photo must not be reported as a complete peer"
+        )
+        try require(
+            takeoutLiveCoverage.livePhotos.completeElsewhere == 1,
+            "a Takeout Live Photo occurrence should report a complete local counterpart"
+        )
         let coveragePlan = ReconciliationPlanner.makePlan(from: coverageReport)
         try require(
             coveragePlan.summary.automaticRedundantResourceCount == 4,

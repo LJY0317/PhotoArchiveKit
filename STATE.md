@@ -29,6 +29,8 @@
 - Live Photo identifier를 위한 catalog-local HMAC 보호
 - root별 Live Photo completeness report
 - opaque report ID를 사용하는 local exact duplicate grouping
+- exact duplicate group이 다시 관측될 때 `exact_duplicate_members`를 최신 group membership snapshot으로 전체 교체하여, 이전 scan의 unscanned/stale member가 current group에 섞이지 않도록 함. 과거 group row 자체는 history/stable ID를 위해 남을 수 있지만 current report는 current scan observation을 사용
+- `photoarchive archive-coverage`: 두 개 이상의 등록 root를 current media-read-only scan한 뒤 root별 exact-covered/exact-unique resource 수, peer root별/pairwise exact group overlap, Live Photo occurrence의 `complete_elsewhere` / `split_or_ambiguous_elsewhere` / still-only / video-only / no-counterpart 상태를 report. exact resource coverage와 logical Live Photo counterpart completeness를 별도 축으로 유지하며, `--agent-json`은 root ID·kind·provenance·count/status만 노출
 - timezone-aware capture-time model
 - time-gap 기반 event folder suggestion
 - 사람이 읽는 output과 local diagnostic `--json`
@@ -65,6 +67,7 @@
 ```bash
 swift run photoarchive doctor
 swift run photoarchive scan [options] ROOT...
+swift run photoarchive archive-coverage [options] ROOT...
 swift run photoarchive plan [options] ROOT...
 swift run photoarchive organize-plan [options] ROOT...
 swift run photoarchive archive-plan --to PATH --output PLAN [options] ROOT...
@@ -81,7 +84,7 @@ swift run photoarchive catalog restore [--apply] --to PATH [--bind-root ROOT_ID=
 swift run photoarchive-selftest
 ```
 
-`scan`, `plan`, `organize-plan`은 media에 대해 read-only다. `archive-index`도 media-read-only이며 기본 실행은 archive root에 아무것도 쓰지 않고 local SQLite만 갱신한다. `archive-index --apply`는 hidden portable inventory만 쓰며 media를 건드리지 않는다. `archive-plan`은 media-read-only지만 local-private persisted plan 파일을 생성한다. `archive-copy`는 기본 dry-run이며 명시적 `--apply`가 있어야 destination에 copy하지만, **현재 사용자는 HDD media copy를 직접 수행하기로 했으므로 추가 real-HDD archive-copy apply는 진행하지 않는다.** `quarantine`과 `organize`도 기본 dry-run이고 명시적 `--apply`에서만 제한된 AUTO item을 이동한다. 영구 삭제는 없다.
+`scan`, `archive-coverage`, `plan`, `organize-plan`은 media에 대해 read-only다. `archive-index`도 media-read-only이며 기본 실행은 archive root에 아무것도 쓰지 않고 local SQLite만 갱신한다. `archive-index --apply`는 hidden portable inventory만 쓰며 media를 건드리지 않는다. `archive-plan`은 media-read-only지만 local-private persisted plan 파일을 생성한다. `archive-copy`는 기본 dry-run이며 명시적 `--apply`가 있어야 destination에 copy하지만, **현재 사용자는 HDD media copy를 직접 수행하기로 했으므로 추가 real-HDD archive-copy apply는 진행하지 않는다.** `quarantine`과 `organize`도 기본 dry-run이고 명시적 `--apply`에서만 제한된 AUTO item을 이동한다. 영구 삭제는 없다.
 
 ## 제품 결정
 
@@ -104,6 +107,7 @@ swift run photoarchive-selftest
 - residual 후보가 여전히 애매하면 Krokiet/Czkawka로 작은 candidate set을 만든 뒤 Google Photos Top pick을 선택적으로 다시 활용할 수 있다. 이때 Google은 canonical file transport가 아니라 decision UI로 사용하고, 선택된 Top pick에 대응하는 Mac의 original resource/Live Photo pair를 보존한다. 후보 재업로드가 반드시 새 Photo Stack을 만들거나 ranking을 다시 실행한다고 가정하지 않는다.
 - Czkawka exact mode는 현재 native engine보다 real-library benchmark상 빠르지 않았으므로 `automatic` exact engine은 native를 유지한다. Czkawka exact는 독립 cross-check, Czkawka의 주된 장기 가치는 byte가 다른 similar image/video review candidate 생성이다.
 - 기존 수동 HDD folder tree는 PhotoArchiveKit이 새 `Media/YYYY` layout으로 덮어쓰거나 재배치하지 않는다. 실제 photo root 자체를 `archive-index` 대상으로 등록하고 current user-authored hierarchy를 semantic state로 보존한다. 사용자는 HDD media copy/분류를 Finder 등으로 직접 수행할 수 있고, PhotoArchiveKit은 재index 시 새 위치/중복/보관 여부를 갱신한다.
+- current freshness는 explicit registered-root session이 기준이다. `archive-index`는 지정한 archive root만 갱신하고, full backup 관계를 확인하려면 비교 대상 root들을 `archive-coverage`에 함께 넘긴다. 등록하지 않은 다른 Mac folder/외장장치를 자동 탐색하지 않으며 현재 background watcher는 없다. 미래 GUI의 Refresh/app-open/drive-attach rescan은 같은 core session을 호출하는 얇은 UI로 유지한다.
 
 ## 검증
 
@@ -118,6 +122,11 @@ swift run photoarchive-selftest
   - scan 간 stable opaque group ID
   - input byte 불변
   - serialized report에 알려진 raw hash가 없음
+- archive coverage synthetic/CLI validation:
+  - 두 root에 byte-identical standalone resource 1개씩을 둔 fixture에서 pairwise exact group 1, 각 root exact-covered 1 / exact-unique 0
+  - 같은 exact group을 A+B에서 관측한 뒤 A+C만 다시 scan해 stable group ID는 유지하면서 persisted current membership이 A+C 두 member로 교체됨
+  - canonical Live Photo fixture에서 complete peer는 `complete_elsewhere`, repeated ambiguous counterpart는 `split_or_ambiguous_elsewhere`로 구분
+  - real current two-root read-only scan에서 reference media 2/2가 exact-covered, pairwise shared exact group 2, current duplicate group의 stale member 0, media 수정 없음
 - disposable 5-source iPhone/Google fixture scan 결과:
   - media resource 29개
   - logical asset 8개
