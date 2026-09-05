@@ -179,6 +179,8 @@ Preview deterministic camera-name cleanup without moving media:
 swift run photoarchive organize-plan --agent-json --local "~/Pictures"
 ```
 
+For recurring Image Capture-style folders that contain exactly one logical asset and no other entries, add `--singleton-leaf-only` to limit the plan/apply scope to those clean nested folders. Live Photos still move as one still+paired-video asset, and the existing date-based destination/collision rules are reused.
+
 Before any organization apply, initialize a stable root marker explicitly (`photoarchive root init --apply "~/Pictures"`). `photoarchive organize` then defaults to a marker-verified dry run; only an explicit `--apply` can rename/flatten automatic items. Custom filenames and review items stay untouched.
 
 After organization, empty-directory cleanup can be constrained to directories that actually lost files in that completed organization session. It is also a dry run by default:

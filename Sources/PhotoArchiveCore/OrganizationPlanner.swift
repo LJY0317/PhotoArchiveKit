@@ -90,6 +90,96 @@ public struct AgentSafeOrganizationPlan: Codable, Sendable, Equatable {
 }
 
 public enum OrganizationPlanner {
+    public static func cleanSingletonLeafPlan(
+        from plan: OrganizationPlan,
+        report: ScanReport,
+        fileManager: FileManager = .default
+    ) -> OrganizationPlan {
+        struct DirectoryKey: Hashable {
+            let rootID: String
+            let relativeDirectory: String
+        }
+
+        let rootsByID = Dictionary(uniqueKeysWithValues: report.roots.map { ($0.rootID, $0) })
+        let resourcesByDirectory = Dictionary(grouping: report.resources) { resource in
+            DirectoryKey(
+                rootID: resource.rootID,
+                relativeDirectory: (resource.relativePath as NSString).deletingLastPathComponent
+            )
+        }
+
+        let selected = plan.items.filter { item in
+            guard item.decision == .automatic, !item.moves.isEmpty else { return false }
+            let sourceDirectories = Set(item.moves.map {
+                ($0.sourceRelativePath as NSString).deletingLastPathComponent
+            })
+            guard sourceDirectories.count == 1,
+                  let relativeDirectory = sourceDirectories.first,
+                  !relativeDirectory.isEmpty,
+                  let rootID = item.moves.first?.rootID,
+                  item.moves.allSatisfy({ $0.rootID == rootID }),
+                  let root = rootsByID[rootID]
+            else {
+                return false
+            }
+
+            let directoryKey = DirectoryKey(rootID: rootID, relativeDirectory: relativeDirectory)
+            let directoryResources = resourcesByDirectory[directoryKey] ?? []
+            let plannedResourceIDs = Set(item.moves.map(\.resourceID))
+            guard Set(directoryResources.map(\.resourceID)) == plannedResourceIDs else {
+                return false
+            }
+
+            let rootURL = URL(fileURLWithPath: root.canonicalPath).standardizedFileURL
+            let directoryURL = rootURL.appendingPathComponent(relativeDirectory, isDirectory: true).standardizedFileURL
+            guard directoryURL.path.hasPrefix(rootURL.path + "/") else { return false }
+
+            let expectedNames = Set(item.moves.map {
+                ($0.sourceRelativePath as NSString).lastPathComponent
+            })
+            guard let entries = try? fileManager.contentsOfDirectory(
+                at: directoryURL,
+                includingPropertiesForKeys: [.isRegularFileKey, .isDirectoryKey, .isSymbolicLinkKey],
+                options: []
+            ),
+            entries.count == expectedNames.count
+            else {
+                return false
+            }
+
+            for entry in entries {
+                guard expectedNames.contains(entry.lastPathComponent),
+                      let values = try? entry.resourceValues(forKeys: [
+                        .isRegularFileKey,
+                        .isDirectoryKey,
+                        .isSymbolicLinkKey
+                      ]),
+                      values.isRegularFile == true,
+                      values.isDirectory != true,
+                      values.isSymbolicLink != true
+                else {
+                    return false
+                }
+            }
+            return true
+        }
+
+        let automaticResourceCount = selected.reduce(0) { $0 + $1.moves.count }
+        return OrganizationPlan(
+            schemaVersion: plan.schemaVersion,
+            policy: plan.policy + "+clean_singleton_leaf_v1",
+            sessionID: plan.sessionID,
+            summary: OrganizationPlanSummary(
+                automaticItemCount: selected.count,
+                reviewItemCount: 0,
+                automaticResourceCount: automaticResourceCount,
+                reviewResourceCount: 0
+            ),
+            items: selected,
+            filesModified: false
+        )
+    }
+
     private struct Draft {
         let assetID: String
         let kind: OrganizationItemKind

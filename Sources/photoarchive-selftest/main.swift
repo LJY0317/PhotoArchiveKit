@@ -1011,6 +1011,22 @@ struct PhotoArchiveSelfTest {
 
         let organizationApplyScan = syntheticOrganizationReport(localPath: organizationApplyRoot.path)
         let organizationApplyPlan = OrganizationPlanner.makePlan(from: organizationApplyScan)
+        let singletonLeafPlan = OrganizationPlanner.cleanSingletonLeafPlan(
+            from: organizationApplyPlan,
+            report: organizationApplyScan
+        )
+        try require(
+            singletonLeafPlan.summary.automaticItemCount == 1,
+            "singleton-leaf organization should select only the isolated Live Photo directory"
+        )
+        try require(
+            singletonLeafPlan.summary.automaticResourceCount == 2,
+            "singleton-leaf organization should keep the Live Photo pair atomic"
+        )
+        try require(
+            singletonLeafPlan.items.first?.kind == .livePhoto,
+            "singleton-leaf organization should exclude a directory containing another media asset"
+        )
         let organizationPreflight = try OrganizationExecutor.preflight(
             report: organizationApplyScan,
             plan: organizationApplyPlan

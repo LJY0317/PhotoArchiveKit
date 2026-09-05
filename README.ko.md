@@ -179,6 +179,8 @@ swift run photoarchive restore-quarantine --agent-json "/path/to/session/manifes
 swift run photoarchive organize-plan --agent-json --local "~/Pictures"
 ```
 
+Image Capture 계열에서 반복적으로 생길 수 있는, logical asset 하나만 들어 있고 다른 entry가 없는 하위 폴더만 좁게 정리하려면 `--singleton-leaf-only`를 추가할 수 있습니다. Live Photo는 여전히 still+paired-video 한 묶음으로 이동하며 기존 날짜형 destination/collision 규칙을 그대로 재사용합니다.
+
 organization apply 전에는 stable root marker를 명시적으로 초기화합니다(`photoarchive root init --apply "~/Pictures"`). `photoarchive organize`는 marker를 확인하는 dry-run이 기본이며, `--apply`에서만 automatic item을 rename/flat move합니다. custom filename과 review item은 그대로 둡니다.
 
 정리가 끝난 뒤에는 해당 organization manifest에서 실제 파일이 빠져나간 source directory만 좁게 대상으로 삼아 빈 폴더를 정리할 수 있습니다. 이 명령도 기본 dry-run입니다.

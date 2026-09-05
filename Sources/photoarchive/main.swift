@@ -503,6 +503,7 @@ struct PhotoArchiveCLI {
         var eventGapHours = 6.0
         var maxConcurrency = min(max(ProcessInfo.processInfo.activeProcessorCount, 1), 8)
         var showProgress = true
+        var singletonLeafOnly = false
         var quarantineTargetURL: URL?
         var archiveDestinationURL: URL?
         var archivePlanOutputURL: URL?
@@ -541,6 +542,11 @@ struct PhotoArchiveCLI {
                 maxConcurrency = value
             case "--no-progress":
                 showProgress = false
+            case "--singleton-leaf-only":
+                guard mode == .organize || mode == .organizePlan else {
+                    throw CLIError("--singleton-leaf-only is only valid with organize or organize-plan.")
+                }
+                singletonLeafOnly = true
             case "--to":
                 guard mode == .quarantine || mode == .archivePlan else {
                     throw CLIError("--to is only valid with quarantine or archive-plan.")
@@ -681,7 +687,10 @@ struct PhotoArchiveCLI {
         }
 
         if mode == .organizePlan {
-            let plan = OrganizationPlanner.makePlan(from: report)
+            let basePlan = OrganizationPlanner.makePlan(from: report)
+            let plan = singletonLeafOnly
+                ? OrganizationPlanner.cleanSingletonLeafPlan(from: basePlan, report: report)
+                : basePlan
             if outputAgentJSON {
                 try printJSON(AgentSafeOrganizationPlan(plan: plan))
             } else if outputJSON {
@@ -718,7 +727,10 @@ struct PhotoArchiveCLI {
         }
 
         if mode == .organize {
-            let plan = OrganizationPlanner.makePlan(from: report)
+            let basePlan = OrganizationPlanner.makePlan(from: report)
+            let plan = singletonLeafOnly
+                ? OrganizationPlanner.cleanSingletonLeafPlan(from: basePlan, report: report)
+                : basePlan
             let applyReport = applyMutation
                 ? try OrganizationExecutor.apply(
                     report: report,
@@ -1424,7 +1436,9 @@ struct PhotoArchiveCLI {
         } else if command == "archive-plan" {
             mutationOptions = "  --to PATH                  Existing marker-initialized archive destination (required)\n  --output PATH              New local-private immutable plan JSON path (required)\n"
         } else if command == "organize" {
-            mutationOptions = "  --apply                    Rename/flatten verified AUTO organization items; default is dry-run\n"
+            mutationOptions = "  --apply                    Rename/flatten verified AUTO organization items; default is dry-run\n  --singleton-leaf-only      Limit to clean nested folders containing exactly one planned logical asset\n"
+        } else if command == "organize-plan" {
+            mutationOptions = "  --singleton-leaf-only      Limit to clean nested folders containing exactly one planned logical asset\n"
         } else {
             mutationOptions = ""
         }
