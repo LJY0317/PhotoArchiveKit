@@ -1185,6 +1185,13 @@ struct PhotoArchiveSelfTest {
         try recognizableNameBytes.write(
             to: filenamePolicyRoot.appendingPathComponent("72FD56C3-50FF-4980-B882-549DA293DE44.JPG")
         )
+        let explicitCopyMarkerBytes = Data("explicit-copy-marker-policy".utf8)
+        try explicitCopyMarkerBytes.write(
+            to: filenamePolicyRoot.appendingPathComponent("Photo on 4-16-25 at 4.32 PM 복사본.jpg")
+        )
+        try explicitCopyMarkerBytes.write(
+            to: filenamePolicyRoot.appendingPathComponent("Photo-on-4-16-25-at-4.32-PM.jpg")
+        )
         let filenamePolicyCatalog = temporary.appendingPathComponent("filename-policy.sqlite3")
         let filenamePolicyScanner = try ArchiveScanner(catalogURL: filenamePolicyCatalog)
         let filenamePolicyReport = try await filenamePolicyScanner.scan(roots: [
@@ -1212,6 +1219,17 @@ struct PhotoArchiveSelfTest {
             recognizableNameItem.preferredResources.first?.relativePath == "IMG_5199.JPG",
             "a standard camera-style filename should weakly outrank an opaque UUID filename when bytes/root evidence tie"
         )
+        guard let explicitCopyMarkerItem = filenamePolicyPlan.items.first(where: {
+            $0.preferredResources.contains { $0.relativePath == "Photo-on-4-16-25-at-4.32-PM.jpg" }
+                || $0.candidateResources.contains { $0.relativePath.contains("복사본") }
+        }) else {
+            throw SelfTestFailure("explicit copy-marker fixture did not produce an exact reconciliation item")
+        }
+        try require(
+            explicitCopyMarkerItem.preferredResources.first?.relativePath == "Photo-on-4-16-25-at-4.32-PM.jpg"
+                && explicitCopyMarkerItem.candidateResources.contains { $0.relativePath.contains("복사본") },
+            "an explicit copy/복사본 marker should lose keeper preference even when the peer basename is formatted differently"
+        )
         let preferenceReviewRoot = temporary.appendingPathComponent("PreferenceReview", isDirectory: true)
         let preferenceReview = try DuplicateReviewWorkspace.create(
             report: filenamePolicyReport,
@@ -1221,7 +1239,7 @@ struct PhotoArchiveSelfTest {
         )
         try require(
             preferenceReview.itemCount == 1,
-            "preference-only review should hide the strong copy-name decision but keep the weak filename preference"
+            "preference-only review should hide strong copy-name decisions but keep the weak filename preference"
         )
         let preferenceGroup = try fileManager.contentsOfDirectory(
             at: preferenceReviewRoot,
@@ -1250,6 +1268,28 @@ struct PhotoArchiveSelfTest {
                 "duplicate comparison summary should not retain the old English comparison labels"
             )
         }
+        let filenamePolicyQuarantineRoot = temporary.appendingPathComponent(
+            "FilenamePolicyQuarantine",
+            isDirectory: true
+        )
+        try fileManager.createDirectory(
+            at: filenamePolicyQuarantineRoot,
+            withIntermediateDirectories: true
+        )
+        let filenamePolicyQuarantine = try QuarantineExecutor.preflight(
+            report: filenamePolicyReport,
+            plan: filenamePolicyPlan,
+            targetURL: filenamePolicyQuarantineRoot
+        )
+        try require(
+            !filenamePolicyQuarantine.moves.contains { $0.itemID == recognizableNameItem.itemID },
+            "preference-sensitive keeper choices must not receive automatic quarantine authority"
+        )
+        try require(
+            filenamePolicyQuarantine.moves.contains { $0.itemID == copyNameItem.itemID }
+                && filenamePolicyQuarantine.moves.contains { $0.itemID == explicitCopyMarkerItem.itemID },
+            "strong copy-name evidence should remain eligible for automatic quarantine preflight"
+        )
 
         let localDuplicateLiveReport = syntheticLocalDuplicateLivePhotoReport()
         let localDuplicateLivePlan = ReconciliationPlanner.makePlan(from: localDuplicateLiveReport)

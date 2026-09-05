@@ -257,6 +257,9 @@ public enum QuarantineExecutor {
         }
 
         let rootsByID = Dictionary(uniqueKeysWithValues: report.roots.map { ($0.rootID, $0) })
+        let resourcesByKey = Dictionary(uniqueKeysWithValues: report.resources.map {
+            (CanonicalResourceKey(rootID: $0.rootID, relativePath: $0.relativePath), $0)
+        })
         for root in report.roots {
             let rootURL = URL(fileURLWithPath: root.canonicalPath)
                 .resolvingSymlinksInPath()
@@ -266,7 +269,14 @@ public enum QuarantineExecutor {
             }
         }
 
-        let automatic = plan.items.filter { $0.decision == .automaticRedundant }
+        let automatic = plan.items.filter { item in
+            guard item.decision == .automaticRedundant else { return false }
+            return CanonicalKeeperPolicy.reviewStrength(
+                item: item,
+                rootsByID: rootsByID,
+                resourcesByKey: resourcesByKey
+            ) == .strong
+        }
         guard !automatic.isEmpty else {
             throw QuarantineError.noAutomaticCandidates
         }

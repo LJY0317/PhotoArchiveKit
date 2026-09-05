@@ -53,6 +53,9 @@ enum CanonicalKeeperPolicy {
         let lhsScore = resourceScore(lhs, rootsByID: rootsByID, resourcesByKey: resourcesByKey)
         let rhsScore = resourceScore(rhs, rootsByID: rootsByID, resourcesByKey: resourcesByKey)
         if lhsScore.rootRank != rhsScore.rootRank { return lhsScore.rootRank < rhsScore.rootRank }
+        if lhsScore.explicitCopyMarkerRank != rhsScore.explicitCopyMarkerRank {
+            return lhsScore.explicitCopyMarkerRank < rhsScore.explicitCopyMarkerRank
+        }
         let copyPreference = pairwiseCopyPreference(lhs, rhs)
         if copyPreference != 0 { return copyPreference < 0 }
         if lhsScore.filenameRank != rhsScore.filenameRank { return lhsScore.filenameRank < rhsScore.filenameRank }
@@ -79,6 +82,9 @@ enum CanonicalKeeperPolicy {
             resourcesByKey: resourcesByKey
         )
         if preferredScore.rootRank != candidateScore.rootRank { return .protectedOrPreferredRoot }
+        if preferredScore.explicitCopyMarkerRank != candidateScore.explicitCopyMarkerRank {
+            return .cleanerFilename
+        }
         if pairwiseCopyPreference(preferred, candidate) != 0 { return .cleanerFilename }
         if preferredScore.filenameRank != candidateScore.filenameRank { return .recognizableFilename }
         if preferredScore.captureRank != candidateScore.captureRank { return .strongerCaptureEvidence }
@@ -91,9 +97,18 @@ enum CanonicalKeeperPolicy {
         rootsByID: [String: RootScanReport],
         resourcesByKey: [CanonicalResourceKey: ScannedResourceReport]
     ) -> ReviewStrength {
-        if item.kind == .livePhotoAsset,
-           item.reason == .canonicalLocalLivePhotoOccurrence {
+        switch item.reason {
+        case .canonicalLocalLivePhotoOccurrence,
+                .preferredNonTakeoutExactCopy,
+                .livePhotoCanonicalCoverage,
+                .livePhotoIncompleteOccurrenceExactCoverage,
+                .takeoutSourceFolderSemanticsCaptured:
             return .strong
+        case .canonicalExactCopy,
+                .noCompletePreferredLivePhoto,
+                .uncoveredLivePhotoVariant,
+                .takeoutCollectionSemanticsPending:
+            break
         }
         guard item.preferredResources.count == 1,
               let preferred = item.preferredResources.first
@@ -134,6 +149,7 @@ enum CanonicalKeeperPolicy {
 
     private struct ResourceScore {
         let rootRank: Int
+        let explicitCopyMarkerRank: Int
         let filenameRank: Int
         let captureRank: Int
         let pathDepth: Int
@@ -153,6 +169,7 @@ enum CanonicalKeeperPolicy {
     ) -> ResourceScore {
         ResourceScore(
             rootRank: rootRank(rootsByID[resource.rootID]),
+            explicitCopyMarkerRank: hasExplicitCopyMarker(filenameStem(resource.relativePath)) ? 1 : 0,
             filenameRank: filenameRank(resource.relativePath),
             captureRank: captureRank(resourcesByKey[key(resource)]?.captureTime),
             pathDepth: pathDepth(resource.relativePath)
@@ -209,6 +226,17 @@ enum CanonicalKeeperPolicy {
             if !base.isEmpty { return base }
         }
         return nil
+    }
+
+    private static func hasExplicitCopyMarker(_ stem: String) -> Bool {
+        let normalized = normalizedName(stem)
+        let patterns = [
+            #"(?:^|[ _-])copy$"#,
+            #"(?:^|[ _-])duplicate$"#,
+            #"(?:^|[ _-])복사본$"#,
+            #"(?:^|[ _-])사본$"#
+        ]
+        return patterns.contains { normalized.range(of: $0, options: .regularExpression) != nil }
     }
 
     private static func isRecognizableSourceName(_ stem: String) -> Bool {
