@@ -281,6 +281,18 @@ final class SQLiteCatalog {
         return id
     }
 
+    func recoverInterruptedScans(completedAt: Date) throws -> Int {
+        try run(
+            """
+            UPDATE scan_sessions
+            SET completed_at = ?, status = 'interrupted'
+            WHERE status = 'running'
+            """,
+            bindings: [.double(completedAt.timeIntervalSince1970)]
+        )
+        return Int(sqlite3_changes(database))
+    }
+
     func finishScan(
         sessionID: String,
         completedAt: Date,

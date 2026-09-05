@@ -91,6 +91,7 @@ public enum ArchiveRootIndexer {
         rootURL rawRootURL: URL,
         catalogURL: URL = PhotoArchivePaths.defaultCatalogURL,
         writeSnapshot: Bool = false,
+        reuseMetadataCache: Bool = true,
         reuseHashCache: Bool = true,
         maxConcurrentProbes: Int = min(max(ProcessInfo.processInfo.activeProcessorCount, 1), 8),
         progressHandler: ScanProgressHandler? = nil
@@ -106,6 +107,7 @@ public enum ArchiveRootIndexer {
             options: ScanOptions(
                 computeExactDuplicates: true,
                 computeArchiveIntegrityPreconditions: true,
+                reuseMetadataCache: reuseMetadataCache,
                 reuseExactHashCache: reuseHashCache,
                 exactDuplicateEngine: .automatic,
                 maxConcurrentProbes: max(1, maxConcurrentProbes),

@@ -137,6 +137,7 @@ struct PhotoArchiveCLI {
         var apply = false
         var outputJSON = false
         var outputAgentJSON = false
+        var reuseMetadataCache = true
         var reuseHashCache = true
         var showProgress = true
         var maxConcurrency = min(max(ProcessInfo.processInfo.activeProcessorCount, 1), 8)
@@ -155,6 +156,7 @@ struct PhotoArchiveCLI {
             case "--agent-json":
                 outputAgentJSON = true
             case "--fresh":
+                reuseMetadataCache = false
                 reuseHashCache = false
             case "--no-progress":
                 showProgress = false
@@ -197,6 +199,7 @@ struct PhotoArchiveCLI {
             rootURL: fileURL(paths[0]),
             catalogURL: catalogURL,
             writeSnapshot: apply,
+            reuseMetadataCache: reuseMetadataCache,
             reuseHashCache: reuseHashCache,
             maxConcurrentProbes: maxConcurrency,
             progressHandler: progressHandler
@@ -1569,7 +1572,7 @@ struct PhotoArchiveCLI {
             Options:
               --catalog PATH   Local authoritative SQLite catalog
               --jobs NUMBER    Concurrent metadata probes, 1-64
-              --fresh          Ignore hash caches and re-read every media byte
+              --fresh          Ignore metadata/hash caches and re-read every media resource
               --no-progress    Disable scan progress output on stderr
               --apply          Write PATH/.photoarchive/inventory-v1.jsonl after indexing
               --json           Print local diagnostic JSON including the inventory path

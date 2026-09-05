@@ -103,6 +103,33 @@ struct PhotoArchiveSelfTest {
             "changed modification time must invalidate metadata cache reuse"
         )
 
+        let interruptedCatalog = temporary.appendingPathComponent("interrupted-scan.sqlite3")
+        let interruptedRoot = temporary.appendingPathComponent("InterruptedScan", isDirectory: true)
+        try fileManager.createDirectory(at: interruptedRoot, withIntermediateDirectories: true)
+        try Data("interrupted-scan-resource".utf8).write(
+            to: interruptedRoot.appendingPathComponent("resource.jpg")
+        )
+        let interruptedScanner = try ArchiveScanner(catalogURL: interruptedCatalog)
+        try sqliteExecute(
+            databaseURL: interruptedCatalog,
+            sql: "INSERT INTO scan_sessions (id, started_at, status, root_count) VALUES ('SINTERRUPTED', 1, 'running', 1)"
+        )
+        let recoveredScan = try await interruptedScanner.scan(
+            roots: [ScanRoot(url: interruptedRoot, kind: .reference)],
+            options: ScanOptions(computeExactDuplicates: false)
+        )
+        try require(
+            try sqliteText(
+                databaseURL: interruptedCatalog,
+                sql: "SELECT status FROM scan_sessions WHERE id = 'SINTERRUPTED'"
+            ) == "interrupted",
+            "a new scan should recover an earlier unfinished scan session"
+        )
+        try require(
+            recoveredScan.notices.contains { $0.code == "interrupted_scan_sessions_recovered" },
+            "scan report should disclose recovered interrupted session bookkeeping"
+        )
+
         let takeoutMetadataCacheRoot = temporary.appendingPathComponent(
             "TakeoutMetadataCache",
             isDirectory: true
@@ -517,6 +544,7 @@ struct PhotoArchiveSelfTest {
             rootURL: userArchiveRoot,
             catalogURL: freshComputerCatalog,
             writeSnapshot: false,
+            reuseMetadataCache: false,
             reuseHashCache: false,
             maxConcurrentProbes: 1
         )
@@ -2496,6 +2524,23 @@ private func sqliteText(databaseURL: URL, sql: String) throws -> String? {
     guard sqlite3_step(statement) == SQLITE_ROW else { return nil }
     guard let value = sqlite3_column_text(statement, 0) else { return nil }
     return String(cString: value)
+}
+
+private func sqliteExecute(databaseURL: URL, sql: String) throws {
+    var database: OpaquePointer?
+    guard sqlite3_open_v2(databaseURL.path, &database, SQLITE_OPEN_READWRITE, nil) == SQLITE_OK,
+          let database
+    else {
+        throw SelfTestFailure("could not open sqlite database for write")
+    }
+    defer { sqlite3_close(database) }
+
+    var errorMessage: UnsafeMutablePointer<CChar>?
+    guard sqlite3_exec(database, sql, nil, nil, &errorMessage) == SQLITE_OK else {
+        let message = errorMessage.map { String(cString: $0) } ?? "unknown sqlite error"
+        sqlite3_free(errorMessage)
+        throw SelfTestFailure("sqlite write failed: \(message)")
+    }
 }
 
 private func sqliteInt(databaseURL: URL, sql: String) throws -> Int64 {

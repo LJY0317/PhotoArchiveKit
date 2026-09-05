@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 public enum ArchiveScannerError: LocalizedError {
@@ -6,6 +7,7 @@ public enum ArchiveScannerError: LocalizedError {
     case rootIsNotDirectory(String)
     case duplicateRoot(String)
     case cannotEnumerate(String)
+    case scanAlreadyRunning
 
     public var errorDescription: String? {
         switch self {
@@ -19,7 +21,38 @@ public enum ArchiveScannerError: LocalizedError {
             return "The same source root was supplied more than once: \(path)"
         case let .cannotEnumerate(path):
             return "Could not enumerate source root: \(path)"
+        case .scanAlreadyRunning:
+            return "Another PhotoArchiveKit scan is already running for this catalog."
         }
+    }
+}
+
+private final class CatalogScanLock {
+    private let descriptor: Int32
+
+    private init(descriptor: Int32) {
+        self.descriptor = descriptor
+    }
+
+    static func acquire(catalogURL: URL) throws -> CatalogScanLock {
+        let lockURL = catalogURL.deletingLastPathComponent().appendingPathComponent(
+            ".\(catalogURL.lastPathComponent).scan.lock",
+            isDirectory: false
+        )
+        let descriptor = Darwin.open(lockURL.path, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR)
+        guard descriptor >= 0 else {
+            throw ArchiveScannerError.scanAlreadyRunning
+        }
+        guard flock(descriptor, LOCK_EX | LOCK_NB) == 0 else {
+            Darwin.close(descriptor)
+            throw ArchiveScannerError.scanAlreadyRunning
+        }
+        return CatalogScanLock(descriptor: descriptor)
+    }
+
+    func release() {
+        _ = flock(descriptor, LOCK_UN)
+        Darwin.close(descriptor)
     }
 }
 
@@ -62,7 +95,13 @@ public final class ArchiveScanner {
     ) async throws -> ScanReport {
         guard !inputs.isEmpty else { throw ArchiveScannerError.noRoots }
 
+        let scanLock = try CatalogScanLock.acquire(catalogURL: catalog.url)
+        defer { scanLock.release() }
+
         let startedAt = Date()
+        let recoveredInterruptedScanCount = try catalog.recoverInterruptedScans(
+            completedAt: startedAt
+        )
         let roots = try resolveAndValidateRoots(inputs)
         let sessionID = try catalog.beginScan(startedAt: startedAt, rootCount: roots.count)
 
@@ -184,6 +223,12 @@ public final class ArchiveScanner {
                     resources: resources,
                     duplicateGroups: internalDuplicateGroups,
                     duplicateGroupIDs: duplicateGroupIDs,
+                    initialNotices: recoveredInterruptedScanCount > 0
+                        ? [ScanNotice(
+                            code: "interrupted_scan_sessions_recovered",
+                            message: "Recovered \(recoveredInterruptedScanCount) incomplete scan session(s) left by an earlier interrupted process."
+                        )]
+                        : [],
                     initialWarnings: warnings,
                     eventGap: options.eventGap,
                     sourceFolderSemanticsCapturedRootIDs: sourceFolderSemanticsCapturedRootIDs,
@@ -688,13 +733,14 @@ public final class ArchiveScanner {
         resources: [ProbedResource],
         duplicateGroups: [InternalDuplicateGroup],
         duplicateGroupIDs: [Data: String],
+        initialNotices: [ScanNotice],
         initialWarnings: [ScanWarning],
         eventGap: TimeInterval,
         sourceFolderSemanticsCapturedRootIDs: Set<String>,
         recognizedSidecars: [RecognizedSidecarReport]
     ) -> ReportParts {
         let assemblies = AssetAssembler.livePhotoAssemblies(from: resources)
-        var notices: [ScanNotice] = []
+        var notices = initialNotices
         var warnings = initialWarnings
         var occurrencesByRoot: [String: [LivePhotoOccurrenceReport]] = [:]
 

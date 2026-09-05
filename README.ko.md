@@ -71,7 +71,7 @@ byte 보존 복제본          provenance와 이력
 - resource, 논리 asset, provenance, duplicate group, source collection mapping, 최초 filename, path history, scan session을 SQLite에 저장
 - 기존에 사용자가 직접 관리하던 **archive root**를 `archive-index`로 index: 현재 하위 folder hierarchy를 user-authored collection semantics로 보존하고, media는 그대로 둔 채 수동 Finder 이동 뒤 stale folder membership을 정리하며, 모든 media resource의 exact hash를 확보
 - path/filesystem identity, byte size, modification time, metadata-probe cache version이 그대로인 파일은 EXIF/QuickTime/Live Photo metadata probe 결과를 재사용함. 과거 metadata probe 실패와 현재 유효 capture time이 변경 가능한 Google Takeout sidecar에서 온 media는 보수적으로 다시 probe함
-- 변경되지 않은 파일은 Mac-local SQLite의 SHA-256 evidence를 재사용하고, archive root에서는 hidden `.photoarchive/inventory-v1.jsonl`의 portable hash cache도 사용할 수 있음. 일반 scan 계열 command의 `--fresh`는 metadata/hash reuse를 끄고, `archive-index --fresh`는 해당 command의 local/portable hash cache를 모두 무시함
+- 변경되지 않은 파일은 Mac-local SQLite의 metadata와 SHA-256 evidence를 재사용하고, archive root에서는 hidden `.photoarchive/inventory-v1.jsonl`의 portable exact-hash cache도 사용할 수 있음. 일반 scan 계열 command와 `archive-index --fresh`는 metadata/hash reuse를 모두 끔
 - 빠른 authoritative working catalog는 Mac에 두되, removable archive root마다 relative 구조와 integrity evidence를 가진 root-scoped portable inventory를 함께 둘 수 있음. 이 inventory는 다른 컴퓨터에서 재스캔을 가속하는 구조도/cache이지 mutation authority가 아님
 - catalog의 portable semantic subset을 versioned JSONL로 export하고 raw hash·Live Photo fingerprint·filesystem ID·absolute root path·capture timestamp·provider object ID·generated scan/event cache 없이 새 SQLite catalog로 dry-run/restore
 - 같은 volume 안의 rename/move에서는 physical resource identity를 유지하고, optional `.photoarchive-root` marker로 이동된 source root도 동일 root로 다시 인식
@@ -242,7 +242,7 @@ swift run photoarchive root init --apply "/Volumes/My HDD/deep/path/My Photos"
 swift run photoarchive archive-index --agent-json "/Volumes/My HDD/deep/path/My Photos"
 ```
 
-`archive-index`는 supported media가 들어 있는 현재 folder와 그 parent hierarchy를 user-authored collection으로 Mac-local SQLite에 기록합니다. media를 move/rename/delete/rewrite하지 않습니다. 일반 재스캔은 stable file fact가 그대로면 기존 exact hash를 재사용하고, 같은 volume 안에서 Finder로 move/rename한 경우 relative path가 바뀌어도 filesystem identity로 기존 hash를 다시 연결할 수 있습니다. 다만 destructive/mutating workflow는 이 cache만 믿지 않고 실행 직전에 fresh byte verification을 다시 합니다.
+`archive-index`는 supported media가 들어 있는 현재 folder와 그 parent hierarchy를 user-authored collection으로 Mac-local SQLite에 기록합니다. media를 move/rename/delete/rewrite하지 않습니다. 일반 재스캔은 stable file fact가 그대로면 기존 metadata/exact hash를 재사용하고, 같은 volume 안에서 Finder로 move/rename한 경우 relative path가 바뀌어도 filesystem identity로 기존 evidence를 다시 연결할 수 있습니다. `archive-index --fresh`는 metadata와 local/portable hash cache를 모두 무시합니다. 다만 destructive/mutating workflow는 이 cache만 믿지 않고 실행 직전에 fresh byte verification을 다시 합니다.
 
 index를 확인한 뒤 명시적으로 `--apply`를 붙였을 때만 HDD에 hidden root-scoped inventory를 씁니다.
 
