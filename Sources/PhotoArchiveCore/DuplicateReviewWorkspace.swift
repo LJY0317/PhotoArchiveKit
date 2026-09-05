@@ -657,6 +657,7 @@ public enum DuplicateReviewWorkspace {
         case .protectedOrPreferredRoot: return "더 우선하거나 보호되는 저장 위치"
         case .cleanerFilename: return "복사본 표식이 없는 더 깔끔한 파일명"
         case .recognizableFilename: return "출처·용도를 더 알아보기 쉬운 파일명"
+        case .matchingParentFolder: return "파일명과 맞아떨어지는 의도적인 부모 폴더 구조"
         case .strongerCaptureEvidence: return "더 신뢰도 높은 촬영 시각 근거"
         case .shallowerPath: return "더 얕고 단순한 폴더 경로"
         case .deterministicTieBreak: return "의미 있는 우열이 없어 결과를 일정하게 만들기 위한 동률 해소"

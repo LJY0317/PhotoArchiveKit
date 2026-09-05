@@ -10,6 +10,7 @@ enum CanonicalKeeperPolicy {
         case protectedOrPreferredRoot = "preferred_root_role"
         case cleanerFilename = "cleaner_filename"
         case recognizableFilename = "recognizable_filename"
+        case matchingParentFolder = "matching_parent_folder"
         case strongerCaptureEvidence = "stronger_capture_evidence"
         case shallowerPath = "shallower_path"
         case deterministicTieBreak = "deterministic_tie_break"
@@ -59,6 +60,8 @@ enum CanonicalKeeperPolicy {
         let copyPreference = pairwiseCopyPreference(lhs, rhs)
         if copyPreference != 0 { return copyPreference < 0 }
         if lhsScore.filenameRank != rhsScore.filenameRank { return lhsScore.filenameRank < rhsScore.filenameRank }
+        let parentPreference = pairwiseParentFolderPreference(lhs, rhs)
+        if parentPreference != 0 { return parentPreference < 0 }
         if lhsScore.captureRank != rhsScore.captureRank { return lhsScore.captureRank < rhsScore.captureRank }
         if lhsScore.pathDepth != rhsScore.pathDepth { return lhsScore.pathDepth < rhsScore.pathDepth }
         return (lhs.rootID, lhs.relativePath, lhs.role.rawValue)
@@ -87,6 +90,7 @@ enum CanonicalKeeperPolicy {
         }
         if pairwiseCopyPreference(preferred, candidate) != 0 { return .cleanerFilename }
         if preferredScore.filenameRank != candidateScore.filenameRank { return .recognizableFilename }
+        if pairwiseParentFolderPreference(preferred, candidate) != 0 { return .matchingParentFolder }
         if preferredScore.captureRank != candidateScore.captureRank { return .strongerCaptureEvidence }
         if preferredScore.pathDepth != candidateScore.pathDepth { return .shallowerPath }
         return .deterministicTieBreak
@@ -122,7 +126,8 @@ enum CanonicalKeeperPolicy {
                 rootsByID: rootsByID,
                 resourcesByKey: resourcesByKey
             ) {
-            case .protectedOrPreferredRoot, .cleanerFilename, .recognizableFilename, .shallowerPath:
+            case .protectedOrPreferredRoot, .cleanerFilename, .recognizableFilename,
+                    .matchingParentFolder, .shallowerPath:
                 continue
             case .strongerCaptureEvidence, .deterministicTieBreak:
                 return .preference
@@ -193,6 +198,40 @@ enum CanonicalKeeperPolicy {
         if isRecognizableSourceName(normalized) { return 0 }
         if isOpaqueGeneratedName(normalized) { return 2 }
         return 1
+    }
+
+    private static func pairwiseParentFolderPreference(
+        _ lhs: ResourceReference,
+        _ rhs: ResourceReference
+    ) -> Int {
+        let lhsStructured = hasMatchingParentFolder(lhs.relativePath)
+        let rhsStructured = hasMatchingParentFolder(rhs.relativePath)
+        let lhsPlaceholder = hasPlaceholderParentFolder(lhs.relativePath)
+        let rhsPlaceholder = hasPlaceholderParentFolder(rhs.relativePath)
+
+        if lhsStructured && rhsPlaceholder && !rhsStructured { return -1 }
+        if rhsStructured && lhsPlaceholder && !lhsStructured { return 1 }
+        return 0
+    }
+
+    private static func hasMatchingParentFolder(_ relativePath: String) -> Bool {
+        let path = relativePath as NSString
+        let parent = (path.deletingLastPathComponent as NSString).lastPathComponent
+        guard !parent.isEmpty, parent != "." else { return false }
+        return normalizedName(parent) == normalizedName(filenameStem(relativePath))
+    }
+
+    private static func hasPlaceholderParentFolder(_ relativePath: String) -> Bool {
+        let path = relativePath as NSString
+        let parent = normalizedName((path.deletingLastPathComponent as NSString).lastPathComponent)
+        let placeholders: Set<String> = [
+            "무제 폴더",
+            "untitled folder",
+            "새 폴더",
+            "새폴더",
+            "new folder"
+        ]
+        return placeholders.contains(parent)
     }
 
     private static func filenameStem(_ relativePath: String) -> String {

@@ -1193,6 +1193,13 @@ struct PhotoArchiveSelfTest {
         try fileManager.createDirectory(at: filenamePolicyNested, withIntermediateDirectories: true)
         try shallowPathBytes.write(to: filenamePolicyRoot.appendingPathComponent("same-name.jpg"))
         try shallowPathBytes.write(to: filenamePolicyNested.appendingPathComponent("same-name.jpg"))
+        let matchingParentBytes = Data("matching-parent-policy".utf8)
+        let matchingParentFolder = filenamePolicyRoot.appendingPathComponent("IMG_2264", isDirectory: true)
+        let placeholderParentFolder = filenamePolicyRoot.appendingPathComponent("무제 폴더", isDirectory: true)
+        try fileManager.createDirectory(at: matchingParentFolder, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: placeholderParentFolder, withIntermediateDirectories: true)
+        try matchingParentBytes.write(to: matchingParentFolder.appendingPathComponent("IMG_2264.MOV"))
+        try matchingParentBytes.write(to: placeholderParentFolder.appendingPathComponent("IMG_2264.mov"))
         let explicitCopyMarkerBytes = Data("explicit-copy-marker-policy".utf8)
         try explicitCopyMarkerBytes.write(
             to: filenamePolicyRoot.appendingPathComponent("Photo on 4-16-25 at 4.32 PM 복사본.jpg")
@@ -1242,6 +1249,17 @@ struct PhotoArchiveSelfTest {
             shallowPathItem.preferredResources.first?.relativePath == "same-name.jpg"
                 && shallowPathItem.candidateResources.contains { $0.relativePath == "nested/same-name.jpg" },
             "same-root exact copies with the same filename should prefer the shallower path"
+        )
+        guard let matchingParentItem = filenamePolicyPlan.items.first(where: {
+            $0.preferredResources.contains { $0.relativePath == "IMG_2264/IMG_2264.MOV" }
+                || $0.candidateResources.contains { $0.relativePath == "무제 폴더/IMG_2264.mov" }
+        }) else {
+            throw SelfTestFailure("matching-parent fixture did not produce an exact reconciliation item")
+        }
+        try require(
+            matchingParentItem.preferredResources.first?.relativePath == "IMG_2264/IMG_2264.MOV"
+                && matchingParentItem.candidateResources.contains { $0.relativePath == "무제 폴더/IMG_2264.mov" },
+            "a filename-matching parent folder should outrank an untitled placeholder parent"
         )
         guard let explicitCopyMarkerItem = filenamePolicyPlan.items.first(where: {
             $0.preferredResources.contains { $0.relativePath == "Photo-on-4-16-25-at-4.32-PM.jpg" }
@@ -1313,8 +1331,9 @@ struct PhotoArchiveSelfTest {
             filenamePolicyQuarantine.moves.contains { $0.itemID == copyNameItem.itemID }
                 && filenamePolicyQuarantine.moves.contains { $0.itemID == explicitCopyMarkerItem.itemID }
                 && filenamePolicyQuarantine.moves.contains { $0.itemID == recognizableNameItem.itemID }
-                && filenamePolicyQuarantine.moves.contains { $0.itemID == shallowPathItem.itemID },
-            "confirmed copy-name, recognizable-name, and shallow-path rules should receive automatic quarantine preflight authority"
+                && filenamePolicyQuarantine.moves.contains { $0.itemID == shallowPathItem.itemID }
+                && filenamePolicyQuarantine.moves.contains { $0.itemID == matchingParentItem.itemID },
+            "confirmed copy-name, recognizable-name, structured-parent, and shallow-path rules should receive automatic quarantine preflight authority"
         )
 
         let localDuplicateLiveReport = syntheticLocalDuplicateLivePhotoReport()
