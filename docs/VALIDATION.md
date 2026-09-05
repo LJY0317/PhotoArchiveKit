@@ -75,6 +75,10 @@ Synthetic catalog에서 versioned JSONL export -> restore dry-run -> 새 SQLite 
 
 이 JSONL은 relative path, original filename, collection label을 보존하므로 agent-safe/share-safe 파일이 아니라 local-private disaster-recovery artifact다.
 
+## Scan progress 검증
+
+Synthetic scan에서 core `ScanProgress` event가 metadata `2/2`, exact-hash `2/2`, finalizing completion을 순서대로 노출하는 것을 self-test로 검증했다. 별도 executable smoke에서는 progress가 stderr로만 출력되는 동안 `--agent-json` stdout이 정상 JSON으로 독립 parse되는 것을 확인했다. Enumeration은 total을 알기 전 discovered count만 보고하며, determinate stage가 시작된 뒤에만 percentage를 계산한다. `--no-progress`는 계산/scan 결과를 바꾸지 않고 renderer만 비활성화한다.
+
 ## User-managed archive index / incremental hash cache 검증
 
 synthetic marker-initialized archive root에 `Trips/Japan`과 `Family` hierarchy를 만들고 `archive-index` core/CLI path를 검증했다. 첫 scan은 모든 media에 integrity SHA-256을 생성했고, SQLite에는 세 folder(`Trips`, `Trips/Japan`, `Family`)가 `user_archive_folder` collection으로 저장되며 두 logical asset이 각각 current leaf folder membership을 가졌다.

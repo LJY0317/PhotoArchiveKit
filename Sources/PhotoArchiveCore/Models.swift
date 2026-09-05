@@ -41,6 +41,33 @@ public enum ExactDuplicateEngine: String, Codable, CaseIterable, Sendable {
     case czkawka
 }
 
+public enum ScanProgressStage: String, Codable, Sendable {
+    case enumerating
+    case metadata
+    case hashingDuplicates = "hashing_duplicates"
+    case hashingIntegrity = "hashing_integrity"
+    case cataloging
+    case finalizing
+}
+
+public struct ScanProgress: Sendable, Equatable {
+    public let stage: ScanProgressStage
+    public let completedUnitCount: Int
+    public let totalUnitCount: Int?
+
+    public init(
+        stage: ScanProgressStage,
+        completedUnitCount: Int,
+        totalUnitCount: Int? = nil
+    ) {
+        self.stage = stage
+        self.completedUnitCount = completedUnitCount
+        self.totalUnitCount = totalUnitCount
+    }
+}
+
+public typealias ScanProgressHandler = @Sendable (ScanProgress) -> Void
+
 public struct ScanOptions: Sendable {
     public var computeExactDuplicates: Bool
     public var computeArchiveIntegrityPreconditions: Bool
@@ -48,6 +75,7 @@ public struct ScanOptions: Sendable {
     public var exactDuplicateEngine: ExactDuplicateEngine
     public var eventGap: TimeInterval
     public var maxConcurrentProbes: Int
+    public var progressHandler: ScanProgressHandler?
 
     public init(
         computeExactDuplicates: Bool = true,
@@ -55,7 +83,8 @@ public struct ScanOptions: Sendable {
         reuseExactHashCache: Bool = true,
         exactDuplicateEngine: ExactDuplicateEngine = .automatic,
         eventGap: TimeInterval = 6 * 60 * 60,
-        maxConcurrentProbes: Int = min(max(ProcessInfo.processInfo.activeProcessorCount, 1), 8)
+        maxConcurrentProbes: Int = min(max(ProcessInfo.processInfo.activeProcessorCount, 1), 8),
+        progressHandler: ScanProgressHandler? = nil
     ) {
         self.computeExactDuplicates = computeExactDuplicates
         self.computeArchiveIntegrityPreconditions = computeArchiveIntegrityPreconditions
@@ -63,6 +92,7 @@ public struct ScanOptions: Sendable {
         self.exactDuplicateEngine = exactDuplicateEngine
         self.eventGap = eventGap
         self.maxConcurrentProbes = max(1, maxConcurrentProbes)
+        self.progressHandler = progressHandler
     }
 }
 

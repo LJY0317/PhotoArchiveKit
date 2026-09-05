@@ -73,6 +73,7 @@ byte 보존 복제본          provenance와 이력
 - Google Takeout의 source-folder/album-like membership을 local SQLite에 먼저 보존한 뒤 Takeout-only exact standalone copy를 물리적으로 collapse할 수 있으며, collection 이름/path는 agent-safe output에 노출하지 않음
 - 적용된 quarantine session에 local restore manifest를 남기고, 이동 중 오류가 발생하면 그 session에서 이미 이동한 resource 전체를 rollback하며, `restore-quarantine`도 local catalog의 원래 SHA-256 evidence와 quarantined byte를 fresh 검증한 뒤에만 dry-run/apply
 - 현재 모든 분석 단계는 network에 접속하지 않음
+- machine-readable output을 깨뜨리지 않는 구조화 scan progress. 재귀 enumeration 중에는 최종 파일 수가 아직 없으므로 발견 개수만 표시하고, 목록이 확정된 뒤 metadata/hash 단계는 `완료/전체`와 퍼센트를 표시. 터미널에서는 stderr 한 줄을 갱신하고 non-interactive log에서는 throttled progress line만 출력하며 `--no-progress`로 끌 수 있음
 
 정확한 중복 판정을 위해 catalog 내부에는 raw exact-file hash가 저장됩니다. 사람용 local diagnostic과 AI agent용 output은 분리합니다. `--json`은 troubleshooting을 위해 local path를 포함할 수 있지만, `--agent-json`은 path·filename·byte size·capture timestamp·raw hash·Live Photo identifier·GPS·preview 등 file-level private data를 제거합니다. AI agent는 agent-safe surface만 사용합니다.
 
@@ -318,6 +319,9 @@ option 없이 입력한 path는 Inbox로 처리합니다.
 - `--no-exact-duplicates` — 로컬 SHA-256 비교 생략
 - `--event-gap-hours NUMBER` — 이 시간보다 긴 공백이 있으면 새 event로 분리, 기본값 6시간
 - `--jobs NUMBER` — 동시에 실행할 metadata probe 수 제한
+- `--no-progress` — stderr progress 출력 비활성화. JSON/stdout payload에는 영향을 주지 않음
+
+긴 scan은 성숙한 파일 도구에서 흔히 쓰는 2단계 progress 방식을 따릅니다. 폴더를 재귀적으로 열람하는 동안에는 최종 total을 아직 모르므로 발견된 개수만 표시하고, enumeration이 끝난 뒤부터 `완료/전체`와 퍼센트를 표시합니다. 진행률을 위해 느린 외장 디스크를 미리 한 번 더 전수 순회하지 않습니다.
 
 ### `photoarchive archive-index`
 

@@ -134,6 +134,7 @@ struct PhotoArchiveCLI {
         var outputJSON = false
         var outputAgentJSON = false
         var reuseHashCache = true
+        var showProgress = true
         var maxConcurrency = min(max(ProcessInfo.processInfo.activeProcessorCount, 1), 8)
         var paths: [String] = []
 
@@ -151,6 +152,8 @@ struct PhotoArchiveCLI {
                 outputAgentJSON = true
             case "--fresh":
                 reuseHashCache = false
+            case "--no-progress":
+                showProgress = false
             case "--jobs":
                 let raw = try value(after: argument, at: &index, in: arguments)
                 guard let value = Int(raw), value > 0, value <= 64 else {
@@ -176,12 +179,23 @@ struct PhotoArchiveCLI {
             throw CLIError("Use either --json or --agent-json, not both.")
         }
 
+        let progressRenderer = ScanProgressRenderer(enabled: showProgress)
+        defer { progressRenderer.finish() }
+        let progressHandler: ScanProgressHandler?
+        if showProgress {
+            progressHandler = { progress in
+                progressRenderer.render(progress)
+            }
+        } else {
+            progressHandler = nil
+        }
         let report = try await ArchiveRootIndexer.run(
             rootURL: fileURL(paths[0]),
             catalogURL: catalogURL,
             writeSnapshot: apply,
             reuseHashCache: reuseHashCache,
-            maxConcurrentProbes: maxConcurrency
+            maxConcurrentProbes: maxConcurrency,
+            progressHandler: progressHandler
         )
         if outputAgentJSON {
             try printJSON(AgentSafeArchiveRootInventoryReport(report: report))
@@ -485,6 +499,7 @@ struct PhotoArchiveCLI {
         var exactDuplicateEngine = ExactDuplicateEngine.automatic
         var eventGapHours = 6.0
         var maxConcurrency = min(max(ProcessInfo.processInfo.activeProcessorCount, 1), 8)
+        var showProgress = true
         var quarantineTargetURL: URL?
         var archiveDestinationURL: URL?
         var archivePlanOutputURL: URL?
@@ -521,6 +536,8 @@ struct PhotoArchiveCLI {
                     throw CLIError("--jobs must be between 1 and 64.")
                 }
                 maxConcurrency = value
+            case "--no-progress":
+                showProgress = false
             case "--to":
                 guard mode == .quarantine || mode == .archivePlan else {
                     throw CLIError("--to is only valid with quarantine or archive-plan.")
@@ -606,6 +623,16 @@ struct PhotoArchiveCLI {
             throw CLIError("Use either --json or --agent-json, not both.")
         }
 
+        let progressRenderer = ScanProgressRenderer(enabled: showProgress)
+        defer { progressRenderer.finish() }
+        let progressHandler: ScanProgressHandler?
+        if showProgress {
+            progressHandler = { progress in
+                progressRenderer.render(progress)
+            }
+        } else {
+            progressHandler = nil
+        }
         let scanner = try ArchiveScanner(catalogURL: catalogURL)
         let report = try await scanner.scan(
             roots: roots,
@@ -614,7 +641,8 @@ struct PhotoArchiveCLI {
                 computeArchiveIntegrityPreconditions: mode == .archivePlan,
                 exactDuplicateEngine: exactDuplicateEngine,
                 eventGap: eventGapHours * 60 * 60,
-                maxConcurrentProbes: maxConcurrency
+                maxConcurrentProbes: maxConcurrency,
+                progressHandler: progressHandler
             )
         )
 
@@ -1171,6 +1199,7 @@ struct PhotoArchiveCLI {
               --catalog PATH   Local authoritative SQLite catalog
               --jobs NUMBER    Concurrent metadata probes, 1-64
               --fresh          Ignore hash caches and re-read every media byte
+              --no-progress    Disable scan progress output on stderr
               --apply          Write PATH/.photoarchive/inventory-v1.jsonl after indexing
               --json           Print local diagnostic JSON including the inventory path
               --agent-json     Print privacy-minimized counts/status without paths or hashes
@@ -1375,6 +1404,7 @@ struct PhotoArchiveCLI {
               --exact-engine ENGINE      automatic, native, or czkawka (default: automatic)
               --event-gap-hours NUMBER   Start a new event after this gap (default: 6)
               --jobs NUMBER              Concurrent metadata probes, 1-64
+              --no-progress              Disable scan progress output on stderr
             \(mutationOptions)  --help                     Show this help
 
             \(operationNotes)
@@ -1392,6 +1422,99 @@ struct PhotoArchiveCLI {
     }
 
     private static func writeStandardError(_ text: String) {
+        FileHandle.standardError.write(Data(text.utf8))
+    }
+}
+
+private final class ScanProgressRenderer: @unchecked Sendable {
+    private let enabled: Bool
+    private let terminal: Bool
+    private let lock = NSLock()
+    private var lastStage: ScanProgressStage?
+    private var lastPercentBucket = -1
+    private var lastCompleted = -1
+    private var lastEmission = Date.distantPast
+    private var hasRenderedTTYLine = false
+
+    init(enabled: Bool) {
+        self.enabled = enabled
+        self.terminal = isatty(STDERR_FILENO) == 1
+    }
+
+    func render(_ progress: ScanProgress) {
+        guard enabled else { return }
+        lock.lock()
+        defer { lock.unlock() }
+
+        let now = Date()
+        let stageChanged = lastStage != progress.stage
+        let completed = progress.totalUnitCount.map { progress.completedUnitCount >= $0 } ?? false
+        let percent = progress.totalUnitCount.flatMap { total -> Int? in
+            guard total > 0 else { return nil }
+            return min(100, max(0, Int((Double(progress.completedUnitCount) / Double(total)) * 100.0)))
+        }
+        let percentBucket = percent.map { $0 / 5 } ?? -1
+
+        let shouldEmit: Bool
+        if terminal {
+            shouldEmit = stageChanged || completed || now.timeIntervalSince(lastEmission) >= 0.10
+        } else if progress.totalUnitCount == nil {
+            shouldEmit = stageChanged || now.timeIntervalSince(lastEmission) >= 5.0
+        } else {
+            shouldEmit = stageChanged
+                || completed
+                || percentBucket != lastPercentBucket
+                || now.timeIntervalSince(lastEmission) >= 10.0
+        }
+        guard shouldEmit, stageChanged || progress.completedUnitCount != lastCompleted else { return }
+
+        let text = formatted(progress)
+        if terminal {
+            writeStandardError("\r\u{001B}[2K\(text)")
+            hasRenderedTTYLine = true
+        } else {
+            writeStandardError("progress: \(text)\n")
+        }
+        lastStage = progress.stage
+        lastPercentBucket = percentBucket
+        lastCompleted = progress.completedUnitCount
+        lastEmission = now
+    }
+
+    func finish() {
+        guard enabled else { return }
+        lock.lock()
+        defer { lock.unlock() }
+        if terminal, hasRenderedTTYLine {
+            writeStandardError("\n")
+            hasRenderedTTYLine = false
+        }
+    }
+
+    private func formatted(_ progress: ScanProgress) -> String {
+        let label: String
+        switch progress.stage {
+        case .enumerating: label = "Enumerating"
+        case .metadata: label = "Reading metadata"
+        case .hashingDuplicates: label = "Hashing duplicate candidates"
+        case .hashingIntegrity: label = "Verifying archive hashes"
+        case .cataloging: label = "Updating catalog"
+        case .finalizing: label = "Finalizing"
+        }
+
+        guard let total = progress.totalUnitCount else {
+            return "\(label)  \(progress.completedUnitCount) found"
+        }
+        guard total > 0 else {
+            return "\(label)  done"
+        }
+        let percent = min(100, max(0, Int(
+            (Double(progress.completedUnitCount) / Double(total)) * 100.0
+        )))
+        return "\(label)  \(progress.completedUnitCount)/\(total)  \(percent)%"
+    }
+
+    private func writeStandardError(_ text: String) {
         FileHandle.standardError.write(Data(text.utf8))
     }
 }

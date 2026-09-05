@@ -566,6 +566,27 @@ inventory file exists                                                true
 
 `swift build`, `photoarchive-selftest`, public-tree privacy check, `git diff --check`를 통과했다. 이 milestone에서는 **사용자의 실제 외장 HDD media를 copy/move/delete하지 않았다.** 다음 real-library 검증은 사용자가 지정하는 실제 HDD 사진 최상위 root를 read-only `archive-index`로 먼저 측정하고, 첫 full pass와 즉시 incremental repeat의 wall-clock/cache-hit 차이를 비교하는 것이다. inventory write는 별도 explicit `--apply`로 유지한다.
 
+## 2026-09-05 — Foreground scan progress와 실제 HDD read-only 검증
+
+장시간 scan이 멈춘 것처럼 보이지 않도록 core에 structured `ScanProgress` event를 추가했다. CLI renderer는 progress를 stderr에만 쓰므로 `--json`/`--agent-json` stdout을 오염시키지 않는다. recursive enumeration 중에는 final total을 아직 모르므로 discovered count만 표시하고, enumeration이 끝난 뒤 metadata/hash 단계는 `completed/total`과 percentage로 전환한다. TTY에서는 한 줄을 redraw하고 non-TTY에서는 stage 변경, 5% bucket, 최대 시간 간격 기준으로만 line을 출력해 log spam을 제한한다. `--no-progress`는 renderer만 비활성화한다.
+
+Synthetic self-test에서 metadata `2/2`, duplicate hash `2/2`, finalizing completion event를 확인했다. 별도 executable smoke에서는 progress가 stderr에 출력되는 동안 `--agent-json` stdout이 독립적으로 정상 parse되는 것을 검증했다.
+
+이어 기존 사용자 관리형 외장 HDD 사진 root 하나를 **read-only scan**으로 재검증했다. 사용자가 제외하라고 지정한 sibling directory는 scan root에 포함하지 않았다. 개인 path/filename은 이 문서에 기록하지 않는다.
+
+```text
+supported media resources                 4,195
+metadata progress                    0 -> 4,195 / 4,195
+non-TTY progress cadence                       5% buckets
+logical assets                              4,186
+logical Live Photos                           422
+exact duplicate groups                          9
+reused exact hashes                            46
+media files modified                        false
+```
+
+Progress-enabled scan summary는 직전 read-only scan과 동일했다. warm 재scan은 첫 scan보다 크게 빨랐지만 직전 media read에 따른 OS/HDD cache가 섞인 관찰이므로 일반적인 benchmark로 사용하지 않는다. 이 validation에서도 archive root marker, portable inventory, media copy/move/delete는 수행하지 않았다.
+
 ## 2026-09-04 — Product North Star 고정
 
 최초 제품 목적을 `docs/PROJECT_NORTH_STAR.md`와 `AGENTS.md`의 explicit scope gate로 고정했다.

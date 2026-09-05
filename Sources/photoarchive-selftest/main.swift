@@ -80,7 +80,13 @@ struct PhotoArchiveSelfTest {
             ScanRoot(url: rootA, kind: .reference, provenance: .localLibrary),
             ScanRoot(url: rootB, kind: .reference, provenance: .googleTakeout)
         ]
-        let first = try await scanner.scan(roots: roots)
+        let progressRecorder = ProgressRecorder()
+        let first = try await scanner.scan(
+            roots: roots,
+            options: ScanOptions(progressHandler: { progress in
+                progressRecorder.record(progress)
+            })
+        )
         let second = try await scanner.scan(roots: roots)
 
         try require(first.summary.exactDuplicateGroupCount == 1, "expected one duplicate group")
@@ -91,6 +97,31 @@ struct PhotoArchiveSelfTest {
         try require(
             first.exactDuplicateGroups.first?.groupID == second.exactDuplicateGroups.first?.groupID,
             "opaque duplicate group ID should remain stable across scans"
+        )
+        let progressEvents = progressRecorder.snapshot()
+        try require(
+            progressEvents.contains {
+                $0.stage == .metadata
+                    && $0.completedUnitCount == 2
+                    && $0.totalUnitCount == 2
+            },
+            "scan progress should expose determinate metadata completion counts"
+        )
+        try require(
+            progressEvents.contains {
+                $0.stage == .hashingDuplicates
+                    && $0.completedUnitCount == 2
+                    && $0.totalUnitCount == 2
+            },
+            "scan progress should expose determinate hash completion counts"
+        )
+        try require(
+            progressEvents.last == ScanProgress(
+                stage: .finalizing,
+                completedUnitCount: 1,
+                totalUnitCount: 1
+            ),
+            "scan progress should end with finalizing completion"
         )
         try require(
             second.summary.reusedExactHashCount == 2,
@@ -1743,4 +1774,21 @@ private struct SelfTestFailure: LocalizedError {
     }
 
     var errorDescription: String? { message }
+}
+
+private final class ProgressRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var events: [ScanProgress] = []
+
+    func record(_ progress: ScanProgress) {
+        lock.lock()
+        events.append(progress)
+        lock.unlock()
+    }
+
+    func snapshot() -> [ScanProgress] {
+        lock.lock()
+        defer { lock.unlock() }
+        return events
+    }
 }

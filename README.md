@@ -73,6 +73,7 @@ The initial CLI can:
 - preserve Google Takeout source-folder/album-like memberships in local SQLite before collapsing Takeout-only exact standalone copies, without exposing collection names or paths to agent-safe output;
 - write a local restore manifest for applied quarantine sessions, roll back the whole session if a move fails, and dry-run/apply `restore-quarantine` only after the quarantined bytes are freshly re-verified against the local catalog's original SHA-256 evidence;
 - perform all current analysis without contacting a network service.
+- report structured scan progress without contaminating machine-readable output: recursive enumeration is indeterminate until the file list is known, then metadata/hash stages expose completed/total counts and percentages. Interactive terminals redraw one stderr line; non-interactive logs emit throttled progress lines. `--no-progress` disables it.
 
 The catalog stores local integrity data, including raw exact-file hashes, because it needs them for reliable comparison. Human diagnostics and AI-agent output are deliberately separated: `--json` may include local paths for troubleshooting, while `--agent-json` omits paths, filenames, byte sizes, capture timestamps, raw hashes, Live Photo identifiers, GPS, previews, and other file-level private data. AI agents should use only the agent-safe surface.
 
@@ -318,6 +319,9 @@ Other options:
 - `--no-exact-duplicates` — skip local SHA-256 comparison.
 - `--event-gap-hours NUMBER` — begin a new automatic event after this gap; default is six hours.
 - `--jobs NUMBER` — limit concurrent metadata probes.
+- `--no-progress` — disable stderr progress output. Progress never changes JSON/stdout payloads.
+
+Long scans follow the usual two-phase progress convention used by mature file tools: while recursively enumerating a tree, the final total is not yet known, so PhotoArchiveKit reports only the number discovered. Once enumeration finishes, determinate stages report `completed/total` and a percentage. This avoids an extra full pre-count pass over slow external disks.
 
 ### `photoarchive archive-index`
 

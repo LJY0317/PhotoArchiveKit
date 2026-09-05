@@ -92,7 +92,8 @@ public enum ArchiveRootIndexer {
         catalogURL: URL = PhotoArchivePaths.defaultCatalogURL,
         writeSnapshot: Bool = false,
         reuseHashCache: Bool = true,
-        maxConcurrentProbes: Int = min(max(ProcessInfo.processInfo.activeProcessorCount, 1), 8)
+        maxConcurrentProbes: Int = min(max(ProcessInfo.processInfo.activeProcessorCount, 1), 8),
+        progressHandler: ScanProgressHandler? = nil
     ) async throws -> ArchiveRootInventoryReport {
         let rootURL = rawRootURL.resolvingSymlinksInPath().standardizedFileURL
         guard try RootMarkerStore.readIfPresent(at: rootURL) != nil else {
@@ -107,7 +108,8 @@ public enum ArchiveRootIndexer {
                 computeArchiveIntegrityPreconditions: true,
                 reuseExactHashCache: reuseHashCache,
                 exactDuplicateEngine: .automatic,
-                maxConcurrentProbes: max(1, maxConcurrentProbes)
+                maxConcurrentProbes: max(1, maxConcurrentProbes),
+                progressHandler: progressHandler
             )
         )
         return try ArchiveRootInventoryStore.makeReport(

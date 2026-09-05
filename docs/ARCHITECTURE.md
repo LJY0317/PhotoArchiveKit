@@ -159,6 +159,10 @@ future plan은 immutable document이며 다음을 포함한다.
 
 interrupted session은 완료된 operation을 반복하지 않고 verified checkpoint에서 resume해야 한다.
 
+### Foreground progress
+
+Long-running foreground scans expose structured `ScanProgress` events from the core rather than making the CLI infer progress from logs. Enumeration is intentionally indeterminate until recursive discovery is complete; metadata and hashing become determinate once their work lists are known. The CLI renders progress on stderr so JSON/stdout remains a stable machine interface. TTY output redraws one line, while non-TTY output is throttled by stage/percentage/time to avoid log spam. Progress reporting does not add a second filesystem pre-count pass and can be disabled with `--no-progress`.
+
 ## 자동 분류
 
 manual drag-and-drop은 fallback이어야 하며 normal path가 되어서는 안 된다.

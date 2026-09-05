@@ -64,12 +64,25 @@ public final class ArchiveScanner {
 
         do {
             var warnings: [ScanWarning] = []
-            let enumeration = try enumerate(roots: roots)
+            options.progressHandler?(ScanProgress(
+                stage: .enumerating,
+                completedUnitCount: 0
+            ))
+            let enumeration = try enumerate(
+                roots: roots,
+                progressHandler: options.progressHandler
+            )
             warnings.append(contentsOf: enumeration.warnings)
             let pending = enumeration.files
+            options.progressHandler?(ScanProgress(
+                stage: .enumerating,
+                completedUnitCount: pending.count,
+                totalUnitCount: pending.count
+            ))
             var resources = await probe(
                 pendingFiles: pending,
-                maxConcurrency: options.maxConcurrentProbes
+                maxConcurrency: options.maxConcurrentProbes,
+                progressHandler: options.progressHandler
             )
             TakeoutSidecarImporter.applyCaptureTimes(to: &resources)
 
@@ -102,13 +115,15 @@ public final class ArchiveScanner {
                     resources: &resources,
                     roots: roots,
                     engine: options.exactDuplicateEngine,
-                    maxConcurrency: min(options.maxConcurrentProbes, 4)
+                    maxConcurrency: min(options.maxConcurrentProbes, 4),
+                    progressHandler: options.progressHandler
                 ))
             }
             if options.computeArchiveIntegrityPreconditions {
                 warnings.append(contentsOf: await hashArchiveIntegrityPreconditions(
                     resources: &resources,
-                    maxConcurrency: min(options.maxConcurrentProbes, 4)
+                    maxConcurrency: min(options.maxConcurrentProbes, 4),
+                    progressHandler: options.progressHandler
                 ))
             }
 
@@ -119,6 +134,11 @@ public final class ArchiveScanner {
             warnings.append(contentsOf: filenameCollisionWarnings(resources))
 
             var finalReport: ScanReport?
+            options.progressHandler?(ScanProgress(
+                stage: .cataloging,
+                completedUnitCount: 0,
+                totalUnitCount: 1
+            ))
             try catalog.withTransaction {
                 try catalog.persistResources(sessionID: sessionID, resources: &resources)
                 _ = try catalog.persistAssets(sessionID: sessionID, resources: &resources)
@@ -180,10 +200,20 @@ public final class ArchiveScanner {
                     filesModified: false
                 )
             }
+            options.progressHandler?(ScanProgress(
+                stage: .cataloging,
+                completedUnitCount: 1,
+                totalUnitCount: 1
+            ))
 
             guard let finalReport else {
                 throw CatalogError.invalidCatalogValue("Scan report was not assembled.")
             }
+            options.progressHandler?(ScanProgress(
+                stage: .finalizing,
+                completedUnitCount: 1,
+                totalUnitCount: 1
+            ))
             return finalReport
         } catch {
             catalog.failScan(sessionID: sessionID, completedAt: Date())
@@ -215,7 +245,8 @@ public final class ArchiveScanner {
     }
 
     private func enumerate(
-        roots: [RootDescriptor]
+        roots: [RootDescriptor],
+        progressHandler: ScanProgressHandler?
     ) throws -> (files: [PendingFile], warnings: [ScanWarning]) {
         let keys: Set<URLResourceKey> = [
             .isRegularFileKey,
@@ -278,6 +309,10 @@ public final class ArchiveScanner {
                         createdAt: values.creationDate,
                         fileSystemIdentifier: values.fileResourceIdentifier.map { String(describing: $0) }
                     ))
+                    progressHandler?(ScanProgress(
+                        stage: .enumerating,
+                        completedUnitCount: pending.count
+                    ))
                 } catch {
                     warnings.append(ScanWarning(
                         code: "resource_values_error",
@@ -299,9 +334,16 @@ public final class ArchiveScanner {
 
     private func probe(
         pendingFiles: [PendingFile],
-        maxConcurrency: Int
+        maxConcurrency: Int,
+        progressHandler: ScanProgressHandler?
     ) async -> [ProbedResource] {
         guard !pendingFiles.isEmpty else { return [] }
+
+        progressHandler?(ScanProgress(
+            stage: .metadata,
+            completedUnitCount: 0,
+            totalUnitCount: pendingFiles.count
+        ))
 
         return await withTaskGroup(of: ProbedResource.self) { group in
             var iterator = pendingFiles.makeIterator()
@@ -316,6 +358,11 @@ public final class ArchiveScanner {
 
             while let result = await group.next() {
                 results.append(result)
+                progressHandler?(ScanProgress(
+                    stage: .metadata,
+                    completedUnitCount: results.count,
+                    totalUnitCount: pendingFiles.count
+                ))
                 if let file = iterator.next() {
                     group.addTask { await MetadataProbe.probe(file) }
                 }
@@ -384,19 +431,22 @@ public final class ArchiveScanner {
         resources: inout [ProbedResource],
         roots: [RootDescriptor],
         engine: ExactDuplicateEngine,
-        maxConcurrency: Int
+        maxConcurrency: Int,
+        progressHandler: ScanProgressHandler?
     ) async throws -> [ScanWarning] {
         switch engine {
         case .native:
             return await hashNativeDuplicateCandidates(
                 resources: &resources,
-                maxConcurrency: maxConcurrency
+                maxConcurrency: maxConcurrency,
+                progressHandler: progressHandler
             )
         case .czkawka:
             return try await hashCzkawkaDuplicateCandidates(
                 resources: &resources,
                 roots: roots,
-                maxConcurrency: maxConcurrency
+                maxConcurrency: maxConcurrency,
+                progressHandler: progressHandler
             )
         case .automatic:
             // Real-library benchmarking showed that running Czkawka candidate discovery
@@ -405,14 +455,16 @@ public final class ArchiveScanner {
             // deterministic and single-pass until an integration can avoid double work.
             return await hashNativeDuplicateCandidates(
                 resources: &resources,
-                maxConcurrency: maxConcurrency
+                maxConcurrency: maxConcurrency,
+                progressHandler: progressHandler
             )
         }
     }
 
     private func hashNativeDuplicateCandidates(
         resources: inout [ProbedResource],
-        maxConcurrency: Int
+        maxConcurrency: Int,
+        progressHandler: ScanProgressHandler?
     ) async -> [ScanWarning] {
         let candidateIndices = Dictionary(grouping: resources.indices.filter {
             resources[$0].mediaKind != .sidecar
@@ -426,13 +478,16 @@ public final class ArchiveScanner {
         return await hashCandidateIndices(
             candidateIndices,
             resources: &resources,
-            maxConcurrency: maxConcurrency
+            maxConcurrency: maxConcurrency,
+            stage: .hashingDuplicates,
+            progressHandler: progressHandler
         )
     }
 
     private func hashArchiveIntegrityPreconditions(
         resources: inout [ProbedResource],
-        maxConcurrency: Int
+        maxConcurrency: Int,
+        progressHandler: ScanProgressHandler?
     ) async -> [ScanWarning] {
         let missingHashes = resources.indices.filter {
             resources[$0].mediaKind != .sidecar && resources[$0].exactHash == nil
@@ -440,14 +495,17 @@ public final class ArchiveScanner {
         return await hashCandidateIndices(
             missingHashes,
             resources: &resources,
-            maxConcurrency: maxConcurrency
+            maxConcurrency: maxConcurrency,
+            stage: .hashingIntegrity,
+            progressHandler: progressHandler
         )
     }
 
     private func hashCzkawkaDuplicateCandidates(
         resources: inout [ProbedResource],
         roots: [RootDescriptor],
-        maxConcurrency: Int
+        maxConcurrency: Int,
+        progressHandler: ScanProgressHandler?
     ) async throws -> [ScanWarning] {
         let groups = try CzkawkaExactCandidateAdapter.exactCandidateGroups(roots: roots)
         let indexByPath = Dictionary(uniqueKeysWithValues: resources.indices.map { index in
@@ -466,16 +524,25 @@ public final class ArchiveScanner {
         return await hashCandidateIndices(
             candidateIndices.filter { resources[$0].exactHash == nil }.sorted(),
             resources: &resources,
-            maxConcurrency: maxConcurrency
+            maxConcurrency: maxConcurrency,
+            stage: .hashingDuplicates,
+            progressHandler: progressHandler
         )
     }
 
     private func hashCandidateIndices(
         _ candidateIndices: [Int],
         resources: inout [ProbedResource],
-        maxConcurrency: Int
+        maxConcurrency: Int,
+        stage: ScanProgressStage,
+        progressHandler: ScanProgressHandler?
     ) async -> [ScanWarning] {
         guard !candidateIndices.isEmpty else { return [] }
+        progressHandler?(ScanProgress(
+            stage: stage,
+            completedUnitCount: 0,
+            totalUnitCount: candidateIndices.count
+        ))
 
         let results = await withTaskGroup(of: HashResult.self) { group in
             var iterator = candidateIndices.makeIterator()
@@ -505,6 +572,11 @@ public final class ArchiveScanner {
 
             while let result = await group.next() {
                 output.append(result)
+                progressHandler?(ScanProgress(
+                    stage: stage,
+                    completedUnitCount: output.count,
+                    totalUnitCount: candidateIndices.count
+                ))
                 if let index = iterator.next() {
                     let url = resources[index].url
                     group.addTask {
