@@ -60,6 +60,31 @@ private struct CachedExactHashIndex {
     var byFileSystemIdentifier: [String: CachedExactHashEvidence] = [:]
 }
 
+struct CachedMetadataEvidence {
+    let mediaKind: MediaKind
+    let byteSize: Int64
+    let modifiedAt: Date?
+    let fileSystemIdentifier: String?
+    let captureTime: CaptureTime?
+    let identifierFingerprint: Data?
+    let timedMetadataStatus: LivePhotoTimedMetadataStatus
+    let metadataProbeFailed: Bool
+}
+
+private struct CachedMetadataIndex {
+    var byRelativePath: [String: CachedMetadataEvidence] = [:]
+    var byFileSystemIdentifier: [String: CachedMetadataEvidence] = [:]
+}
+
+struct DuplicateReviewExpectedResourceEvidence {
+    let resourceID: String
+    let rootID: String
+    let relativePath: String
+    let byteSize: Int64
+    let modifiedAt: Date?
+    let fileSystemIdentifier: String?
+}
+
 struct RootRegistryRow {
     let rootID: String
     let label: String
@@ -389,6 +414,20 @@ final class SQLiteCatalog {
                 bindings: [
                     .text(resourceID),
                     .text(resources[index].livePhotoTimedMetadataStatus.rawValue),
+                    .text(sessionID)
+                ]
+            )
+            try run(
+                """
+                INSERT INTO resource_metadata_cache_state (resource_id, probe_version, last_seen_session)
+                VALUES (?, ?, ?)
+                ON CONFLICT(resource_id) DO UPDATE SET
+                    probe_version = excluded.probe_version,
+                    last_seen_session = excluded.last_seen_session
+                """,
+                bindings: [
+                    .text(resourceID),
+                    .int64(Int64(MetadataProbe.cacheVersion)),
                     .text(sessionID)
                 ]
             )
@@ -724,6 +763,173 @@ final class SQLiteCatalog {
                 "DELETE FROM collections WHERE id = ?",
                 bindings: [.text(row.collectionID)]
             )
+        }
+    }
+
+    func reuseCachedMetadata(
+        pendingFiles: [PendingFile],
+        probeVersion: Int
+    ) throws -> (resources: [ProbedResource], remaining: [PendingFile]) {
+        let rootIDs = Set(pendingFiles.map { $0.root.id })
+        var indexByRootID: [String: CachedMetadataIndex] = [:]
+        indexByRootID.reserveCapacity(rootIDs.count)
+        for rootID in rootIDs {
+            indexByRootID[rootID] = try cachedMetadataIndex(
+                rootID: rootID,
+                probeVersion: probeVersion
+            )
+        }
+
+        var reused: [ProbedResource] = []
+        var remaining: [PendingFile] = []
+        reused.reserveCapacity(pendingFiles.count)
+        remaining.reserveCapacity(pendingFiles.count)
+
+        for pending in pendingFiles {
+            guard let rootIndex = indexByRootID[pending.root.id] else {
+                remaining.append(pending)
+                continue
+            }
+
+            let pathEvidence = rootIndex.byRelativePath[pending.relativePath]
+            let evidence: CachedMetadataEvidence?
+            if let currentID = pending.fileSystemIdentifier,
+               let pathEvidence,
+               let cachedID = pathEvidence.fileSystemIdentifier,
+               cachedID != currentID {
+                evidence = rootIndex.byFileSystemIdentifier[currentID]
+            } else if let pathEvidence {
+                evidence = pathEvidence
+            } else if let currentID = pending.fileSystemIdentifier {
+                evidence = rootIndex.byFileSystemIdentifier[currentID]
+            } else {
+                evidence = nil
+            }
+
+            guard let evidence,
+                  !evidence.metadataProbeFailed,
+                  evidence.captureTime?.source != .googleTakeoutPhotoTakenTime,
+                  evidence.mediaKind == pending.type.mediaKind,
+                  evidence.byteSize == pending.byteSize,
+                  modificationTimesMatch(evidence.modifiedAt, pending.modifiedAt)
+            else {
+                remaining.append(pending)
+                continue
+            }
+
+            if let cachedID = evidence.fileSystemIdentifier,
+               let currentID = pending.fileSystemIdentifier,
+               cachedID != currentID {
+                remaining.append(pending)
+                continue
+            }
+
+            reused.append(ProbedResource(
+                root: pending.root,
+                url: pending.url,
+                relativePath: pending.relativePath,
+                fileName: pending.url.lastPathComponent,
+                fileExtension: pending.url.pathExtension.lowercased(),
+                mediaKind: pending.type.mediaKind,
+                byteSize: pending.byteSize,
+                modifiedAt: pending.modifiedAt,
+                fileSystemIdentifier: pending.fileSystemIdentifier,
+                captureTime: evidence.captureTime,
+                rawLivePhotoIdentifier: nil,
+                livePhotoTimedMetadataStatus: evidence.timedMetadataStatus,
+                metadataProbeFailed: false,
+                exactHash: nil,
+                persistentResourceID: nil,
+                persistentAssetID: nil,
+                identifierFingerprint: evidence.identifierFingerprint
+            ))
+        }
+
+        return (reused, remaining)
+    }
+
+    private func cachedMetadataIndex(
+        rootID: String,
+        probeVersion: Int
+    ) throws -> CachedMetadataIndex {
+        try withStatement(
+            """
+            SELECT r.relative_path, r.media_kind, r.byte_size, r.modified_at,
+                   r.capture_local_time, r.capture_utc_offset, r.capture_instant,
+                   r.capture_source, r.capture_confidence,
+                   r.live_identifier_fingerprint, r.metadata_probe_failed,
+                   rfi.filesystem_identifier, rlms.status
+            FROM resources r
+            JOIN resource_metadata_cache_state rmcs ON rmcs.resource_id = r.id
+            LEFT JOIN resource_file_ids rfi ON rfi.resource_id = r.id
+            LEFT JOIN resource_live_metadata_status rlms ON rlms.resource_id = r.id
+            WHERE r.root_id = ? AND rmcs.probe_version = ?
+            """,
+            bindings: [.text(rootID), .int64(Int64(probeVersion))]
+        ) { statement in
+            var index = CachedMetadataIndex()
+            while true {
+                let result = sqlite3_step(statement)
+                if result == SQLITE_DONE { break }
+                guard result == SQLITE_ROW,
+                      let relativeText = sqlite3_column_text(statement, 0),
+                      let mediaText = sqlite3_column_text(statement, 1),
+                      let mediaKind = MediaKind(rawValue: String(cString: mediaText)),
+                      let timedText = sqlite3_column_text(statement, 12),
+                      let timedStatus = LivePhotoTimedMetadataStatus(rawValue: String(cString: timedText))
+                else {
+                    throw sqliteError(sql: "SELECT cached metadata index")
+                }
+
+                let captureTime: CaptureTime?
+                if let sourceText = sqlite3_column_text(statement, 7),
+                   let confidenceText = sqlite3_column_text(statement, 8),
+                   let source = CaptureTimeSource(rawValue: String(cString: sourceText)),
+                   let confidence = CaptureTimeConfidence(rawValue: String(cString: confidenceText)) {
+                    captureTime = CaptureTime(
+                        localTimestamp: sqlite3_column_text(statement, 4).map { String(cString: $0) },
+                        utcOffset: sqlite3_column_text(statement, 5).map { String(cString: $0) },
+                        instant: sqlite3_column_type(statement, 6) == SQLITE_NULL
+                            ? nil
+                            : Date(timeIntervalSince1970: sqlite3_column_double(statement, 6)),
+                        source: source,
+                        confidence: confidence
+                    )
+                } else {
+                    captureTime = nil
+                }
+
+                let fingerprint: Data?
+                if sqlite3_column_type(statement, 9) != SQLITE_NULL,
+                   let bytes = sqlite3_column_blob(statement, 9) {
+                    fingerprint = Data(
+                        bytes: bytes,
+                        count: Int(sqlite3_column_bytes(statement, 9))
+                    )
+                } else {
+                    fingerprint = nil
+                }
+                let modifiedAt = sqlite3_column_type(statement, 3) == SQLITE_NULL
+                    ? nil
+                    : Date(timeIntervalSince1970: sqlite3_column_double(statement, 3))
+                let fileSystemIdentifier = sqlite3_column_text(statement, 11)
+                    .map { String(cString: $0) }
+                let evidence = CachedMetadataEvidence(
+                    mediaKind: mediaKind,
+                    byteSize: sqlite3_column_int64(statement, 2),
+                    modifiedAt: modifiedAt,
+                    fileSystemIdentifier: fileSystemIdentifier,
+                    captureTime: captureTime,
+                    identifierFingerprint: fingerprint,
+                    timedMetadataStatus: timedStatus,
+                    metadataProbeFailed: sqlite3_column_int64(statement, 10) != 0
+                )
+                index.byRelativePath[String(cString: relativeText)] = evidence
+                if let fileSystemIdentifier {
+                    index.byFileSystemIdentifier[fileSystemIdentifier] = evidence
+                }
+            }
+            return index
         }
     }
 
@@ -1207,6 +1413,12 @@ final class SQLiteCatalog {
                 last_seen_session TEXT NOT NULL REFERENCES scan_sessions(id)
             );
 
+            CREATE TABLE IF NOT EXISTS resource_metadata_cache_state (
+                resource_id TEXT PRIMARY KEY REFERENCES resources(id) ON DELETE CASCADE,
+                probe_version INTEGER NOT NULL,
+                last_seen_session TEXT NOT NULL REFERENCES scan_sessions(id)
+            );
+
             CREATE TABLE IF NOT EXISTS resource_locations (
                 resource_id TEXT NOT NULL REFERENCES resources(id) ON DELETE CASCADE,
                 root_id TEXT NOT NULL REFERENCES source_roots(id) ON DELETE CASCADE,
@@ -1329,6 +1541,8 @@ final class SQLiteCatalog {
                 ON asset_resources(resource_id, last_seen_session);
             CREATE INDEX IF NOT EXISTS asset_resources_session_idx
                 ON asset_resources(last_seen_session);
+            CREATE INDEX IF NOT EXISTS resource_metadata_cache_version_idx
+                ON resource_metadata_cache_state(probe_version);
             CREATE INDEX IF NOT EXISTS logical_assets_session_idx
                 ON logical_assets(last_seen_session);
             CREATE INDEX IF NOT EXISTS exact_duplicate_groups_session_idx
@@ -1566,6 +1780,60 @@ final class SQLiteCatalog {
             return try cachedScanReport(session: session, roots: activeRoots)
         }
         return nil
+    }
+
+    func duplicateReviewExpectedResourceEvidence(
+        resourceIDs: [String]
+    ) throws -> [String: DuplicateReviewExpectedResourceEvidence] {
+        let uniqueIDs = Array(Set(resourceIDs)).sorted()
+        guard !uniqueIDs.isEmpty else { return [:] }
+
+        var output: [String: DuplicateReviewExpectedResourceEvidence] = [:]
+        for start in stride(from: 0, to: uniqueIDs.count, by: 400) {
+            let end = min(start + 400, uniqueIDs.count)
+            let chunk = Array(uniqueIDs[start..<end])
+            let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+            let sql = """
+                SELECT r.id, r.root_id, r.relative_path, r.byte_size, r.modified_at,
+                       rfi.filesystem_identifier
+                FROM resources r
+                LEFT JOIN resource_file_ids rfi ON rfi.resource_id = r.id
+                WHERE r.id IN (\(placeholders))
+                """
+            let rows: [DuplicateReviewExpectedResourceEvidence] = try withStatement(
+                sql,
+                bindings: chunk.map(SQLiteBinding.text)
+            ) { statement in
+                var values: [DuplicateReviewExpectedResourceEvidence] = []
+                while true {
+                    let result = sqlite3_step(statement)
+                    if result == SQLITE_DONE { break }
+                    guard result == SQLITE_ROW,
+                          let resourceText = sqlite3_column_text(statement, 0),
+                          let rootText = sqlite3_column_text(statement, 1),
+                          let relativeText = sqlite3_column_text(statement, 2)
+                    else {
+                        throw sqliteError(sql: "SELECT duplicate review freshness evidence")
+                    }
+                    values.append(DuplicateReviewExpectedResourceEvidence(
+                        resourceID: String(cString: resourceText),
+                        rootID: String(cString: rootText),
+                        relativePath: String(cString: relativeText),
+                        byteSize: sqlite3_column_int64(statement, 3),
+                        modifiedAt: sqlite3_column_type(statement, 4) == SQLITE_NULL
+                            ? nil
+                            : Date(timeIntervalSince1970: sqlite3_column_double(statement, 4)),
+                        fileSystemIdentifier: sqlite3_column_text(statement, 5)
+                            .map { String(cString: $0) }
+                    ))
+                }
+                return values
+            }
+            for row in rows {
+                output[row.resourceID] = row
+            }
+        }
+        return output
     }
 
     private func cachedCompletedScanSessions(limit: Int) throws -> [CachedScanSessionRow] {

@@ -638,6 +638,9 @@ struct PhotoArchiveCLI {
         var outputJSON = false
         var outputAgentJSON = false
         var computeExactDuplicates = true
+        var reuseMetadataCache = true
+        var reuseExactHashCache = true
+        var forceFreshScan = false
         var exactDuplicateEngine = ExactDuplicateEngine.automatic
         var eventGapHours = 6.0
         var maxConcurrency = min(max(ProcessInfo.processInfo.activeProcessorCount, 1), 8)
@@ -665,6 +668,10 @@ struct PhotoArchiveCLI {
                 outputAgentJSON = true
             case "--no-exact-duplicates":
                 computeExactDuplicates = false
+            case "--fresh":
+                forceFreshScan = true
+                reuseMetadataCache = false
+                reuseExactHashCache = false
             case "--exact-engine":
                 let raw = try value(after: argument, at: &index, in: arguments)
                 guard let engine = ExactDuplicateEngine(rawValue: raw.lowercased()) else {
@@ -793,6 +800,9 @@ struct PhotoArchiveCLI {
                     + "Remove ROOT arguments, or add --refresh to perform a fresh scan."
             )
         }
+        if mode == .duplicateReview && !duplicateReviewRefresh && forceFreshScan {
+            throw CLIError("duplicate-review --fresh requires --refresh because cached review does not scan media.")
+        }
         if mode == .duplicateReview && duplicateReviewRefresh && roots.isEmpty {
             roots = try RootRegistry.list(catalogURL: catalogURL)
                 .filter { $0.state == .active }
@@ -850,9 +860,10 @@ struct PhotoArchiveCLI {
             } else {
                 print("Created local Finder review workspace from the latest reusable catalog snapshot: \(review.workspacePath)")
                 print("Review groups: \(review.itemCount)")
+                print("Current / stale / offline: \(review.currentItemCount) / \(review.staleItemCount) / \(review.offlineItemCount)")
                 print("Keeper links: \(review.keeperLinkCount)")
                 print("Candidate links: \(review.candidateLinkCount)")
-                print("Original media files were not modified. Use --refresh to rescan active roots first.")
+                print("Original media files were not modified. STALE groups need --refresh; OFFLINE groups need the root reconnected first.")
             }
             return
         }
@@ -873,6 +884,8 @@ struct PhotoArchiveCLI {
             options: ScanOptions(
                 computeExactDuplicates: computeExactDuplicates,
                 computeArchiveIntegrityPreconditions: mode == .archivePlan,
+                reuseMetadataCache: reuseMetadataCache,
+                reuseExactHashCache: reuseExactHashCache,
                 exactDuplicateEngine: exactDuplicateEngine,
                 eventGap: eventGapHours * 60 * 60,
                 maxConcurrentProbes: maxConcurrency,
@@ -925,6 +938,7 @@ struct PhotoArchiveCLI {
             } else {
                 print("Created local Finder review workspace: \(review.workspacePath)")
                 print("Review groups: \(review.itemCount)")
+                print("Current / stale / offline: \(review.currentItemCount) / \(review.staleItemCount) / \(review.offlineItemCount)")
                 print("Keeper links: \(review.keeperLinkCount)")
                 print("Candidate links: \(review.candidateLinkCount)")
                 print("Original media files were not modified.")
@@ -1324,6 +1338,7 @@ struct PhotoArchiveCLI {
         print("Logical assets: \(report.summary.logicalAssetCount)")
         print("Live Photo assets: \(report.summary.livePhotoAssetCount)")
         print("Exact duplicate groups: \(report.summary.exactDuplicateGroupCount)")
+        print("Metadata reused from cache: \(report.summary.reusedMetadataCount)")
         print("Exact hashes reused from cache: \(report.summary.reusedExactHashCount)")
         print("Automatic event suggestions: \(report.summary.eventSuggestionCount)")
         print("Notices: \(report.notices.count)")
@@ -1716,7 +1731,7 @@ struct PhotoArchiveCLI {
         } else if command == "organize-plan" {
             mutationOptions = "  --singleton-leaf-only      Limit to clean nested folders containing exactly one planned logical asset\n  --preserve-name-if-date-untrusted\n                              With --singleton-leaf-only, propose flattening untrusted-date standalone camera files without renaming them\n"
         } else if command == "duplicate-review" {
-            mutationOptions = "  --output PATH              New local-private Finder review workspace (required)\n  --candidate-root VALUE     Include only AUTO items whose candidate copies are all in this root ID/path\n  --refresh                  Fresh-scan active registered roots (or explicitly supplied ROOTs) before review\n"
+            mutationOptions = "  --output PATH              New local-private Finder review workspace (required)\n  --candidate-root VALUE     Include only AUTO items whose candidate copies are all in this root ID/path\n  --refresh                  Incrementally rescan active registered roots (or supplied ROOTs) before review\n"
         } else {
             mutationOptions = ""
         }
@@ -1754,11 +1769,12 @@ struct PhotoArchiveCLI {
             operationNotes = """
             duplicate-review normally reuses the latest complete catalog snapshot whose roots
             still match the active root registry, so opening a previously computed exact review
-            does not reread the whole media library. --refresh performs a fresh scan first.
-            The command writes a local-private Finder workspace containing symbolic links grouped
-            into KEEPER and CANDIDATE folders plus a local locations.txt. It never copies, moves,
-            renames, or deletes original media. Cached review is not mutation authority; quarantine
-            must still freshly verify candidate bytes before moving anything.
+            does not reread the whole media library. Before presenting an old decision, it cheaply
+            checks current size, modification time, filesystem identity, and stable root marker
+            identity where available. Changed groups are marked STALE; unavailable roots are OFFLINE.
+            --refresh incrementally rescans the library, while --refresh --fresh forces metadata and
+            exact-hash recomputation. Cached review is not mutation authority; quarantine must still
+            freshly verify candidate bytes before moving anything.
             """
         } else {
             operationNotes = ""
@@ -1789,6 +1805,7 @@ struct PhotoArchiveCLI {
               --json                     Print the full local diagnostic JSON report
               --agent-json               Print path-free, metadata-minimized JSON for AI agents
               --no-exact-duplicates      Skip exact duplicate comparisons
+              --fresh                    Ignore metadata/exact-hash caches for a complete rescan
               --exact-engine ENGINE      automatic, native, or czkawka (default: automatic)
               --event-gap-hours NUMBER   Start a new event after this gap (default: 6)
               --jobs NUMBER              Concurrent metadata probes, 1-64

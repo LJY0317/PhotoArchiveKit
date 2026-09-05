@@ -3,6 +3,8 @@ import Foundation
 import ImageIO
 
 struct MetadataProbe {
+    static let cacheVersion = 1
+
     static func probe(_ pending: PendingFile) async -> ProbedResource {
         switch pending.type.mediaKind {
         case .image:

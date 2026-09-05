@@ -70,7 +70,8 @@ byte 보존 복제본          provenance와 이력
 - 설정 가능한 시간 간격을 기준으로 날짜형 event folder 자동 제안
 - resource, 논리 asset, provenance, duplicate group, source collection mapping, 최초 filename, path history, scan session을 SQLite에 저장
 - 기존에 사용자가 직접 관리하던 **archive root**를 `archive-index`로 index: 현재 하위 folder hierarchy를 user-authored collection semantics로 보존하고, media는 그대로 둔 채 수동 Finder 이동 뒤 stale folder membership을 정리하며, 모든 media resource의 exact hash를 확보
-- 변경되지 않은 파일은 Mac-local SQLite의 SHA-256 evidence를 재사용하고, archive root에서는 hidden `.photoarchive/inventory-v1.jsonl`의 portable hash cache도 사용할 수 있음. `archive-index --fresh`는 두 cache를 모두 무시하고 media byte 전체를 다시 읽음
+- path/filesystem identity, byte size, modification time, metadata-probe cache version이 그대로인 파일은 EXIF/QuickTime/Live Photo metadata probe 결과를 재사용함. 과거 metadata probe 실패와 현재 유효 capture time이 변경 가능한 Google Takeout sidecar에서 온 media는 보수적으로 다시 probe함
+- 변경되지 않은 파일은 Mac-local SQLite의 SHA-256 evidence를 재사용하고, archive root에서는 hidden `.photoarchive/inventory-v1.jsonl`의 portable hash cache도 사용할 수 있음. 일반 scan 계열 command의 `--fresh`는 metadata/hash reuse를 끄고, `archive-index --fresh`는 해당 command의 local/portable hash cache를 모두 무시함
 - 빠른 authoritative working catalog는 Mac에 두되, removable archive root마다 relative 구조와 integrity evidence를 가진 root-scoped portable inventory를 함께 둘 수 있음. 이 inventory는 다른 컴퓨터에서 재스캔을 가속하는 구조도/cache이지 mutation authority가 아님
 - catalog의 portable semantic subset을 versioned JSONL로 export하고 raw hash·Live Photo fingerprint·filesystem ID·absolute root path·capture timestamp·provider object ID·generated scan/event cache 없이 새 SQLite catalog로 dry-run/restore
 - 같은 volume 안의 rename/move에서는 physical resource identity를 유지하고, optional `.photoarchive-root` marker로 이동된 source root도 동일 root로 다시 인식
@@ -142,7 +143,7 @@ swift run photoarchive plan \
   --takeout "~/Pictures/Takeout"
 ```
 
-media를 복사하지 않고 사람이 Finder에서 AUTO exact 결정을 검토하려면 `duplicate-review`로 symbolic link만 들어 있는 local-private review workspace를 만들 수 있습니다. 각 group은 `KEEPER`, `CANDIDATE`, `locations.txt`로 구성되며 원본 media는 move/rename/delete/copy하지 않습니다. 기본 동작은 현재 active root registry와 여전히 일치하는 가장 최근 complete scan snapshot을 재사용하므로, 이미 계산한 review를 다시 열기 위해 전체 media library를 다시 읽지 않습니다. `--candidate-root`로 특정 등록 root에서 정리될 후보만 좁힐 수 있습니다. 실제 library가 바뀌어 fresh scan이 필요할 때만 `--refresh`를 사용하며, ROOT를 따로 주지 않으면 active 등록 root를 다시 scan합니다.
+media를 복사하지 않고 사람이 Finder에서 AUTO exact 결정을 검토하려면 `duplicate-review`로 symbolic link만 들어 있는 local-private review workspace를 만들 수 있습니다. 기본 동작은 active root registry와 일치하는 가장 최근 complete scan snapshot을 재사용하므로 이미 계산한 review를 다시 열기 위해 전체 media library를 다시 읽지 않습니다. 대신 그 결정에 실제로 등장하는 파일의 현재 size, modification time, filesystem identity와 가능한 경우 stable root marker identity를 빠르게 확인합니다. 그대로인 group은 `CURRENT` + `KEEPER/CANDIDATE`, 달라진 group은 `STALE` + `OLD_KEEPER/OLD_CANDIDATE`, 필요한 root가 연결되지 않았으면 `OFFLINE`으로 명확히 표시합니다. `--candidate-root`로 한 root의 후보만 좁힐 수 있고, `--refresh`는 current root를 incremental rescan하며 `--refresh --fresh`는 명시적으로 metadata/hash 전체 재계산을 강제합니다. review 자체는 원본 media를 move/rename/delete/copy하지 않습니다.
 
 ```bash
 swift run photoarchive duplicate-review \

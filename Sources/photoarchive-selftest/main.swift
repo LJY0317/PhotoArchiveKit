@@ -65,6 +65,91 @@ struct PhotoArchiveSelfTest {
             "multiple still-image-time markers should be rejected as ambiguous"
         )
 
+        let metadataCacheRoot = temporary.appendingPathComponent("MetadataCache", isDirectory: true)
+        try fileManager.createDirectory(at: metadataCacheRoot, withIntermediateDirectories: true)
+        let metadataCacheVideo = metadataCacheRoot.appendingPathComponent("cached.mov")
+        try await writeSyntheticTimedMetadataMovie(to: metadataCacheVideo, markerValues: [0])
+        let metadataCacheCatalog = temporary.appendingPathComponent("metadata-cache.sqlite3")
+        let metadataCacheScanner = try ArchiveScanner(catalogURL: metadataCacheCatalog)
+        let metadataCacheRoots = [ScanRoot(url: metadataCacheRoot, kind: .reference)]
+        let metadataCacheFirst = try await metadataCacheScanner.scan(
+            roots: metadataCacheRoots,
+            options: ScanOptions(computeExactDuplicates: false)
+        )
+        try require(
+            metadataCacheFirst.summary.reusedMetadataCount == 0,
+            "first metadata scan must not claim a cache hit"
+        )
+        let metadataCacheSecond = try await metadataCacheScanner.scan(
+            roots: metadataCacheRoots,
+            options: ScanOptions(computeExactDuplicates: false)
+        )
+        try require(
+            metadataCacheSecond.summary.reusedMetadataCount == 1,
+            "unchanged media metadata should be reused on the next scan"
+        )
+        let cachedVideoAttributes = try fileManager.attributesOfItem(atPath: metadataCacheVideo.path)
+        let cachedVideoModifiedAt = cachedVideoAttributes[.modificationDate] as! Date
+        try fileManager.setAttributes(
+            [.modificationDate: cachedVideoModifiedAt.addingTimeInterval(5)],
+            ofItemAtPath: metadataCacheVideo.path
+        )
+        let metadataCacheChanged = try await metadataCacheScanner.scan(
+            roots: metadataCacheRoots,
+            options: ScanOptions(computeExactDuplicates: false)
+        )
+        try require(
+            metadataCacheChanged.summary.reusedMetadataCount == 0,
+            "changed modification time must invalidate metadata cache reuse"
+        )
+
+        let takeoutMetadataCacheRoot = temporary.appendingPathComponent(
+            "TakeoutMetadataCache",
+            isDirectory: true
+        )
+        try fileManager.createDirectory(
+            at: takeoutMetadataCacheRoot,
+            withIntermediateDirectories: true
+        )
+        let takeoutMetadataCacheVideo = takeoutMetadataCacheRoot
+            .appendingPathComponent("TAKEOUT-CACHED.MOV")
+        try await writeSyntheticTimedMetadataMovie(
+            to: takeoutMetadataCacheVideo,
+            markerValues: [0]
+        )
+        try Data(
+            #"{"title":"TAKEOUT-CACHED.MOV","photoTakenTime":{"timestamp":"1776000000"}}"#.utf8
+        ).write(
+            to: takeoutMetadataCacheRoot.appendingPathComponent("TAKEOUT-CACHED.MOV.json")
+        )
+        let takeoutMetadataCacheCatalog = temporary
+            .appendingPathComponent("takeout-metadata-cache.sqlite3")
+        let takeoutMetadataCacheScanner = try ArchiveScanner(catalogURL: takeoutMetadataCacheCatalog)
+        let takeoutMetadataCacheRoots = [
+            ScanRoot(
+                url: takeoutMetadataCacheRoot,
+                kind: .importSource,
+                provenance: .googleTakeout
+            )
+        ]
+        let takeoutMetadataFirst = try await takeoutMetadataCacheScanner.scan(
+            roots: takeoutMetadataCacheRoots,
+            options: ScanOptions(computeExactDuplicates: false)
+        )
+        try require(
+            takeoutMetadataFirst.resources.first(where: { $0.mediaKind == .video })?
+                .captureTime?.source == .googleTakeoutPhotoTakenTime,
+            "synthetic Takeout video should receive provider sidecar capture time"
+        )
+        let takeoutMetadataSecond = try await takeoutMetadataCacheScanner.scan(
+            roots: takeoutMetadataCacheRoots,
+            options: ScanOptions(computeExactDuplicates: false)
+        )
+        try require(
+            takeoutMetadataSecond.summary.reusedMetadataCount == 1,
+            "Takeout sidecar-derived media metadata must be re-probed while the unchanged sidecar itself may be cached"
+        )
+
         let registryRoot = temporary.appendingPathComponent("RegistryRoot", isDirectory: true)
         let registryCatalog = temporary.appendingPathComponent("registry.sqlite3")
         try fileManager.createDirectory(at: registryRoot, withIntermediateDirectories: true)
@@ -930,20 +1015,24 @@ struct PhotoArchiveSelfTest {
             "restored catalog should rebuild exact duplicate evidence from media"
         )
 
-        let standalonePlan = ReconciliationPlanner.makePlan(from: first)
+        let reviewReport = try await scanner.scan(roots: roots)
+        let standalonePlan = ReconciliationPlanner.makePlan(from: reviewReport)
         try require(
             standalonePlan.summary.automaticRedundantResourceCount == 1,
             "a Takeout standalone exact copy should be an automatic redundant candidate"
         )
         let duplicateReviewRoot = temporary.appendingPathComponent("DuplicateReview", isDirectory: true)
         let duplicateReview = try DuplicateReviewWorkspace.create(
-            report: first,
+            report: reviewReport,
             plan: standalonePlan,
             outputURL: duplicateReviewRoot,
             candidateRootTarget: rootB.path
         )
         try require(
             duplicateReview.itemCount == 1
+                && duplicateReview.currentItemCount == 1
+                && duplicateReview.staleItemCount == 0
+                && duplicateReview.offlineItemCount == 0
                 && duplicateReview.keeperLinkCount == 1
                 && duplicateReview.candidateLinkCount == 1,
             "duplicate review should expose one keeper/candidate exact group"
@@ -965,6 +1054,44 @@ struct PhotoArchiveSelfTest {
         try require(!reviewAgentJSON.contains(rootA.path), "agent-safe duplicate review exposed keeper path")
         try require(!reviewAgentJSON.contains(rootB.path), "agent-safe duplicate review exposed candidate path")
         try require(!reviewAgentJSON.contains(duplicateReviewRoot.path), "agent-safe duplicate review exposed workspace path")
+
+        let candidateAttributes = try fileManager.attributesOfItem(atPath: fileB.path)
+        let candidateModifiedAt = candidateAttributes[.modificationDate] as! Date
+        try fileManager.setAttributes(
+            [.modificationDate: candidateModifiedAt.addingTimeInterval(5)],
+            ofItemAtPath: fileB.path
+        )
+        let staleDuplicateReviewRoot = temporary.appendingPathComponent("DuplicateReview-Stale", isDirectory: true)
+        let staleDuplicateReview = try DuplicateReviewWorkspace.create(
+            report: reviewReport,
+            plan: standalonePlan,
+            outputURL: staleDuplicateReviewRoot,
+            candidateRootTarget: rootB.path
+        )
+        try require(
+            staleDuplicateReview.itemCount == 1
+                && staleDuplicateReview.currentItemCount == 0
+                && staleDuplicateReview.staleItemCount == 1
+                && staleDuplicateReview.offlineItemCount == 0,
+            "a changed review resource should be marked STALE instead of trusted from cache"
+        )
+        let staleGroups = try fileManager.contentsOfDirectory(
+            at: staleDuplicateReviewRoot,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ).filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
+        try require(
+            staleGroups.count == 1
+                && staleGroups[0].lastPathComponent.contains("-STALE-")
+                && fileManager.fileExists(
+                    atPath: staleGroups[0].appendingPathComponent("NEEDS-REFRESH.txt").path
+                ),
+            "stale duplicate review should visibly require refresh in Finder"
+        )
+        try fileManager.setAttributes(
+            [.modificationDate: candidateModifiedAt],
+            ofItemAtPath: fileB.path
+        )
         let standaloneAgentPlanJSON = String(
             decoding: try encoder.encode(AgentSafeReconciliationPlan(plan: standalonePlan)),
             as: UTF8.self
@@ -1041,7 +1168,7 @@ struct PhotoArchiveSelfTest {
         let quarantineRoot = temporary.appendingPathComponent("Quarantine", isDirectory: true)
         try fileManager.createDirectory(at: quarantineRoot, withIntermediateDirectories: true)
         let quarantineDryRun = try QuarantineExecutor.preflight(
-            report: first,
+            report: reviewReport,
             plan: standalonePlan,
             targetURL: quarantineRoot
         )
@@ -1057,7 +1184,7 @@ struct PhotoArchiveSelfTest {
         try require(!quarantineAgentJSON.contains("copy.jpg"), "agent-safe quarantine output exposed a filename")
 
         let quarantineApplied = try QuarantineExecutor.apply(
-            report: first,
+            report: reviewReport,
             plan: standalonePlan,
             targetURL: quarantineRoot
         )

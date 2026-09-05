@@ -71,6 +71,7 @@ public typealias ScanProgressHandler = @Sendable (ScanProgress) -> Void
 public struct ScanOptions: Sendable {
     public var computeExactDuplicates: Bool
     public var computeArchiveIntegrityPreconditions: Bool
+    public var reuseMetadataCache: Bool
     public var reuseExactHashCache: Bool
     public var exactDuplicateEngine: ExactDuplicateEngine
     public var eventGap: TimeInterval
@@ -80,6 +81,7 @@ public struct ScanOptions: Sendable {
     public init(
         computeExactDuplicates: Bool = true,
         computeArchiveIntegrityPreconditions: Bool = false,
+        reuseMetadataCache: Bool = true,
         reuseExactHashCache: Bool = true,
         exactDuplicateEngine: ExactDuplicateEngine = .automatic,
         eventGap: TimeInterval = 6 * 60 * 60,
@@ -88,6 +90,7 @@ public struct ScanOptions: Sendable {
     ) {
         self.computeExactDuplicates = computeExactDuplicates
         self.computeArchiveIntegrityPreconditions = computeArchiveIntegrityPreconditions
+        self.reuseMetadataCache = reuseMetadataCache
         self.reuseExactHashCache = reuseExactHashCache
         self.exactDuplicateEngine = exactDuplicateEngine
         self.eventGap = eventGap
@@ -427,6 +430,7 @@ public struct ScanSummary: Codable, Sendable, Equatable {
     public let exactDuplicateGroupCount: Int
     public let eventSuggestionCount: Int
     public let warningCount: Int
+    public let reusedMetadataCount: Int
     public let reusedExactHashCount: Int
 
     public init(
@@ -437,6 +441,7 @@ public struct ScanSummary: Codable, Sendable, Equatable {
         exactDuplicateGroupCount: Int,
         eventSuggestionCount: Int,
         warningCount: Int,
+        reusedMetadataCount: Int = 0,
         reusedExactHashCount: Int = 0
     ) {
         self.rootCount = rootCount
@@ -446,6 +451,7 @@ public struct ScanSummary: Codable, Sendable, Equatable {
         self.exactDuplicateGroupCount = exactDuplicateGroupCount
         self.eventSuggestionCount = eventSuggestionCount
         self.warningCount = warningCount
+        self.reusedMetadataCount = reusedMetadataCount
         self.reusedExactHashCount = reusedExactHashCount
     }
 }

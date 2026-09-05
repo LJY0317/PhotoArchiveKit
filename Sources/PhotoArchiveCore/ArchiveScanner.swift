@@ -83,11 +83,26 @@ public final class ArchiveScanner {
                 completedUnitCount: pending.count,
                 totalUnitCount: pending.count
             ))
-            var resources = await probe(
-                pendingFiles: pending,
+            let metadataReuse: (resources: [ProbedResource], remaining: [PendingFile])
+            if options.reuseMetadataCache {
+                metadataReuse = try catalog.reuseCachedMetadata(
+                    pendingFiles: pending,
+                    probeVersion: MetadataProbe.cacheVersion
+                )
+            } else {
+                metadataReuse = ([], pending)
+            }
+            let newlyProbedResources = await probe(
+                pendingFiles: metadataReuse.remaining,
+                initialCompletedUnitCount: metadataReuse.resources.count,
+                totalUnitCount: pending.count,
                 maxConcurrency: options.maxConcurrentProbes,
                 progressHandler: options.progressHandler
             )
+            var resources = (metadataReuse.resources + newlyProbedResources).sorted {
+                ($0.root.label, $0.relativePath) < ($1.root.label, $1.relativePath)
+            }
+            let reusedMetadataCount = metadataReuse.resources.count
             TakeoutSidecarImporter.applyCaptureTimes(to: &resources)
             let sidecarAssociations = SidecarAssociationDetector.detect(in: resources)
 
@@ -188,6 +203,7 @@ public final class ArchiveScanner {
                     exactDuplicateGroupCount: reportParts.duplicates.count,
                     eventSuggestionCount: reportParts.events.count,
                     warningCount: reportParts.warnings.count,
+                    reusedMetadataCount: reusedMetadataCount,
                     reusedExactHashCount: reusedExactHashCount
                 )
                 try catalog.finishScan(
@@ -347,16 +363,17 @@ public final class ArchiveScanner {
 
     private func probe(
         pendingFiles: [PendingFile],
+        initialCompletedUnitCount: Int,
+        totalUnitCount: Int,
         maxConcurrency: Int,
         progressHandler: ScanProgressHandler?
     ) async -> [ProbedResource] {
-        guard !pendingFiles.isEmpty else { return [] }
-
         progressHandler?(ScanProgress(
             stage: .metadata,
-            completedUnitCount: 0,
-            totalUnitCount: pendingFiles.count
+            completedUnitCount: initialCompletedUnitCount,
+            totalUnitCount: totalUnitCount
         ))
+        guard !pendingFiles.isEmpty else { return [] }
 
         return await withTaskGroup(of: ProbedResource.self) { group in
             var iterator = pendingFiles.makeIterator()
@@ -373,8 +390,8 @@ public final class ArchiveScanner {
                 results.append(result)
                 progressHandler?(ScanProgress(
                     stage: .metadata,
-                    completedUnitCount: results.count,
-                    totalUnitCount: pendingFiles.count
+                    completedUnitCount: initialCompletedUnitCount + results.count,
+                    totalUnitCount: totalUnitCount
                 ))
                 if let file = iterator.next() {
                     group.addTask { await MetadataProbe.probe(file) }
