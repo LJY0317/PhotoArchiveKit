@@ -909,6 +909,36 @@ struct PhotoArchiveSelfTest {
             standalonePlan.summary.automaticRedundantResourceCount == 1,
             "a Takeout standalone exact copy should be an automatic redundant candidate"
         )
+        let duplicateReviewRoot = temporary.appendingPathComponent("DuplicateReview", isDirectory: true)
+        let duplicateReview = try DuplicateReviewWorkspace.create(
+            report: first,
+            plan: standalonePlan,
+            outputURL: duplicateReviewRoot,
+            candidateRootTarget: rootB.path
+        )
+        try require(
+            duplicateReview.itemCount == 1
+                && duplicateReview.keeperLinkCount == 1
+                && duplicateReview.candidateLinkCount == 1,
+            "duplicate review should expose one keeper/candidate exact group"
+        )
+        try require(
+            fileManager.fileExists(atPath: fileA.path) && fileManager.fileExists(atPath: fileB.path),
+            "duplicate review workspace must not move or delete original media"
+        )
+        let reviewSubdirectories = try fileManager.contentsOfDirectory(
+            at: duplicateReviewRoot,
+            includingPropertiesForKeys: [.isDirectoryKey],
+            options: [.skipsHiddenFiles]
+        ).filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
+        try require(reviewSubdirectories.count == 1, "duplicate review should create one group directory")
+        let reviewAgentJSON = String(
+            decoding: try encoder.encode(AgentSafeDuplicateReviewWorkspaceReport(report: duplicateReview)),
+            as: UTF8.self
+        )
+        try require(!reviewAgentJSON.contains(rootA.path), "agent-safe duplicate review exposed keeper path")
+        try require(!reviewAgentJSON.contains(rootB.path), "agent-safe duplicate review exposed candidate path")
+        try require(!reviewAgentJSON.contains(duplicateReviewRoot.path), "agent-safe duplicate review exposed workspace path")
         let standaloneAgentPlanJSON = String(
             decoding: try encoder.encode(AgentSafeReconciliationPlan(plan: standalonePlan)),
             as: UTF8.self

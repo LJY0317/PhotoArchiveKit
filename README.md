@@ -142,6 +142,16 @@ swift run photoarchive plan \
   --takeout "~/Pictures/Takeout"
 ```
 
+For local human review without copying media, `duplicate-review` can materialize the AUTO exact decisions as a Finder-friendly workspace of symbolic links. Each group contains `KEEPER` and `CANDIDATE` folders plus a local-private `locations.txt`; originals are not moved, renamed, deleted, or duplicated. `--candidate-root` can narrow the workspace to cleanup candidates from one registered root.
+
+```bash
+swift run photoarchive duplicate-review \
+  --output "~/Desktop/PhotoArchiveKit-Duplicate-Review" \
+  --candidate-root "~/Pictures" \
+  --local "~/Pictures" \
+  --takeout "~/Pictures/Takeout"
+```
+
 For an AI agent, use `--agent-json` with `scan`, `archive-coverage`, `plan`, `organize-plan`, `archive-index`, `archive-plan`, `archive-copy`, `organize`, `quarantine`, `restore-quarantine`, `cleanup-empty-dirs`, or the `catalog` command reports; local diagnostic `--json` can contain paths. Persisted archive-plan, archive-copy manifest, archive-root inventory, and JSONL snapshot files themselves are **not** agent-safe because safe replay/disaster recovery requires local-private paths, filenames, catalog paths, marker bindings, or integrity preconditions.
 
 Check current Mac/Takeout/HDD coverage without moving media:
@@ -376,6 +386,8 @@ Canonical keeper selection does **not** collapse intentional backup replicas acr
 A future local GUI should expose the private side of this decision directly: one duplicate group per row/section, with every physical copy's root and path, protected/keeper/candidate badges, and filters by location. This is deliberately a **local-only** view; agent-safe reports continue to expose opaque group/root IDs and counts without filenames or paths. The current human `scan` report already shows paths for the first duplicate groups and `--json` contains the complete local-private result, but a Krokiet-style grouped location view is the intended consumer UX.
 
 Library locations have an explicit root registry. `photoarchive root add`, `enable`, `disable`, `remove`, and `list` separate locations the user currently manages from roots merely observed by older scans. `root remove` never touches media: it prunes that root's current resource/hash/duplicate/source-folder evidence while retaining minimal root identity/marker history so a known removable archive can be recognized again. `root list --all` also shows removed and history-only roots.
+
+The current keeper policy already treats `archive` and `reference` roots as protected from automatic duplicate removal. A future GUI can expose this as root-role presets rather than raw ranking numbers: archive/protected replica, managed library, import/inbox, reference-only, and excluded. Archive roots may still allow user-requested organization within the root while remaining protected from automatic deletion.
 
 ## Automatic organization strategy
 

@@ -63,6 +63,7 @@
 - recognized sidecar association: Google Takeout JSON의 `title` target 및 모호하지 않은 same-basename XMP/AAE를 logical asset에 연결하고 `sidecar_links`에 보존한다. recognized sidecar는 singleton media organize를 막지 않지만 sidecar file 자체는 자동 삭제하지 않으며, unrecognized JSON은 directory deletion blocker로 남긴다.
 - sidecar consumer policy: 검증된 schema/관계의 sidecar는 자동 처리하고 사용자가 JSON/XMP를 직접 판독하도록 요구하지 않는다. unknown/ambiguous sidecar는 source-folder 삭제 경계에서는 보존하지만 media 자체의 이동/열람 가능성을 부정하지 않는다. 현재 recognized parser는 Google Takeout JSON의 최소 `title`/`photoTakenTime` 경로다.
 - explicit root registry: `root add/list/enable/disable/remove`로 active/inactive/removed 상태를 catalog observation history와 분리한다. remove는 media를 수정하지 않고 해당 root의 current resource/hash/duplicate/source-folder evidence를 prune하며 source root identity/marker는 최소 history로 유지한다. agent-safe list/remove output에는 canonical path를 노출하지 않는다.
+- `duplicate-review`: current exact reconciliation의 AUTO item을 local-private Finder workspace로 materialize한다. group별 `KEEPER`/`CANDIDATE` symbolic link와 `locations.txt`만 만들고 media bytes는 copy/move/rename/delete하지 않는다. `--candidate-root`로 한 root의 cleanup candidate만 좁힐 수 있고 agent-safe report에는 workspace/media path를 노출하지 않는다.
 - 영어/한국어 project overview
 - 날짜가 명시된 Google Photos 및 Apple PhotoKit capability 문서
 - validation 및 optional integration 문서

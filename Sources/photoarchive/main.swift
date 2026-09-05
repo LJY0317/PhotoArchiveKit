@@ -22,6 +22,8 @@ struct PhotoArchiveCLI {
                 try await runScan(arguments, mode: .archiveCoverage)
             case "plan":
                 try await runScan(arguments, mode: .plan)
+            case "duplicate-review":
+                try await runScan(arguments, mode: .duplicateReview)
             case "organize-plan":
                 try await runScan(arguments, mode: .organizePlan)
             case "archive-plan":
@@ -624,6 +626,7 @@ struct PhotoArchiveCLI {
         case scan
         case archiveCoverage
         case plan
+        case duplicateReview
         case organizePlan
         case archivePlan
         case organize
@@ -644,6 +647,8 @@ struct PhotoArchiveCLI {
         var quarantineTargetURL: URL?
         var archiveDestinationURL: URL?
         var archivePlanOutputURL: URL?
+        var duplicateReviewOutputURL: URL?
+        var duplicateReviewCandidateRoot: String?
         var applyMutation = false
         var roots: [ScanRoot] = []
 
@@ -697,10 +702,17 @@ struct PhotoArchiveCLI {
                 if mode == .archivePlan { archiveDestinationURL = url }
                 else { quarantineTargetURL = url }
             case "--output":
-                guard mode == .archivePlan else {
-                    throw CLIError("--output is only valid with archive-plan.")
+                guard mode == .archivePlan || mode == .duplicateReview else {
+                    throw CLIError("--output is only valid with archive-plan or duplicate-review.")
                 }
-                archivePlanOutputURL = fileURL(try value(after: argument, at: &index, in: arguments))
+                let url = fileURL(try value(after: argument, at: &index, in: arguments))
+                if mode == .archivePlan { archivePlanOutputURL = url }
+                else { duplicateReviewOutputURL = url }
+            case "--candidate-root":
+                guard mode == .duplicateReview else {
+                    throw CLIError("--candidate-root is only valid with duplicate-review.")
+                }
+                duplicateReviewCandidateRoot = try value(after: argument, at: &index, in: arguments)
             case "--apply":
                 guard mode == .quarantine || mode == .organize else {
                     throw CLIError("--apply is only valid with the quarantine or organize command.")
@@ -752,6 +764,7 @@ struct PhotoArchiveCLI {
                 case .scan: command = "scan"
                 case .archiveCoverage: command = "archive-coverage"
                 case .plan: command = "plan"
+                case .duplicateReview: command = "duplicate-review"
                 case .organizePlan: command = "organize-plan"
                 case .archivePlan: command = "archive-plan"
                 case .organize: command = "organize"
@@ -827,6 +840,34 @@ struct PhotoArchiveCLI {
                 try printJSON(plan)
             } else {
                 printReconciliationPlan(plan)
+            }
+            return
+        }
+
+        if mode == .duplicateReview {
+            guard computeExactDuplicates else {
+                throw CLIError("duplicate-review requires exact duplicate comparison.")
+            }
+            guard let duplicateReviewOutputURL else {
+                throw CLIError("duplicate-review requires --output PATH.")
+            }
+            let plan = ReconciliationPlanner.makePlan(from: report)
+            let review = try DuplicateReviewWorkspace.create(
+                report: report,
+                plan: plan,
+                outputURL: duplicateReviewOutputURL,
+                candidateRootTarget: duplicateReviewCandidateRoot
+            )
+            if outputAgentJSON {
+                try printJSON(AgentSafeDuplicateReviewWorkspaceReport(report: review))
+            } else if outputJSON {
+                try printJSON(review)
+            } else {
+                print("Created local Finder review workspace: \(review.workspacePath)")
+                print("Review groups: \(review.itemCount)")
+                print("Keeper links: \(review.keeperLinkCount)")
+                print("Candidate links: \(review.candidateLinkCount)")
+                print("Original media files were not modified.")
             }
             return
         }
@@ -1384,6 +1425,7 @@ struct PhotoArchiveCLI {
               photoarchive scan [options] ROOT...
               photoarchive archive-coverage [options] ROOT...
               photoarchive plan [options] ROOT...
+              photoarchive duplicate-review --output PATH [--candidate-root ROOT_ID_OR_PATH] [options] ROOT...
               photoarchive organize-plan [options] ROOT...
               photoarchive archive-plan --to PATH --output PLAN [options] ROOT...
               photoarchive archive-copy [--apply] [--to PATH] [--bind-root ROOT_ID=PATH] PLAN
@@ -1399,11 +1441,14 @@ struct PhotoArchiveCLI {
               photoarchive doctor
               photoarchive version
 
-            Scan, archive-coverage, and plan are media-read-only. Quarantine also defaults to a verified dry run;
+            Scan, archive-coverage, plan, and duplicate-review are media-read-only. duplicate-review writes only
+            a local Finder workspace made of symbolic links and text metadata; original media is untouched.
+            Quarantine also defaults to a verified dry run;
             only an explicit --apply moves automatic exact-duplicate candidates into a
             user-supplied local quarantine directory. It never permanently deletes media.
 
             Run 'photoarchive scan --help', 'photoarchive archive-coverage --help', 'photoarchive plan --help',
+            'photoarchive duplicate-review --help',
             'photoarchive organize-plan --help', 'photoarchive archive-plan --help',
             'photoarchive archive-copy --help',
             'photoarchive archive-index --help',
@@ -1610,6 +1655,8 @@ struct PhotoArchiveCLI {
             mutationOptions = "  --apply                    Rename/flatten verified AUTO organization items; default is dry-run\n  --singleton-leaf-only      Limit to clean nested folders containing exactly one planned logical asset\n  --preserve-name-if-date-untrusted\n                              With --singleton-leaf-only, flatten untrusted-date standalone camera files without renaming them\n"
         } else if command == "organize-plan" {
             mutationOptions = "  --singleton-leaf-only      Limit to clean nested folders containing exactly one planned logical asset\n  --preserve-name-if-date-untrusted\n                              With --singleton-leaf-only, propose flattening untrusted-date standalone camera files without renaming them\n"
+        } else if command == "duplicate-review" {
+            mutationOptions = "  --output PATH              New local-private Finder review workspace (required)\n  --candidate-root VALUE     Include only AUTO items whose candidate copies are all in this root ID/path\n"
         } else {
             mutationOptions = ""
         }
@@ -1642,6 +1689,14 @@ struct PhotoArchiveCLI {
             media-read-only scan before reporting current exact cross-root coverage. It also
             summarizes whether each Live Photo occurrence has a complete, partial, ambiguous,
             or missing counterpart on other roots. It never moves, renames, or deletes media.
+            """
+        } else if command == "duplicate-review" {
+            operationNotes = """
+            duplicate-review performs a current exact scan, builds the reconciliation plan,
+            and writes a local-private Finder workspace containing symbolic links grouped into
+            KEEPER and CANDIDATE folders plus a local locations.txt. It never copies, moves,
+            renames, or deletes original media. The workspace is for human review only and is
+            intentionally not agent-safe because it contains local filenames and paths.
             """
         } else {
             operationNotes = ""

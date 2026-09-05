@@ -142,6 +142,16 @@ swift run photoarchive plan \
   --takeout "~/Pictures/Takeout"
 ```
 
+media를 복사하지 않고 사람이 Finder에서 AUTO exact 결정을 검토하려면 `duplicate-review`로 symbolic link만 들어 있는 local-private review workspace를 만들 수 있습니다. 각 group은 `KEEPER`, `CANDIDATE`, `locations.txt`로 구성되며 원본 media는 move/rename/delete/copy하지 않습니다. `--candidate-root`로 특정 등록 root에서 정리될 후보만 좁힐 수 있습니다.
+
+```bash
+swift run photoarchive duplicate-review \
+  --output "~/Desktop/PhotoArchiveKit-Duplicate-Review" \
+  --candidate-root "~/Pictures" \
+  --local "~/Pictures" \
+  --takeout "~/Pictures/Takeout"
+```
+
 AI agent는 `scan`, `archive-coverage`, `plan`, `organize-plan`, `archive-index`, `archive-plan`, `archive-copy`, `organize`, `quarantine`, `restore-quarantine`, `cleanup-empty-dirs`와 `catalog` command의 report에서 `--agent-json`을 사용해야 하며, path를 포함할 수 있는 local diagnostic `--json`은 agent에 전달하지 않습니다. persisted archive-plan, archive-copy manifest, archive-root inventory, JSONL snapshot 파일 자체는 안전한 replay/disaster recovery에 local-private path·filename·catalog path·marker binding 또는 integrity precondition이 필요하므로 **agent-safe가 아닙니다**.
 
 media를 옮기지 않고 현재 Mac/Takeout/HDD coverage를 확인합니다.
@@ -376,6 +386,8 @@ canonical keeper 선택은 등록된 모든 root의 backup 사본을 전 세계�
 향후 local GUI에서는 이 판단의 private 정보를 사람이 바로 볼 수 있어야 합니다. duplicate group 하나를 한 묶음으로 보여주고, 그 안의 모든 physical copy에 실제 root/path와 protected/keeper/candidate badge를 표시하며 location별 filter를 제공하는 방식이 적합합니다. 이 화면은 **로컬 전용**이고 agent-safe report에는 계속 opaque group/root ID와 count만 전달합니다. 현재 human `scan`도 앞부분 duplicate group의 path를 보여주고 `--json`에는 전체 local-private 결과가 있지만, 장기적으로는 Krokiet처럼 위치를 그룹 안에서 바로 비교하는 GUI가 소비자 UX에 더 적합합니다.
 
 라이브러리 위치에는 명시적인 root registry가 있습니다. `photoarchive root add`, `enable`, `disable`, `remove`, `list`로 현재 관리하는 위치와 과거 scan에서 한 번 관측된 history root를 구분합니다. `root remove`는 media를 절대 건드리지 않고 해당 root의 current resource/hash/duplicate/source-folder evidence만 catalog에서 정리하며, removable archive를 다시 알아볼 수 있도록 최소 root identity/marker history는 남깁니다. `root list --all`은 removed/history-only root도 보여줍니다.
+
+현재 keeper policy는 이미 `archive`와 `reference` root를 자동 duplicate 제거 대상에서 보호합니다. 미래 GUI에서는 숫자 우선순위를 직접 노출하기보다 archive/protected replica, managed library, import/inbox, reference-only, excluded 같은 간단한 root-role preset으로 보여주는 편이 적합합니다. archive root는 자동 삭제는 금지하면서도 사용자가 요청한 내부 이동/정리는 허용할 수 있습니다.
 
 ## 자동 분류 방향
 
