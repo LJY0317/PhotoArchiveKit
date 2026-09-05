@@ -58,6 +58,7 @@ struct RootDescriptor: Sendable {
     let id: String
     let label: String
     let kind: SourceRootKind
+    let usageRole: RootUsageRole
     let provenance: SourceProvenance
     let url: URL
     let markerKey: String?

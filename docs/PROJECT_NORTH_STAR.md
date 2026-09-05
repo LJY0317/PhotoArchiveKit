@@ -48,6 +48,18 @@ iPhone/Apple Photos에서 직접 추출한 원본 계열
 
 이 순위는 "Google 사본의 바이트가 더 나쁘다"는 뜻이 아니다. 바이트가 같아도 어느 경로에서 직접 보존했는지를 사용자가 선호한다는 정책이다. 파일 내용만으로 provenance를 증명할 수 없는 경우 provenance는 source root와 ingest session에서 기록한다.
 
+## Registered root 역할
+
+저장장치나 provider 전체에 하나의 정책을 강제로 붙이지 않는다. **사용자가 등록한 root마다** `staging`, `primary_library`, `archive`, `import_source`, `reference` 중 하나의 usage role을 지정한다. 같은 Mac, HDD, 또는 미래의 file-cloud provider 안에서도 서로 다른 하위 root가 서로 다른 역할을 가질 수 있다.
+
+- `staging`: 아직 장기 보관이 끝나지 않은 작업/임시 위치. 다른 장기 보호 root의 완전한 검증 전에는 반드시 보존한다.
+- `primary_library`: 사용자가 계속 유지하려는 주 라이브러리. 다른 replica가 있어도 이 root 자체를 offload cleanup 대상으로 보지 않는다.
+- `archive`: 장기 보관/protection target. automatic removal 대상이 아니다.
+- `import_source`: Takeout/export/camera dump 같은 입수처. exact coverage와 필요한 source semantics가 안전하게 보존될 때만 cleanup할 수 있다.
+- `reference`: 비교 전용. PhotoArchiveKit mutation 대상이 아니며 다른 root를 자동 cleanup하기 위한 retention authority로도 사용하지 않는다.
+
+usage role은 provenance/provider capability와 별개다. 예를 들어 Google Drive의 서로 다른 folder를 archive/import/reference로 각각 등록할 수 있어야 한다. 역할 변경은 catalog policy만 바꾸며 그 순간 media를 move/delete하지 않는다. 실제 mutation은 새 역할에 따른 plan과 기존 fresh verification gate를 다시 통과해야 한다. executor도 role을 독립 재검증해 `archive`/`reference`를 automatic quarantine 후보로 받아들이지 않고, `reference`에서는 organization/empty-directory cleanup을 수행하지 않으며, 등록된 archive-copy destination은 current role이 `archive`여야 한다.
+
 ## Curation과 archive의 역할 분리
 
 PhotoArchiveKit은 exact duplicate 제거와 "가장 잘 나온 한 장" 선택을 같은 문제로 취급하지 않는다.
@@ -68,6 +80,7 @@ PhotoArchiveKit은 exact duplicate 제거와 "가장 잘 나온 한 장" 선택�
 - Live Photo resource 관계 검증과 atomic handling
 - Takeout과 Apple/iPhone 계열 source의 provenance 보존
 - 사용자 provenance 우선순위를 반영한 preferred representation 제안
+- registered root별 user-changeable usage role과 역할 기반 retention/cleanup policy
 - exact duplicate group에 대한 안전한 keep/quarantine plan
 - perceptual duplicate는 별도 review 후보로 유지
 - 기존 폴더와 Inbox 폴더를 이용한 primary classification

@@ -172,7 +172,7 @@ public enum ReconciliationPlanner {
         let reviewItems = items.filter { $0.decision == .review }
         return ReconciliationPlan(
             schemaVersion: 1,
-            policy: "canonical_exact_keeper_v3",
+            policy: "canonical_exact_keeper_v4_role_aware",
             sessionID: report.sessionID,
             summary: ReconciliationPlanSummary(
                 automaticItemCount: automaticItems.count,
@@ -200,7 +200,7 @@ public enum ReconciliationPlanner {
 
                 let byRoot = Dictionary(grouping: members, by: \.rootID)
                 for (rootID, rootMembers) in byRoot {
-                    guard CanonicalKeeperPolicy.isPrimaryLibraryRoot(rootsByID[rootID]),
+                    guard CanonicalKeeperPolicy.allowsLocalExactDuplicateCleanup(rootsByID[rootID]),
                           rootMembers.count > 1
                     else { continue }
                     let sorted = rootMembers.sorted {
@@ -221,7 +221,7 @@ public enum ReconciliationPlanner {
                     CanonicalKeeperPolicy.isImportCleanupRoot(rootsByID[$0.rootID])
                 }
                 let stableKeepers = retained.filter {
-                    !CanonicalKeeperPolicy.isImportCleanupRoot(rootsByID[$0.rootID])
+                    CanonicalKeeperPolicy.canRetainAgainstImportCleanup(rootsByID[$0.rootID])
                 }
 
                 if !stableKeepers.isEmpty {
@@ -266,7 +266,14 @@ public enum ReconciliationPlanner {
                 }
 
                 retained = members.filter { !candidateKeys.contains(resourceKey($0)) }
-                let preferred = retained.sorted {
+                let localCandidateRootIDs = Set(candidates.compactMap { candidate -> String? in
+                    CanonicalKeeperPolicy.allowsLocalExactDuplicateCleanup(rootsByID[candidate.rootID])
+                        ? candidate.rootID
+                        : nil
+                })
+                let sameRootSurvivors = retained.filter { localCandidateRootIDs.contains($0.rootID) }
+                let preferredPool = sameRootSurvivors.isEmpty ? retained : sameRootSurvivors
+                let preferred = preferredPool.sorted {
                     CanonicalKeeperPolicy.preferredResource(
                         $0,
                         before: $1,
@@ -277,7 +284,7 @@ public enum ReconciliationPlanner {
                 guard let canonical = preferred.first else { continue }
 
                 let hasLocalCandidate = candidates.contains {
-                    CanonicalKeeperPolicy.isPrimaryLibraryRoot(rootsByID[$0.rootID])
+                    CanonicalKeeperPolicy.allowsLocalExactDuplicateCleanup(rootsByID[$0.rootID])
                 }
                 let onlyImport = retained.allSatisfy {
                     CanonicalKeeperPolicy.isImportCleanupRoot(rootsByID[$0.rootID])
@@ -318,7 +325,7 @@ public enum ReconciliationPlanner {
         for asset in report.livePhotos {
             let byRoot = Dictionary(grouping: asset.occurrences, by: \.rootID)
             for (rootID, occurrences) in byRoot {
-                guard CanonicalKeeperPolicy.isPrimaryLibraryRoot(rootsByID[rootID]),
+                guard CanonicalKeeperPolicy.allowsLocalExactDuplicateCleanup(rootsByID[rootID]),
                       occurrences.count > 1
                 else { continue }
                 let sorted = occurrences.sorted {
@@ -369,13 +376,16 @@ public enum ReconciliationPlanner {
 
         for asset in report.livePhotos {
             let takeoutResources = asset.occurrences
-                .filter { rootsByID[$0.rootID]?.provenance == .googleTakeout }
+                .filter {
+                    rootsByID[$0.rootID]?.provenance == .googleTakeout
+                        && rootsByID[$0.rootID]?.usageRole == .importSource
+                }
                 .flatMap(\.resources)
             guard !takeoutResources.isEmpty else { continue }
 
             let completePreferredOccurrences = asset.occurrences.filter { occurrence in
                 occurrence.status == .complete
-                    && rootsByID[occurrence.rootID]?.provenance != .googleTakeout
+                    && CanonicalKeeperPolicy.canRetainAgainstImportCleanup(rootsByID[occurrence.rootID])
             }
             let canonical = completePreferredOccurrences.sorted { lhs, rhs in
                 CanonicalKeeperPolicy.preferredOccurrence(
@@ -394,7 +404,7 @@ public enum ReconciliationPlanner {
                 }
                 return group.members.contains { member in
                     member.role == resource.role
-                        && rootsByID[member.rootID]?.provenance != .googleTakeout
+                        && CanonicalKeeperPolicy.canRetainAgainstImportCleanup(rootsByID[member.rootID])
                 }
             }
             guard !exactMixedTakeout.isEmpty else { continue }
@@ -521,7 +531,7 @@ public enum ReconciliationPlanner {
         return group.members
             .filter {
                 $0.role == resource.role
-                    && rootsByID[$0.rootID]?.provenance != .googleTakeout
+                    && CanonicalKeeperPolicy.canRetainAgainstImportCleanup(rootsByID[$0.rootID])
             }
             .sorted {
                 CanonicalKeeperPolicy.preferredResource(

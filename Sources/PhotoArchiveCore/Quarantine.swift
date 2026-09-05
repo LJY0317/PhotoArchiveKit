@@ -8,6 +8,7 @@ public enum QuarantineError: LocalizedError {
     case exactEvidenceRequired
     case noAutomaticCandidates
     case missingRoot(String)
+    case rootRoleDisallowsCleanup(String)
     case unsafeRelativePath(String)
     case missingSource(String)
     case sourceChanged(String)
@@ -33,6 +34,8 @@ public enum QuarantineError: LocalizedError {
             return "The plan has no automatic redundant candidates to quarantine."
         case let .missingRoot(rootID):
             return "A planned source root is missing from the scan report: \(rootID)"
+        case let .rootRoleDisallowsCleanup(rootID):
+            return "The current root role does not allow automatic redundant removal: \(rootID)"
         case let .unsafeRelativePath(path):
             return "A planned relative path escapes its registered source root: \(path)"
         case let .missingSource(path):
@@ -282,7 +285,6 @@ public enum QuarantineExecutor {
         }
 
         let duplicateGroupByResource = duplicateGroupIndex(report.exactDuplicateGroups)
-        let groupByID = Dictionary(uniqueKeysWithValues: report.exactDuplicateGroups.map { ($0.groupID, $0) })
         var verifiedItems: [VerifiedItem] = []
         verifiedItems.reserveCapacity(automatic.count)
 
@@ -298,6 +300,9 @@ public enum QuarantineExecutor {
                 guard let sourceRoot = rootsByID[candidate.rootID] else {
                     throw QuarantineError.missingRoot(candidate.rootID)
                 }
+                guard sourceRoot.usageRole.allowsAutomaticRedundantRemoval else {
+                    throw QuarantineError.rootRoleDisallowsCleanup(candidate.rootID)
+                }
                 let sourceRootURL = URL(fileURLWithPath: sourceRoot.canonicalPath)
                     .resolvingSymlinksInPath()
                     .standardizedFileURL
@@ -312,9 +317,7 @@ public enum QuarantineExecutor {
                 )
 
                 let key = ResourceKey(rootID: candidate.rootID, relativePath: candidate.relativePath)
-                guard let groupID = duplicateGroupByResource[key],
-                      let group = groupByID[groupID]
-                else {
+                guard let groupID = duplicateGroupByResource[key] else {
                     throw QuarantineError.missingPreferredMatch(sourceURL.path)
                 }
 
@@ -323,15 +326,7 @@ public enum QuarantineExecutor {
                     let preferredKey = ResourceKey(rootID: preferred.rootID, relativePath: preferred.relativePath)
                     return duplicateGroupByResource[preferredKey] == groupID
                 }
-                let preferred = preferredCandidates.first ?? group.members.first { member in
-                    guard member.role == candidate.role,
-                          member.rootID != candidate.rootID,
-                          let root = rootsByID[member.rootID]
-                    else {
-                        return false
-                    }
-                    return root.provenance != .googleTakeout
-                }
+                let preferred = preferredCandidates.first
                 guard let preferred,
                       let preferredRoot = rootsByID[preferred.rootID]
                 else {

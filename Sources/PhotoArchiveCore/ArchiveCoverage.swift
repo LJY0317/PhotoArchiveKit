@@ -49,6 +49,7 @@ public struct ArchiveCoverageRootReport: Codable, Sendable, Equatable {
     public let rootID: String
     public let label: String
     public let kind: SourceRootKind
+    public let usageRole: RootUsageRole
     public let provenance: SourceProvenance
     public let canonicalPath: String
     public let mediaResourceCount: Int
@@ -61,6 +62,7 @@ public struct ArchiveCoverageRootReport: Codable, Sendable, Equatable {
         rootID: String,
         label: String,
         kind: SourceRootKind,
+        usageRole: RootUsageRole,
         provenance: SourceProvenance,
         canonicalPath: String,
         mediaResourceCount: Int,
@@ -72,6 +74,7 @@ public struct ArchiveCoverageRootReport: Codable, Sendable, Equatable {
         self.rootID = rootID
         self.label = label
         self.kind = kind
+        self.usageRole = usageRole
         self.provenance = provenance
         self.canonicalPath = canonicalPath
         self.mediaResourceCount = mediaResourceCount
@@ -122,6 +125,7 @@ public struct ArchiveCoverageReport: Codable, Sendable, Equatable {
 public struct AgentSafeArchiveCoverageRootReport: Codable, Sendable, Equatable {
     public let rootID: String
     public let kind: SourceRootKind
+    public let usageRole: RootUsageRole
     public let provenance: SourceProvenance
     public let mediaResourceCount: Int
     public let exactCoveredElsewhereResourceCount: Int
@@ -147,6 +151,7 @@ public struct AgentSafeArchiveCoverageReport: Codable, Sendable, Equatable {
             AgentSafeArchiveCoverageRootReport(
                 rootID: root.rootID,
                 kind: root.kind,
+                usageRole: root.usageRole,
                 provenance: root.provenance,
                 mediaResourceCount: root.mediaResourceCount,
                 exactCoveredElsewhereResourceCount: root.exactCoveredElsewhereResourceCount,
@@ -263,6 +268,7 @@ public enum ArchiveCoverageBuilder {
                 rootID: root.rootID,
                 label: root.label,
                 kind: root.kind,
+                usageRole: root.usageRole,
                 provenance: root.provenance,
                 canonicalPath: root.canonicalPath,
                 mediaResourceCount: root.mediaFileCount,

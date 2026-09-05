@@ -135,7 +135,7 @@ swift run photoarchive doctor
 swift run photoarchive scan --inbox "~/Photo Inbox"
 ```
 
-읽기 전용 preferred-representation plan을 생성할 수 있습니다. exact duplicate에는 canonical keeper 정책을 적용합니다. archive/reference root는 보호되는 replica로 유지하고, primary local library에서는 같은 root 안의 대표 사본 하나를 고르며, import-source 사본은 exact coverage가 증명될 때만 줄입니다. Live Photo occurrence는 항상 atomic하게 유지하고 해결되지 않은 variant만 review로 남깁니다.
+읽기 전용 preferred-representation plan을 생성할 수 있습니다. exact duplicate에는 root 역할을 반영한 canonical keeper 정책을 적용합니다. `staging`/`primary_library` root는 같은 root 안의 exact 중복을 대표 사본 하나로 줄일 수 있고, `archive`/`reference` root는 자동 제거 후보가 되지 않습니다. `import_source` 사본은 안전한 retained counterpart 또는 보존된 source semantics가 있을 때만 줄입니다. Live Photo occurrence는 항상 atomic하게 유지하고 해결되지 않은 variant만 review로 남깁니다.
 
 ```bash
 swift run photoarchive plan \
@@ -354,6 +354,8 @@ report는 정제되지만 catalog 자체에는 경로와 로컬 integrity 값이
 
 option 없이 입력한 path는 Inbox로 처리합니다.
 
+이미 등록된 path는 저장된 usage role이 우선합니다. 이후 scan에서 다른 root flag를 사용해도 `staging`/`primary_library`/`archive`/`import_source`/`reference` 역할을 몰래 바꾸지 않으며, 정책 변경은 `photoarchive root role`로 명시적으로 수행합니다.
+
 그 밖의 option:
 
 - `--catalog PATH` — SQLite catalog 경로 지정
@@ -389,13 +391,20 @@ sidecar 정책은 일반 사용자 중심입니다. 사용자가 JSON/XMP를 직
 
 exact-only Live Photo reconciliation은 `still_only` 또는 `video_only`인 불완전 occurrence라도 그 occurrence의 모든 resource가 Takeout 밖에 같은 role의 byte-identical counterpart를 가지고 있으면 occurrence 전체를 `automatic_redundant`로 판단할 수 있습니다. 다른 곳에 complete Live Photo가 반드시 있어야 하는 것은 아니며 occurrence 일부만 제거하지 않습니다. quarantine apply 직전에는 candidate와 keeper를 다시 fresh SHA-256으로 검증합니다.
 
-canonical keeper 선택은 등록된 모든 root의 backup 사본을 전 세계적으로 하나만 남기도록 collapse하는 정책이 아닙니다. archive와 reference root는 자동 제거 대상에서 보호합니다. primary local-library root 안에서는 byte-identical standalone copy가 여러 개면 trusted capture evidence가 더 좋은 사본, 그 다음 더 얕은 path의 사본을 keeper로 선호할 수 있습니다. byte-identical Live Photo occurrence가 여러 개면 complete occurrence를 먼저 선호하고 선택된 still+paired-video 전체를 한 representation으로 유지합니다. import-source 사본은 보존되는 exact counterpart가 있거나 source-folder semantics가 이미 보존된 경우에만 cleanup 후보가 됩니다. 실제 quarantine 직전에는 여전히 candidate와 keeper의 full-file hash를 fresh 재검증합니다.
+canonical keeper 선택은 등록된 모든 root의 backup 사본을 전 세계적으로 하나만 남기도록 collapse하는 정책이 아닙니다. 각 등록 root에는 사용자가 나중에 바꿀 수 있는 역할 하나를 지정합니다: `staging`, `primary_library`, `archive`, `import_source`, `reference`. staging은 임시 작업/보관 위치, primary library는 계속 유지할 주 보관 위치, archive는 장기 보호 대상, import source는 안전한 coverage/의미 보존 뒤 정리 가능한 입수처, reference는 비교 전용입니다. staging/primary 안의 byte-identical same-root copy는 대표 사본 하나를 남길 수 있지만 archive/reference는 자동 제거 후보가 되지 않습니다. 실제 quarantine 직전에는 여전히 candidate와 keeper의 full-file hash를 fresh 재검증합니다.
 
 향후 local GUI에서는 이 판단의 private 정보를 사람이 바로 볼 수 있어야 합니다. duplicate group 하나를 한 묶음으로 보여주고, 그 안의 모든 physical copy에 실제 root/path와 protected/keeper/candidate badge를 표시하며 location별 filter를 제공하는 방식이 적합합니다. 이 화면은 **로컬 전용**이고 agent-safe report에는 계속 opaque group/root ID와 count만 전달합니다. 현재 human `scan`도 앞부분 duplicate group의 path를 보여주고 `--json`에는 전체 local-private 결과가 있지만, 장기적으로는 Krokiet처럼 위치를 그룹 안에서 바로 비교하는 GUI가 소비자 UX에 더 적합합니다.
 
-라이브러리 위치에는 명시적인 root registry가 있습니다. `photoarchive root add`, `enable`, `disable`, `remove`, `list`로 현재 관리하는 위치와 과거 scan에서 한 번 관측된 history root를 구분합니다. `root remove`는 media를 절대 건드리지 않고 해당 root의 current resource/hash/duplicate/source-folder evidence만 catalog에서 정리하며, removable archive를 다시 알아볼 수 있도록 최소 root identity/marker history는 남깁니다. `root list --all`은 removed/history-only root도 보여줍니다.
+라이브러리 위치에는 명시적인 root registry가 있습니다. `photoarchive root add`, `enable`, `disable`, `remove`, `role`, `list`로 현재 관리하는 위치와 과거 scan에서 한 번 관측된 history root를 구분합니다. 역할은 **장치 전체가 아니라 등록한 root별**로 지정하므로 같은 Mac/HDD/미래 file-cloud 안의 서로 다른 폴더에 서로 다른 역할을 줄 수 있습니다. `root role ROOT ROLE`은 정책만 바꾸며 media를 move/delete하지 않고, 변경 이력은 local catalog에 남깁니다. `staging`과 `primary_library`는 내부 `inbox` kind를 공유하고 `archive`, `import_source`, `reference`는 대응 kind를 사용합니다. provenance는 별도 사실로 유지합니다. portable catalog snapshot에도 현재 역할을 보존합니다. `root remove`는 media를 건드리지 않고 current evidence만 정리하며 최소 root identity/history는 남깁니다.
 
-현재 keeper policy는 이미 `archive`와 `reference` root를 자동 duplicate 제거 대상에서 보호합니다. 미래 GUI에서는 숫자 우선순위를 직접 노출하기보다 archive/protected replica, managed library, import/inbox, reference-only, excluded 같은 간단한 root-role preset으로 보여주는 편이 적합합니다. archive root는 자동 삭제는 금지하면서도 사용자가 요청한 내부 이동/정리는 허용할 수 있습니다.
+예:
+
+```bash
+swift run photoarchive root add --role staging --provenance local_library "~/Pictures"
+swift run photoarchive root role ROOT_ID archive
+```
+
+기존 catalog migration은 보수적으로 동작합니다. 과거 `inbox`는 upgrade만으로 cleanup 권한이 넓어지지 않도록 처음에는 `primary_library`로 해석하고, 새 `inbox` root는 별도 역할을 지정하지 않으면 `staging`을 기본값으로 사용합니다.
 
 ## 자동 분류 방향
 

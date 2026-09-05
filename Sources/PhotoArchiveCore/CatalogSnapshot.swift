@@ -338,6 +338,7 @@ public enum CatalogSnapshotRestorer {
                 let boundURL = bindings[root.rootID]
                 let canonicalPath = boundURL?.path ?? "snapshot://\(root.rootID)"
                 let label = boundURL?.lastPathComponent ?? root.rootID
+                let usageRole = root.usageRole ?? RootUsageRole.legacyDefault(kind: root.kind)
                 try database.run(
                     """
                     INSERT INTO source_roots (id, label, kind, canonical_path, created_at)
@@ -346,7 +347,7 @@ public enum CatalogSnapshotRestorer {
                     bindings: [
                         .text(root.rootID),
                         .text(label),
-                        .text(root.kind.rawValue),
+                        .text(usageRole.sourceKind.rawValue),
                         .text(canonicalPath),
                         .double(now)
                     ]
@@ -354,6 +355,14 @@ public enum CatalogSnapshotRestorer {
                 try database.run(
                     "INSERT INTO source_root_metadata (root_id, provenance) VALUES (?, ?)",
                     bindings: [.text(root.rootID), .text(root.provenance.rawValue)]
+                )
+                try database.run(
+                    "INSERT INTO root_usage_roles (root_id, role, updated_at) VALUES (?, ?, ?)",
+                    bindings: [.text(root.rootID), .text(usageRole.rawValue), .double(now)]
+                )
+                try database.run(
+                    "INSERT INTO root_usage_role_history (root_id, role, changed_at) VALUES (?, ?, ?)",
+                    bindings: [.text(root.rootID), .text(usageRole.rawValue), .double(now)]
                 )
                 if let markerKey = root.markerKey {
                     try database.run(
@@ -531,6 +540,7 @@ private struct SnapshotHeaderPayload: Codable, Equatable {
 private struct SnapshotRootPayload: Codable, Equatable {
     let rootID: String
     let kind: SourceRootKind
+    let usageRole: RootUsageRole?
     let provenance: SourceProvenance
     let markerKey: String?
 }
@@ -632,29 +642,50 @@ private struct ParsedSnapshot {
         var snapshot = ParsedSnapshot()
         snapshot.headerCount = 1
 
-        snapshot.roots = try database.textRows(
+        let hasUsageRoles = try database.singleInt(
+            "SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'root_usage_roles'"
+        ) == 1
+        let rootSQL: String
+        let rootColumnCount: Int
+        if hasUsageRoles {
+            rootSQL = """
+            SELECT r.id, r.kind, rur.role, COALESCE(m.provenance, 'unknown'), rm.marker_key
+            FROM source_roots r
+            LEFT JOIN root_usage_roles rur ON rur.root_id = r.id
+            LEFT JOIN source_root_metadata m ON m.root_id = r.id
+            LEFT JOIN root_markers rm ON rm.root_id = r.id
+            ORDER BY r.id
             """
-            SELECT r.id, r.kind, COALESCE(m.provenance, 'unknown'), rm.marker_key
+            rootColumnCount = 5
+        } else {
+            rootSQL = """
+            SELECT r.id, r.kind, NULL, COALESCE(m.provenance, 'unknown'), rm.marker_key
             FROM source_roots r
             LEFT JOIN source_root_metadata m ON m.root_id = r.id
             LEFT JOIN root_markers rm ON rm.root_id = r.id
             ORDER BY r.id
-            """,
-            columnCount: 4
+            """
+            rootColumnCount = 5
+        }
+        snapshot.roots = try database.textRows(
+            rootSQL,
+            columnCount: rootColumnCount
         ).map { row in
             guard let rootID = row[0],
                   let kindRaw = row[1],
                   let kind = SourceRootKind(rawValue: kindRaw),
-                  let provenanceRaw = row[2],
+                  let provenanceRaw = row[3],
                   let provenance = SourceProvenance(rawValue: provenanceRaw)
             else {
                 throw CatalogSnapshotError.invalidSnapshot("invalid source root row")
             }
+            let usageRole = row[2].flatMap(RootUsageRole.init(rawValue:))
             return SnapshotRootPayload(
                 rootID: rootID,
                 kind: kind,
+                usageRole: usageRole,
                 provenance: provenance,
-                markerKey: row[3]
+                markerKey: row[4]
             )
         }
 
@@ -907,6 +938,12 @@ private struct ParsedSnapshot {
             sourceCollectionKeys.map(\.collectionID),
             name: "source collection target"
         )
+
+        for root in roots {
+            if let usageRole = root.usageRole, usageRole.sourceKind != root.kind {
+                throw CatalogSnapshotError.invalidSnapshot("root usage role conflicts with its kind")
+            }
+        }
 
         for resource in resources {
             guard rootIDs.contains(resource.rootID) else {

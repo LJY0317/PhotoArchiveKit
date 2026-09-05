@@ -7,6 +7,69 @@ public enum SourceRootKind: String, Codable, CaseIterable, Sendable {
     case reference
 }
 
+public enum RootUsageRole: String, Codable, CaseIterable, Sendable {
+    case staging
+    case primaryLibrary = "primary_library"
+    case archive
+    case importSource = "import_source"
+    case reference
+
+    public var sourceKind: SourceRootKind {
+        switch self {
+        case .staging, .primaryLibrary: return .inbox
+        case .archive: return .archive
+        case .importSource: return .importSource
+        case .reference: return .reference
+        }
+    }
+
+    public var isLongTermProtectionTarget: Bool {
+        self == .primaryLibrary || self == .archive
+    }
+
+    public var allowsLocalExactDuplicateCleanup: Bool {
+        self == .staging || self == .primaryLibrary
+    }
+
+    public var allowsAutomaticRedundantRemoval: Bool {
+        self == .staging || self == .primaryLibrary || self == .importSource
+    }
+
+    public var allowsOrganizationMutation: Bool {
+        self == .staging || self == .primaryLibrary
+    }
+
+    public var canRetainAgainstImportCleanup: Bool {
+        self == .staging || self == .primaryLibrary || self == .archive
+    }
+
+    public var isCleanupSource: Bool {
+        self == .staging || self == .importSource
+    }
+
+    public var isMutationProtected: Bool {
+        self == .archive || self == .reference
+    }
+
+    static func defaultForNewRoot(kind: SourceRootKind) -> RootUsageRole {
+        switch kind {
+        case .inbox: return .staging
+        case .archive: return .archive
+        case .importSource: return .importSource
+        case .reference: return .reference
+        }
+    }
+
+    static func legacyDefault(kind: SourceRootKind) -> RootUsageRole {
+        switch kind {
+        case .inbox: return .primaryLibrary
+        case .archive: return .archive
+        case .importSource: return .importSource
+        case .reference: return .reference
+        }
+    }
+}
+
 public enum SourceProvenance: String, Codable, CaseIterable, Sendable {
     case unknown
     case localLibrary = "local_library"
@@ -340,6 +403,7 @@ public struct RootScanReport: Codable, Sendable, Equatable {
     public let rootID: String
     public let label: String
     public let kind: SourceRootKind
+    public let usageRole: RootUsageRole
     public let provenance: SourceProvenance
     public let canonicalPath: String
     public let stableMarkerKey: String?
@@ -359,6 +423,7 @@ public struct RootScanReport: Codable, Sendable, Equatable {
         rootID: String,
         label: String,
         kind: SourceRootKind,
+        usageRole: RootUsageRole? = nil,
         provenance: SourceProvenance,
         canonicalPath: String,
         stableMarkerKey: String? = nil,
@@ -377,6 +442,7 @@ public struct RootScanReport: Codable, Sendable, Equatable {
         self.rootID = rootID
         self.label = label
         self.kind = kind
+        self.usageRole = usageRole ?? RootUsageRole.defaultForNewRoot(kind: kind)
         self.provenance = provenance
         self.canonicalPath = canonicalPath
         self.stableMarkerKey = stableMarkerKey
@@ -459,6 +525,7 @@ public struct ScanSummary: Codable, Sendable, Equatable {
 public struct AgentSafeRootReport: Codable, Sendable, Equatable {
     public let rootID: String
     public let kind: SourceRootKind
+    public let usageRole: RootUsageRole
     public let provenance: SourceProvenance
     public let mediaFileCount: Int
     public let completeLivePhotos: Int
@@ -538,6 +605,7 @@ public struct AgentSafeScanReport: Codable, Sendable, Equatable {
             AgentSafeRootReport(
                 rootID: root.rootID,
                 kind: root.kind,
+                usageRole: root.usageRole,
                 provenance: root.provenance,
                 mediaFileCount: root.mediaFileCount,
                 completeLivePhotos: root.completeLivePhotos,

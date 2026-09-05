@@ -77,9 +77,15 @@ public final class ArchiveScanner {
         from report: ScanReport,
         destinationURL: URL
     ) throws -> ArchivePlan {
-        try ArchivePlanner.makePlan(
+        let destination = destinationURL.resolvingSymlinksInPath().standardizedFileURL
+        if let rootID = try catalog.rootID(matching: destination.path),
+           let usageRole = try catalog.sourceRootUsageRole(rootID: rootID),
+           usageRole != .archive {
+            throw ArchivePlanError.destinationRoleConflict(rootID)
+        }
+        return try ArchivePlanner.makePlan(
             from: report,
-            destinationURL: destinationURL,
+            destinationURL: destination,
             expectedHashForResource: { resourceID in
                 try self.catalog.archivePlanExactHash(
                     resourceID: resourceID,
@@ -829,6 +835,7 @@ public final class ArchiveScanner {
                 rootID: root.id,
                 label: root.label,
                 kind: root.kind,
+                usageRole: root.usageRole,
                 provenance: root.provenance,
                 canonicalPath: root.url.path,
                 stableMarkerKey: root.markerKey,

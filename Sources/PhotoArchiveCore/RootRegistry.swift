@@ -11,6 +11,7 @@ public struct RegisteredRootReport: Codable, Sendable, Equatable {
     public let rootID: String
     public let label: String
     public let kind: SourceRootKind
+    public let usageRole: RootUsageRole
     public let provenance: SourceProvenance
     public let canonicalPath: String
     public let state: RootRegistrationState
@@ -21,6 +22,7 @@ public struct RegisteredRootReport: Codable, Sendable, Equatable {
 public struct AgentSafeRegisteredRootReport: Codable, Sendable, Equatable {
     public let rootID: String
     public let kind: SourceRootKind
+    public let usageRole: RootUsageRole
     public let provenance: SourceProvenance
     public let state: RootRegistrationState
     public let isAvailable: Bool
@@ -29,6 +31,7 @@ public struct AgentSafeRegisteredRootReport: Codable, Sendable, Equatable {
     public init(report: RegisteredRootReport) {
         rootID = report.rootID
         kind = report.kind
+        usageRole = report.usageRole
         provenance = report.provenance
         state = report.state
         isAvailable = report.isAvailable
@@ -82,6 +85,7 @@ public enum RootRegistry {
                 rootID: row.rootID,
                 label: row.label,
                 kind: row.kind,
+                usageRole: row.usageRole,
                 provenance: row.provenance,
                 canonicalPath: row.canonicalPath,
                 state: row.state,
@@ -96,6 +100,7 @@ public enum RootRegistry {
         url: URL,
         kind: SourceRootKind,
         provenance: SourceProvenance,
+        usageRole: RootUsageRole? = nil,
         catalogURL: URL = PhotoArchivePaths.defaultCatalogURL
     ) throws -> RegisteredRootReport {
         var isDirectory: ObjCBool = false
@@ -112,6 +117,9 @@ public enum RootRegistry {
             ScanRoot(url: standardized, kind: kind, provenance: provenance),
             markerKey: markerKey
         )
+        if let usageRole {
+            try catalog.setRootUsageRole(rootID: root.id, role: usageRole)
+        }
         try catalog.setRootRegistration(rootID: root.id, state: .active)
         return try list(catalogURL: catalogURL, includeHistory: true)
             .first(where: { $0.rootID == root.id })!
@@ -128,6 +136,21 @@ public enum RootRegistry {
             throw RootRegistryError.rootNotFound(target)
         }
         try catalog.setRootRegistration(rootID: rootID, state: state)
+        return try list(catalogURL: catalogURL, includeHistory: true)
+            .first(where: { $0.rootID == rootID })!
+    }
+
+    @discardableResult
+    public static func setUsageRole(
+        target: String,
+        role: RootUsageRole,
+        catalogURL: URL = PhotoArchivePaths.defaultCatalogURL
+    ) throws -> RegisteredRootReport {
+        let catalog = try SQLiteCatalog(url: catalogURL)
+        guard let rootID = try catalog.rootID(matching: target) else {
+            throw RootRegistryError.rootNotFound(target)
+        }
+        try catalog.setRootUsageRole(rootID: rootID, role: role)
         return try list(catalogURL: catalogURL, includeHistory: true)
             .first(where: { $0.rootID == rootID })!
     }

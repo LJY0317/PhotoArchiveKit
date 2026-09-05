@@ -70,6 +70,7 @@ public enum ArchiveCopyError: LocalizedError {
     case rootMarkerMismatch(String)
     case destinationUnavailable
     case destinationMarkerMismatch
+    case destinationRoleConflict(String)
     case unsafePath(String)
     case sourcePreconditionFailed(String)
     case catalogEvidenceMismatch(String)
@@ -103,6 +104,8 @@ public enum ArchiveCopyError: LocalizedError {
             return "The archive destination is unavailable or is not a directory."
         case .destinationMarkerMismatch:
             return "The archive destination marker no longer matches the immutable plan."
+        case let .destinationRoleConflict(rootID):
+            return "A registered archive-copy destination must currently have the archive role: \(rootID)"
         case let .unsafePath(resourceID):
             return "An archive-copy path crosses an unsafe boundary: \(resourceID)"
         case let .sourcePreconditionFailed(resourceID):
@@ -388,6 +391,11 @@ public enum ArchiveCopyExecutor {
             throw ArchiveCopyError.catalogMissing
         }
         let catalog = try SQLiteCatalog(url: catalogURL)
+        if let destinationRootID = try catalog.rootID(matching: destinationURL.path),
+           let usageRole = try catalog.sourceRootUsageRole(rootID: destinationRootID),
+           usageRole != .archive {
+            throw ArchiveCopyError.destinationRoleConflict(destinationRootID)
+        }
 
         let knownRoots = Dictionary(uniqueKeysWithValues: plan.sourceRoots.map { ($0.rootID, $0) })
         var boundRoots: [String: URL] = [:]

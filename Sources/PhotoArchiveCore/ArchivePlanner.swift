@@ -115,6 +115,7 @@ public enum ArchivePlanError: LocalizedError {
     case destinationMissing(String)
     case destinationNotDirectory(String)
     case destinationMarkerRequired(String)
+    case destinationRoleConflict(String)
     case destinationChanged(String)
     case destinationOverlapsSource(String)
     case unsafeDestinationPath(String)
@@ -131,6 +132,8 @@ public enum ArchivePlanError: LocalizedError {
             return "Archive destination is not a directory: \(path)"
         case let .destinationMarkerRequired(path):
             return "Archive destination requires a .photoarchive-root marker: \(path)"
+        case let .destinationRoleConflict(rootID):
+            return "A registered archive destination must currently have the archive role: \(rootID)"
         case let .destinationChanged(path):
             return "Archive destination marker changed while the plan was being created: \(path)"
         case let .destinationOverlapsSource(path):
@@ -634,15 +637,24 @@ public enum ArchivePlanner {
 
     private static func rootPreference(_ root: RootScanReport?) -> Int {
         guard let root else { return 100 }
-        if root.kind == .archive { return 0 }
-        switch root.provenance {
-        case .appleDirect: return 1
-        case .localLibrary: return 2
-        case .googleWeb: return 3
-        case .unknown: return 4
-        case .googleIOSShare: return 5
-        case .googleTakeout: return 6
+        let roleBase: Int
+        switch root.usageRole {
+        case .archive: roleBase = 0
+        case .primaryLibrary: roleBase = 10
+        case .staging: roleBase = 20
+        case .reference: roleBase = 30
+        case .importSource: roleBase = 40
         }
+        let provenanceRank: Int
+        switch root.provenance {
+        case .appleDirect: provenanceRank = 0
+        case .localLibrary: provenanceRank = 1
+        case .googleWeb: provenanceRank = 2
+        case .unknown: provenanceRank = 3
+        case .googleIOSShare: provenanceRank = 4
+        case .googleTakeout: provenanceRank = 5
+        }
+        return roleBase + provenanceRank
     }
 
     private static func safeResourceURL(rootURL: URL, relativePath: String) throws -> URL {

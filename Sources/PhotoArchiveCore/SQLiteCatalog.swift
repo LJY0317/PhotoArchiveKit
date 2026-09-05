@@ -89,6 +89,7 @@ struct RootRegistryRow {
     let rootID: String
     let label: String
     let kind: SourceRootKind
+    let usageRole: RootUsageRole
     let provenance: SourceProvenance
     let canonicalPath: String
     let state: RootRegistrationState
@@ -184,15 +185,17 @@ final class SQLiteCatalog {
                "SELECT root_id FROM root_markers WHERE marker_key = ?",
                bindings: [.text(markerKey)]
            ) {
+            let usageRole = try resolvedUsageRole(rootID: markerRootID, inputKind: input.kind)
             try run(
                 "UPDATE source_roots SET label = ?, kind = ?, canonical_path = ? WHERE id = ?",
-                bindings: [.text(input.label), .text(input.kind.rawValue), .text(path), .text(markerRootID)]
+                bindings: [.text(input.label), .text(usageRole.sourceKind.rawValue), .text(path), .text(markerRootID)]
             )
             try upsertRootMetadata(rootID: markerRootID, provenance: input.provenance)
             return RootDescriptor(
                 id: markerRootID,
                 label: input.label,
-                kind: input.kind,
+                kind: usageRole.sourceKind,
+                usageRole: usageRole,
                 provenance: input.provenance,
                 url: canonicalURL,
                 markerKey: markerKey
@@ -203,9 +206,10 @@ final class SQLiteCatalog {
             "SELECT id FROM source_roots WHERE canonical_path = ?",
             bindings: [.text(path)]
         ) {
+            let usageRole = try resolvedUsageRole(rootID: existingID, inputKind: input.kind)
             try run(
                 "UPDATE source_roots SET label = ?, kind = ? WHERE id = ?",
-                bindings: [.text(input.label), .text(input.kind.rawValue), .text(existingID)]
+                bindings: [.text(input.label), .text(usageRole.sourceKind.rawValue), .text(existingID)]
             )
             try upsertRootMetadata(rootID: existingID, provenance: input.provenance)
             if let markerKey {
@@ -214,7 +218,8 @@ final class SQLiteCatalog {
             return RootDescriptor(
                 id: existingID,
                 label: input.label,
-                kind: input.kind,
+                kind: usageRole.sourceKind,
+                usageRole: usageRole,
                 provenance: input.provenance,
                 url: canonicalURL,
                 markerKey: markerKey
@@ -236,10 +241,21 @@ final class SQLiteCatalog {
         if let markerKey {
             try upsertRootMarker(markerKey: markerKey, rootID: id)
         }
+        let usageRole = try ensureRootUsageRole(
+            rootID: id,
+            defaultRole: .defaultForNewRoot(kind: input.kind)
+        )
+        if usageRole.sourceKind != input.kind {
+            try run(
+                "UPDATE source_roots SET kind = ? WHERE id = ?",
+                bindings: [.text(usageRole.sourceKind.rawValue), .text(id)]
+            )
+        }
         return RootDescriptor(
             id: id,
             label: input.label,
-            kind: input.kind,
+            kind: usageRole.sourceKind,
+            usageRole: usageRole,
             provenance: input.provenance,
             url: canonicalURL,
             markerKey: markerKey
@@ -266,6 +282,59 @@ final class SQLiteCatalog {
             """,
             bindings: [.text(rootID), .text(provenance.rawValue)]
         )
+    }
+
+    private func ensureRootUsageRole(
+        rootID: String,
+        defaultRole: RootUsageRole
+    ) throws -> RootUsageRole {
+        if let raw = try queryText(
+            "SELECT role FROM root_usage_roles WHERE root_id = ?",
+            bindings: [.text(rootID)]
+        ), let role = RootUsageRole(rawValue: raw) {
+            return role
+        }
+
+        let now = Date().timeIntervalSince1970
+        try run(
+            "INSERT INTO root_usage_roles (root_id, role, updated_at) VALUES (?, ?, ?)",
+            bindings: [.text(rootID), .text(defaultRole.rawValue), .double(now)]
+        )
+        try run(
+            "INSERT INTO root_usage_role_history (root_id, role, changed_at) VALUES (?, ?, ?)",
+            bindings: [.text(rootID), .text(defaultRole.rawValue), .double(now)]
+        )
+        return defaultRole
+    }
+
+    private func resolvedUsageRole(
+        rootID: String,
+        inputKind: SourceRootKind
+    ) throws -> RootUsageRole {
+        let registrationState = try queryText(
+            "SELECT state FROM root_registrations WHERE root_id = ?",
+            bindings: [.text(rootID)]
+        )
+        if registrationState != nil {
+            return try ensureRootUsageRole(
+                rootID: rootID,
+                defaultRole: .legacyDefault(kind: inputKind)
+            )
+        }
+
+        let desiredRole = RootUsageRole.defaultForNewRoot(kind: inputKind)
+        let currentRole = try queryText(
+            "SELECT role FROM root_usage_roles WHERE root_id = ?",
+            bindings: [.text(rootID)]
+        ).flatMap(RootUsageRole.init(rawValue:))
+        if currentRole == desiredRole {
+            return desiredRole
+        }
+        if currentRole == nil {
+            return try ensureRootUsageRole(rootID: rootID, defaultRole: desiredRole)
+        }
+        try setRootUsageRole(rootID: rootID, role: desiredRole)
+        return desiredRole
     }
 
     func beginScan(startedAt: Date, rootCount: Int) throws -> String {
@@ -1374,6 +1443,19 @@ final class SQLiteCatalog {
                 updated_at REAL NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS root_usage_roles (
+                root_id TEXT PRIMARY KEY REFERENCES source_roots(id) ON DELETE CASCADE,
+                role TEXT NOT NULL CHECK(role IN ('staging', 'primary_library', 'archive', 'import_source', 'reference')),
+                updated_at REAL NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS root_usage_role_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                root_id TEXT NOT NULL REFERENCES source_roots(id) ON DELETE CASCADE,
+                role TEXT NOT NULL CHECK(role IN ('staging', 'primary_library', 'archive', 'import_source', 'reference')),
+                changed_at REAL NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS scan_sessions (
                 id TEXT PRIMARY KEY,
                 started_at REAL NOT NULL,
@@ -1565,6 +1647,26 @@ final class SQLiteCatalog {
                 ON sidecar_links(last_seen_session);
             CREATE INDEX IF NOT EXISTS provider_objects_asset_idx
                 ON provider_objects(asset_id);
+            CREATE INDEX IF NOT EXISTS root_usage_role_history_root_idx
+                ON root_usage_role_history(root_id, changed_at);
+
+            INSERT OR IGNORE INTO root_usage_roles (root_id, role, updated_at)
+            SELECT id,
+                   CASE kind
+                       WHEN 'archive' THEN 'archive'
+                       WHEN 'import_source' THEN 'import_source'
+                       WHEN 'reference' THEN 'reference'
+                       ELSE 'primary_library'
+                   END,
+                   created_at
+            FROM source_roots;
+
+            INSERT INTO root_usage_role_history (root_id, role, changed_at)
+            SELECT rur.root_id, rur.role, rur.updated_at
+            FROM root_usage_roles rur
+            WHERE NOT EXISTS (
+                SELECT 1 FROM root_usage_role_history h WHERE h.root_id = rur.root_id
+            );
             """
         )
     }
@@ -1686,6 +1788,13 @@ final class SQLiteCatalog {
         )
     }
 
+    func sourceRootUsageRole(rootID: String) throws -> RootUsageRole? {
+        try queryText(
+            "SELECT role FROM root_usage_roles WHERE root_id = ?",
+            bindings: [.text(rootID)]
+        ).flatMap(RootUsageRole.init(rawValue:))
+    }
+
     func quarantineRestoreRootPath(rootID: String) throws -> String? {
         try sourceRootPath(rootID: rootID)
     }
@@ -1726,18 +1835,49 @@ final class SQLiteCatalog {
         )
     }
 
+    func setRootUsageRole(rootID: String, role: RootUsageRole) throws {
+        try withTransaction {
+            let previous = try queryText(
+                "SELECT role FROM root_usage_roles WHERE root_id = ?",
+                bindings: [.text(rootID)]
+            ).flatMap(RootUsageRole.init(rawValue:))
+            let now = Date().timeIntervalSince1970
+            try run(
+                """
+                INSERT INTO root_usage_roles (root_id, role, updated_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(root_id) DO UPDATE SET
+                    role = excluded.role,
+                    updated_at = excluded.updated_at
+                """,
+                bindings: [.text(rootID), .text(role.rawValue), .double(now)]
+            )
+            try run(
+                "UPDATE source_roots SET kind = ? WHERE id = ?",
+                bindings: [.text(role.sourceKind.rawValue), .text(rootID)]
+            )
+            if previous != role {
+                try run(
+                    "INSERT INTO root_usage_role_history (root_id, role, changed_at) VALUES (?, ?, ?)",
+                    bindings: [.text(rootID), .text(role.rawValue), .double(now)]
+                )
+            }
+        }
+    }
+
     func rootRegistryRows(includeHistory: Bool) throws -> [RootRegistryRow] {
         let whereClause = includeHistory
             ? ""
             : "WHERE rr.state IS NOT NULL AND rr.state <> 'removed'"
         return try withStatement(
             """
-            SELECT sr.id, sr.label, sr.kind, COALESCE(srm.provenance, 'unknown'),
+            SELECT sr.id, sr.label, sr.kind, rur.role, COALESCE(srm.provenance, 'unknown'),
                    sr.canonical_path, rr.state,
                    (SELECT COUNT(*) FROM resources r WHERE r.root_id = sr.id)
             FROM source_roots sr
             LEFT JOIN source_root_metadata srm ON srm.root_id = sr.id
             LEFT JOIN root_registrations rr ON rr.root_id = sr.id
+            LEFT JOIN root_usage_roles rur ON rur.root_id = sr.id
             \(whereClause)
             ORDER BY sr.canonical_path, sr.id
             """,
@@ -1751,24 +1891,27 @@ final class SQLiteCatalog {
                       let rootText = sqlite3_column_text(statement, 0),
                       let labelText = sqlite3_column_text(statement, 1),
                       let kindText = sqlite3_column_text(statement, 2),
-                      let provenanceText = sqlite3_column_text(statement, 3),
-                      let pathText = sqlite3_column_text(statement, 4),
+                      let roleText = sqlite3_column_text(statement, 3),
+                      let provenanceText = sqlite3_column_text(statement, 4),
+                      let pathText = sqlite3_column_text(statement, 5),
                       let kind = SourceRootKind(rawValue: String(cString: kindText)),
+                      let usageRole = RootUsageRole(rawValue: String(cString: roleText)),
                       let provenance = SourceProvenance(rawValue: String(cString: provenanceText))
                 else {
                     throw sqliteError(sql: "SELECT root registry rows")
                 }
-                let state = sqlite3_column_text(statement, 5)
+                let state = sqlite3_column_text(statement, 6)
                     .flatMap { RootRegistrationState(rawValue: String(cString: $0)) }
                     ?? .history
                 rows.append(RootRegistryRow(
                     rootID: String(cString: rootText),
                     label: String(cString: labelText),
                     kind: kind,
+                    usageRole: usageRole,
                     provenance: provenance,
                     canonicalPath: String(cString: pathText),
                     state: state,
-                    currentResourceCount: Int(sqlite3_column_int64(statement, 6))
+                    currentResourceCount: Int(sqlite3_column_int64(statement, 7))
                 ))
             }
             return rows
@@ -1953,6 +2096,7 @@ final class SQLiteCatalog {
                 rootID: root.rootID,
                 label: root.label,
                 kind: root.kind,
+                usageRole: root.usageRole,
                 provenance: root.provenance,
                 canonicalPath: root.canonicalPath,
                 stableMarkerKey: try queryText(

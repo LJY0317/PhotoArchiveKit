@@ -194,7 +194,47 @@ struct PhotoArchiveSelfTest {
             provenance: .unknown,
             catalogURL: registryCatalog
         )
-        try require(registered.state == .active, "root add should activate the registry entry")
+        try require(
+            registered.state == .active && registered.usageRole == .reference,
+            "root add should activate the registry entry with its default role"
+        )
+        let stagingRegistryRoot = try RootRegistry.setUsageRole(
+            target: registered.rootID,
+            role: .staging,
+            catalogURL: registryCatalog
+        )
+        try require(
+            stagingRegistryRoot.usageRole == .staging && stagingRegistryRoot.kind == .inbox,
+            "changing a root to staging should persist the role and map its internal kind to inbox"
+        )
+        try require(
+            fileManager.fileExists(atPath: registryMedia.path),
+            "changing a root role must never modify media"
+        )
+        let rolePreservingScan = try await registryScanner.scan(roots: [
+            ScanRoot(url: registryRoot, kind: .reference)
+        ])
+        try require(
+            rolePreservingScan.roots.first?.usageRole == .staging
+                && rolePreservingScan.roots.first?.kind == .inbox,
+            "an explicit saved root role should outrank a later scan flag for the same registered root"
+        )
+        let primaryRegistryRoot = try RootRegistry.setUsageRole(
+            target: registered.rootID,
+            role: .primaryLibrary,
+            catalogURL: registryCatalog
+        )
+        try require(
+            primaryRegistryRoot.usageRole == .primaryLibrary && primaryRegistryRoot.kind == .inbox,
+            "primary-library and staging roles should share the internal inbox kind"
+        )
+        try require(
+            try sqliteInt(
+                databaseURL: registryCatalog,
+                sql: "SELECT COUNT(*) FROM root_usage_role_history WHERE root_id = '\(registered.rootID)'"
+            ) == 3,
+            "root role changes should retain an auditable role history"
+        )
         let disabled = try RootRegistry.setState(target: registered.rootID, state: .inactive, catalogURL: registryCatalog)
         try require(disabled.state == .inactive, "root disable should preserve catalog evidence")
         let enabled = try RootRegistry.setState(target: registered.rootID, state: .active, catalogURL: registryCatalog)
@@ -210,6 +250,28 @@ struct PhotoArchiveSelfTest {
             as: UTF8.self
         )
         try require(!registryAgentJSON.contains(registryRoot.path), "agent-safe root registry exposed a path")
+        try require(registryAgentJSON.contains("primary_library"), "agent-safe root registry should expose the semantic role")
+
+        let historySwitchRoot = temporary.appendingPathComponent("HistorySwitchRoot", isDirectory: true)
+        let historySwitchCatalog = temporary.appendingPathComponent("history-switch.sqlite3")
+        try fileManager.createDirectory(at: historySwitchRoot, withIntermediateDirectories: true)
+        try Data("history-switch".utf8)
+            .write(to: historySwitchRoot.appendingPathComponent("sample.jpg"))
+        let historySwitchScanner = try ArchiveScanner(catalogURL: historySwitchCatalog)
+        let historyReferenceScan = try await historySwitchScanner.scan(roots: [
+            ScanRoot(url: historySwitchRoot, kind: .reference)
+        ])
+        try require(
+            historyReferenceScan.roots.first?.usageRole == .reference,
+            "a history-only reference scan should reflect the current scan kind"
+        )
+        let historyInboxScan = try await historySwitchScanner.scan(roots: [
+            ScanRoot(url: historySwitchRoot, kind: .inbox, provenance: .localLibrary)
+        ])
+        try require(
+            historyInboxScan.roots.first?.usageRole == .staging,
+            "an unregistered history-only root should follow a later scan kind instead of becoming sticky"
+        )
 
         let ownershipParent = temporary.appendingPathComponent("OwnershipParent", isDirectory: true)
         let ownershipNested = ownershipParent.appendingPathComponent("Nested", isDirectory: true)
@@ -273,7 +335,7 @@ struct PhotoArchiveSelfTest {
             catalogURL: temporary.appendingPathComponent("catalog.sqlite3")
         )
         let roots = [
-            ScanRoot(url: rootA, kind: .reference, provenance: .localLibrary),
+            ScanRoot(url: rootA, kind: .inbox, provenance: .localLibrary),
             ScanRoot(url: rootB, kind: .importSource, provenance: .googleTakeout)
         ]
         let progressRecorder = ProgressRecorder()
@@ -287,8 +349,9 @@ struct PhotoArchiveSelfTest {
         let mainCatalogURL = temporary.appendingPathComponent("catalog.sqlite3")
         _ = try RootRegistry.add(
             url: rootA,
-            kind: .reference,
+            kind: .inbox,
             provenance: .localLibrary,
+            usageRole: .staging,
             catalogURL: mainCatalogURL
         )
         _ = try RootRegistry.add(
@@ -309,6 +372,38 @@ struct PhotoArchiveSelfTest {
             ReconciliationPlanner.makePlan(from: cachedSecond).summary
                 == ReconciliationPlanner.makePlan(from: second).summary,
             "cached active-root scan should preserve reconciliation decisions"
+        )
+        try require(
+            ReconciliationPlanner.makePlan(from: cachedSecond).summary.automaticRedundantResourceCount == 1,
+            "staging should be allowed to retain an exact copy while an import-source peer is cleaned up"
+        )
+        _ = try RootRegistry.setUsageRole(
+            target: cachedSecond.roots.first(where: { $0.provenance == .localLibrary })!.rootID,
+            role: .reference,
+            catalogURL: mainCatalogURL
+        )
+        guard let cachedWithReferenceRole = try scanner.latestReusableActiveRootsScanReport() else {
+            throw SelfTestFailure("role-only changes should keep the cached media snapshot reusable")
+        }
+        try require(
+            cachedWithReferenceRole.roots.first(where: { $0.provenance == .localLibrary })?.usageRole == .reference,
+            "cached review reconstruction should apply the current saved root role"
+        )
+        try require(
+            ReconciliationPlanner.makePlan(from: cachedWithReferenceRole).summary.automaticRedundantResourceCount == 0,
+            "a reference-only copy must not authorize automatic cleanup of an import source"
+        )
+        _ = try RootRegistry.setUsageRole(
+            target: cachedSecond.roots.first(where: { $0.provenance == .localLibrary })!.rootID,
+            role: .staging,
+            catalogURL: mainCatalogURL
+        )
+        guard let cachedBackToStaging = try scanner.latestReusableActiveRootsScanReport() else {
+            throw SelfTestFailure("staging role restoration should keep the cached snapshot reusable")
+        }
+        try require(
+            ReconciliationPlanner.makePlan(from: cachedBackToStaging).summary.automaticRedundantResourceCount == 1,
+            "restoring staging role should restore import-cleanup authority without a media rescan"
         )
 
         let takeoutSidecarRoot = temporary.appendingPathComponent("TakeoutSidecar", isDirectory: true)
@@ -482,6 +577,44 @@ struct PhotoArchiveSelfTest {
         try require(
             incompletePlan.items.first?.reason == .livePhotoIncompleteOccurrenceExactCoverage,
             "incomplete exact coverage should use the dedicated reconciliation reason"
+        )
+        let referenceLocalRootReport = RootScanReport(
+            rootID: localRootReport.rootID,
+            label: localRootReport.label,
+            kind: .reference,
+            usageRole: .reference,
+            provenance: localRootReport.provenance,
+            canonicalPath: localRootReport.canonicalPath,
+            stableMarkerKey: localRootReport.stableMarkerKey,
+            mediaFileCount: localRootReport.mediaFileCount,
+            completeLivePhotos: localRootReport.completeLivePhotos,
+            stillOnlyLiveResources: localRootReport.stillOnlyLiveResources,
+            videoOnlyLiveResources: localRootReport.videoOnlyLiveResources,
+            standaloneImages: localRootReport.standaloneImages,
+            standaloneVideos: localRootReport.standaloneVideos,
+            sidecars: localRootReport.sidecars,
+            recognizedSidecars: localRootReport.recognizedSidecars,
+            unrecognizedSidecars: localRootReport.unrecognizedSidecars,
+            metadataProbeFailures: localRootReport.metadataProbeFailures,
+            sourceFolderSemanticsCaptured: localRootReport.sourceFolderSemanticsCaptured
+        )
+        let incompleteReferenceReport = ScanReport(
+            sessionID: incompleteLiveReport.sessionID,
+            startedAt: incompleteLiveReport.startedAt,
+            completedAt: incompleteLiveReport.completedAt,
+            catalogPath: incompleteLiveReport.catalogPath,
+            summary: incompleteLiveReport.summary,
+            roots: [referenceLocalRootReport, takeoutRootReport],
+            livePhotos: incompleteLiveReport.livePhotos,
+            exactDuplicateGroups: incompleteLiveReport.exactDuplicateGroups,
+            eventSuggestions: incompleteLiveReport.eventSuggestions,
+            warnings: incompleteLiveReport.warnings,
+            filesModified: false
+        )
+        try require(
+            ReconciliationPlanner.makePlan(from: incompleteReferenceReport)
+                .summary.automaticRedundantResourceCount == 0,
+            "a reference-only exact Live Photo counterpart must not authorize Takeout cleanup"
         )
         let incompletePreflight = try QuarantineExecutor.preflight(
             report: incompleteLiveReport,
@@ -741,12 +874,49 @@ struct PhotoArchiveSelfTest {
         let archiveCopyDestination = temporary.appendingPathComponent("ArchiveCopyDestination", isDirectory: true)
         try fileManager.createDirectory(at: archiveCopyDestination, withIntermediateDirectories: true)
         let archiveCopyDestinationMarker = try RootMarkerStore.create(at: archiveCopyDestination)
+        _ = try RootRegistry.add(
+            url: archiveCopyDestination,
+            kind: .reference,
+            provenance: .unknown,
+            usageRole: .reference,
+            catalogURL: archiveCopyCatalogURL
+        )
+        do {
+            _ = try archiveCopyScanner.makeArchivePlan(
+                from: archiveCopyReport,
+                destinationURL: archiveCopyDestination
+            )
+            throw SelfTestFailure("archive planner accepted a registered reference-role destination")
+        } catch ArchivePlanError.destinationRoleConflict {
+            // Expected: a registered destination must explicitly be an archive root.
+        }
+        _ = try RootRegistry.setUsageRole(
+            target: archiveCopyDestination.path,
+            role: .archive,
+            catalogURL: archiveCopyCatalogURL
+        )
         let archiveCopyPlan = try archiveCopyScanner.makeArchivePlan(
             from: archiveCopyReport,
             destinationURL: archiveCopyDestination
         )
         let archiveCopyPlanURL = temporary.appendingPathComponent("archive-copy-plan.json")
         try ArchivePlanStore.write(archiveCopyPlan, to: archiveCopyPlanURL)
+        _ = try RootRegistry.setUsageRole(
+            target: archiveCopyDestination.path,
+            role: .reference,
+            catalogURL: archiveCopyCatalogURL
+        )
+        do {
+            _ = try ArchiveCopyExecutor.preflight(planURL: archiveCopyPlanURL)
+            throw SelfTestFailure("archive-copy accepted a destination changed to reference role")
+        } catch ArchiveCopyError.destinationRoleConflict {
+            // Expected: replay re-checks the current destination role.
+        }
+        _ = try RootRegistry.setUsageRole(
+            target: archiveCopyDestination.path,
+            role: .archive,
+            catalogURL: archiveCopyCatalogURL
+        )
         let archiveCopyDryRun = try ArchiveCopyExecutor.preflight(planURL: archiveCopyPlanURL)
         try require(archiveCopyDryRun.dryRun, "archive-copy should default to dry-run")
         try require(
@@ -1023,6 +1193,11 @@ struct PhotoArchiveSelfTest {
         try require(!snapshotText.contains(rootA.path), "portable snapshot exposed an absolute root path")
         try require(!snapshotText.contains(rootB.path), "portable snapshot exposed an absolute root path")
         try require(
+            snapshotText.contains("\"usageRole\":\"staging\"")
+                && snapshotText.contains("\"usageRole\":\"import_source\""),
+            "portable semantic snapshot should preserve per-root usage roles"
+        )
+        try require(
             !snapshotText.contains("synthetic-not-a-real-photo"),
             "portable snapshot exposed media bytes"
         )
@@ -1063,6 +1238,49 @@ struct PhotoArchiveSelfTest {
         )
         try require(restoreApplied.filesModified, "catalog restore apply should create a new catalog")
         try require(fileManager.fileExists(atPath: restoredCatalogURL.path), "restored catalog is missing")
+        let restoredRootRoles = try RootRegistry.list(
+            catalogURL: restoredCatalogURL,
+            includeHistory: true
+        )
+        try require(
+            restoredRootRoles.first(where: { $0.rootID == rootAID })?.usageRole == .staging
+                && restoredRootRoles.first(where: { $0.rootID == rootBID })?.usageRole == .importSource,
+            "catalog snapshot restore should preserve root usage roles"
+        )
+        let legacySnapshotURL = temporary.appendingPathComponent("catalog-snapshot-without-roles.jsonl")
+        var legacySnapshotLines: [String] = []
+        for rawLine in snapshotText.split(whereSeparator: \.isNewline) {
+            let lineData = Data(rawLine.utf8)
+            guard var object = try JSONSerialization.jsonObject(with: lineData) as? [String: Any] else {
+                throw SelfTestFailure("could not decode snapshot line for legacy-role compatibility fixture")
+            }
+            if object["recordType"] as? String == "root",
+               var payload = object["payload"] as? [String: Any] {
+                payload.removeValue(forKey: "usageRole")
+                object["payload"] = payload
+            }
+            legacySnapshotLines.append(String(
+                decoding: try JSONSerialization.data(withJSONObject: object, options: [.sortedKeys]),
+                as: UTF8.self
+            ))
+        }
+        try (legacySnapshotLines.joined(separator: "\n") + "\n")
+            .write(to: legacySnapshotURL, atomically: true, encoding: .utf8)
+        let legacyRestoredCatalogURL = temporary.appendingPathComponent("legacy-restored-catalog.sqlite3")
+        _ = try CatalogSnapshotRestorer.apply(
+            snapshotURL: legacySnapshotURL,
+            destinationCatalogURL: legacyRestoredCatalogURL,
+            rootBindings: snapshotBindings
+        )
+        let legacyRestoredRoles = try RootRegistry.list(
+            catalogURL: legacyRestoredCatalogURL,
+            includeHistory: true
+        )
+        try require(
+            legacyRestoredRoles.first(where: { $0.rootID == rootAID })?.usageRole == .primaryLibrary
+                && legacyRestoredRoles.first(where: { $0.rootID == rootBID })?.usageRole == .importSource,
+            "role-less legacy snapshots should restore inbox roots conservatively as primary_library"
+        )
         do {
             _ = try CatalogSnapshotRestorer.preflight(
                 snapshotURL: snapshotURL,
@@ -1223,6 +1441,63 @@ struct PhotoArchiveSelfTest {
             !canonicalItem.candidateResources.contains { $0.rootID == canonicalReport.roots.first(where: { $0.kind == .archive })?.rootID },
             "archive replicas must never become automatic redundant candidates"
         )
+        guard let canonicalLocalRootReport = canonicalReport.roots.first(where: { $0.usageRole == .staging }) else {
+            throw SelfTestFailure("canonical local-role fixture is incomplete")
+        }
+        let reclassifiedArchiveRoot = RootScanReport(
+            rootID: canonicalLocalRootReport.rootID,
+            label: canonicalLocalRootReport.label,
+            kind: .archive,
+            usageRole: .archive,
+            provenance: canonicalLocalRootReport.provenance,
+            canonicalPath: canonicalLocalRootReport.canonicalPath,
+            stableMarkerKey: canonicalLocalRootReport.stableMarkerKey,
+            mediaFileCount: canonicalLocalRootReport.mediaFileCount,
+            completeLivePhotos: canonicalLocalRootReport.completeLivePhotos,
+            stillOnlyLiveResources: canonicalLocalRootReport.stillOnlyLiveResources,
+            videoOnlyLiveResources: canonicalLocalRootReport.videoOnlyLiveResources,
+            standaloneImages: canonicalLocalRootReport.standaloneImages,
+            standaloneVideos: canonicalLocalRootReport.standaloneVideos,
+            sidecars: canonicalLocalRootReport.sidecars,
+            recognizedSidecars: canonicalLocalRootReport.recognizedSidecars,
+            unrecognizedSidecars: canonicalLocalRootReport.unrecognizedSidecars,
+            metadataProbeFailures: canonicalLocalRootReport.metadataProbeFailures,
+            sourceFolderSemanticsCaptured: canonicalLocalRootReport.sourceFolderSemanticsCaptured
+        )
+        let roleChangedCanonicalReport = ScanReport(
+            schemaVersion: canonicalReport.schemaVersion,
+            sessionID: canonicalReport.sessionID,
+            startedAt: canonicalReport.startedAt,
+            completedAt: canonicalReport.completedAt,
+            catalogPath: canonicalReport.catalogPath,
+            summary: canonicalReport.summary,
+            roots: canonicalReport.roots.map {
+                $0.rootID == reclassifiedArchiveRoot.rootID ? reclassifiedArchiveRoot : $0
+            },
+            resources: canonicalReport.resources,
+            livePhotos: canonicalReport.livePhotos,
+            exactDuplicateGroups: canonicalReport.exactDuplicateGroups,
+            eventSuggestions: canonicalReport.eventSuggestions,
+            recognizedSidecars: canonicalReport.recognizedSidecars,
+            notices: canonicalReport.notices,
+            warnings: canonicalReport.warnings,
+            filesModified: false
+        )
+        let protectedCandidateQuarantine = temporary.appendingPathComponent(
+            "ProtectedCandidateQuarantine",
+            isDirectory: true
+        )
+        try fileManager.createDirectory(at: protectedCandidateQuarantine, withIntermediateDirectories: true)
+        do {
+            _ = try QuarantineExecutor.preflight(
+                report: roleChangedCanonicalReport,
+                plan: canonicalPlan,
+                targetURL: protectedCandidateQuarantine
+            )
+            throw SelfTestFailure("quarantine accepted a candidate root changed to archive after planning")
+        } catch QuarantineError.rootRoleDisallowsCleanup {
+            // Expected: executor enforces the current role independently of an older plan.
+        }
 
         let filenamePolicyRoot = temporary.appendingPathComponent("FilenamePolicy", isDirectory: true)
         try fileManager.createDirectory(at: filenamePolicyRoot, withIntermediateDirectories: true)
@@ -1487,7 +1762,7 @@ struct PhotoArchiveSelfTest {
         _ = try RootMarkerStore.create(at: trackingRoot)
         let trackingScanner = try ArchiveScanner(catalogURL: trackingCatalog)
         let trackingFirst = try await trackingScanner.scan(roots: [
-            ScanRoot(url: trackingRoot, kind: .reference, provenance: .localLibrary)
+            ScanRoot(url: trackingRoot, kind: .inbox, provenance: .localLibrary)
         ])
         let firstRootID = trackingFirst.roots[0].rootID
         guard let firstResourceID = try sqliteText(
@@ -1500,7 +1775,7 @@ struct PhotoArchiveSelfTest {
         let trackingNew = trackingRoot.appendingPathComponent("new-name.jpg")
         try fileManager.moveItem(at: trackingOld, to: trackingNew)
         _ = try await trackingScanner.scan(roots: [
-            ScanRoot(url: trackingRoot, kind: .reference, provenance: .localLibrary)
+            ScanRoot(url: trackingRoot, kind: .inbox, provenance: .localLibrary)
         ])
         let renamedResourceID = try sqliteText(
             databaseURL: trackingCatalog,
@@ -1520,7 +1795,7 @@ struct PhotoArchiveSelfTest {
 
         try fileManager.moveItem(at: trackingRoot, to: trackingMovedRoot)
         let trackingMoved = try await trackingScanner.scan(roots: [
-            ScanRoot(url: trackingMovedRoot, kind: .reference, provenance: .localLibrary)
+            ScanRoot(url: trackingMovedRoot, kind: .inbox, provenance: .localLibrary)
         ])
         try require(
             trackingMoved.roots[0].rootID == firstRootID,
@@ -1595,6 +1870,13 @@ struct PhotoArchiveSelfTest {
         try require(
             organizationPlan.summary.automaticResourceCount == 3,
             "organization plan should move three synthetic resources"
+        )
+        let referenceOrganizationReport = syntheticOrganizationReport(usageRole: .reference)
+        let referenceOrganizationPlan = OrganizationPlanner.makePlan(from: referenceOrganizationReport)
+        try require(
+            referenceOrganizationPlan.summary.automaticItemCount == 0
+                && referenceOrganizationPlan.summary.reviewItemCount == 0,
+            "reference roots should be excluded from organization planning"
         )
         guard let organizationLive = organizationPlan.items.first(where: { $0.kind == .livePhoto }) else {
             throw SelfTestFailure("organization plan is missing the synthetic Live Photo")
@@ -1697,6 +1979,20 @@ struct PhotoArchiveSelfTest {
         try require(organizationPreflight.resourceCount == 3, "organization preflight should contain three automatic resources")
         try require(fileManager.fileExists(atPath: organizationSourcePhoto.path), "organization dry run moved the Live Photo still")
         try require(fileManager.fileExists(atPath: organizationSourceVideo.path), "organization dry run moved the Live Photo video")
+        let referenceOrganizationApplyScan = syntheticOrganizationReport(
+            localPath: organizationApplyRoot.path,
+            stableMarkerKey: organizationApplyScan.roots.first?.stableMarkerKey,
+            usageRole: .reference
+        )
+        do {
+            _ = try OrganizationExecutor.preflight(
+                report: referenceOrganizationApplyScan,
+                plan: organizationApplyPlan
+            )
+            throw SelfTestFailure("organization executor accepted a reference-only root")
+        } catch OrganizationApplyError.rootRoleDisallowsOrganization {
+            // Expected: executor re-checks the role even if handed an older/tampered plan.
+        }
 
         do {
             _ = try OrganizationExecutor.apply(
@@ -1811,6 +2107,26 @@ struct PhotoArchiveSelfTest {
         )
         try require(!cleanupAgentJSON.contains(cleanupRoot.path), "agent-safe empty-directory cleanup exposed a path")
         try require(!cleanupAgentJSON.contains("batch"), "agent-safe empty-directory cleanup exposed a directory name")
+
+        _ = try RootRegistry.setUsageRole(
+            target: cleanupResourceA.rootID,
+            role: .reference,
+            catalogURL: cleanupCatalog
+        )
+        do {
+            _ = try EmptyDirectoryCleanupExecutor.preflight(
+                organizationManifestURL: cleanupOrganizationManifestURL,
+                catalogURL: cleanupCatalog
+            )
+            throw SelfTestFailure("empty-directory cleanup accepted a root changed to reference")
+        } catch EmptyDirectoryCleanupError.rootRoleDisallowsCleanup {
+            // Expected: a later role change applies to future cleanup operations.
+        }
+        _ = try RootRegistry.setUsageRole(
+            target: cleanupResourceA.rootID,
+            role: .staging,
+            catalogURL: cleanupCatalog
+        )
 
         let cleanupApplied = try EmptyDirectoryCleanupExecutor.apply(
             organizationManifestURL: cleanupOrganizationManifestURL,
@@ -2292,7 +2608,8 @@ private func syntheticOrganizationReport(
     localPath: String = "/synthetic/local",
     stableMarkerKey: String? = nil,
     alreadyOrganizedLivePhoto: Bool = false,
-    recognizedLiveSidecar: Bool = false
+    recognizedLiveSidecar: Bool = false,
+    usageRole: RootUsageRole = .staging
 ) -> ScanReport {
     let rootID = "RORG"
     let capture = CaptureTime(
@@ -2397,7 +2714,8 @@ private func syntheticOrganizationReport(
             RootScanReport(
                 rootID: rootID,
                 label: "Local",
-                kind: .inbox,
+                kind: usageRole.sourceKind,
+                usageRole: usageRole,
                 provenance: .localLibrary,
                 canonicalPath: localPath,
                 stableMarkerKey: stableMarkerKey,

@@ -488,6 +488,7 @@ struct PhotoArchiveCLI {
                 print("PhotoArchiveKit registered roots")
                 for report in reports {
                     print("[\(report.state.rawValue)] \(report.rootID) \(report.canonicalPath)")
+                    print("  role: \(report.usageRole.rawValue)")
                     print("  kind/provenance: \(report.kind.rawValue) / \(report.provenance.rawValue)")
                     print("  available: \(report.isAvailable)  catalog resources: \(report.currentResourceCount)")
                 }
@@ -495,7 +496,9 @@ struct PhotoArchiveCLI {
         case "add":
             var catalogURL = PhotoArchivePaths.defaultCatalogURL
             var kind = SourceRootKind.reference
+            var kindWasExplicit = false
             var provenance = SourceProvenance.unknown
+            var usageRole: RootUsageRole?
             var paths: [String] = []
             var index = 0
             while index < rest.count {
@@ -509,6 +512,13 @@ struct PhotoArchiveCLI {
                         throw CLIError("--kind must be one of: inbox, archive, import_source, reference.")
                     }
                     kind = parsed
+                    kindWasExplicit = true
+                case "--role":
+                    let raw = try value(after: argument, at: &index, in: rest)
+                    guard let parsed = RootUsageRole(rawValue: raw) else {
+                        throw CLIError("--role must be one of: staging, primary_library, archive, import_source, reference.")
+                    }
+                    usageRole = parsed
                 case "--provenance":
                     let raw = try value(after: argument, at: &index, in: rest)
                     guard let parsed = SourceProvenance(rawValue: raw) else {
@@ -524,14 +534,66 @@ struct PhotoArchiveCLI {
                 index += 1
             }
             guard paths.count == 1 else { throw CLIError("Usage: photoarchive root add [options] PATH") }
+            if let usageRole {
+                if kindWasExplicit && kind != usageRole.sourceKind {
+                    throw CLIError("--kind \(kind.rawValue) conflicts with --role \(usageRole.rawValue).")
+                }
+                kind = usageRole.sourceKind
+            }
             let report = try RootRegistry.add(
                 url: fileURL(paths[0]),
                 kind: kind,
                 provenance: provenance,
+                usageRole: usageRole,
                 catalogURL: catalogURL
             )
             print("Registered root as active: \(report.canonicalPath)")
+            print("Role: \(report.usageRole.rawValue)")
             print("Media files were not modified.")
+        case "role", "set-role":
+            var catalogURL = PhotoArchivePaths.defaultCatalogURL
+            var outputJSON = false
+            var outputAgentJSON = false
+            var values: [String] = []
+            var index = 0
+            while index < rest.count {
+                let argument = rest[index]
+                if argument == "--catalog" {
+                    catalogURL = fileURL(try value(after: argument, at: &index, in: rest))
+                } else if argument == "--json" {
+                    outputJSON = true
+                } else if argument == "--agent-json" {
+                    outputAgentJSON = true
+                } else if argument == "--help" || argument == "-h" {
+                    printRootHelp(); return
+                } else if argument.hasPrefix("-") {
+                    throw CLIError("Unknown root role option: \(argument)")
+                } else {
+                    values.append(argument)
+                }
+                index += 1
+            }
+            guard values.count == 2,
+                  let role = RootUsageRole(rawValue: values[1])
+            else {
+                throw CLIError("Usage: photoarchive root role [--catalog PATH] ROOT_ID_OR_PATH ROLE")
+            }
+            if outputJSON && outputAgentJSON {
+                throw CLIError("Use either --json or --agent-json, not both.")
+            }
+            let report = try RootRegistry.setUsageRole(
+                target: values[0],
+                role: role,
+                catalogURL: catalogURL
+            )
+            if outputAgentJSON {
+                try printJSON(AgentSafeRegisteredRootReport(report: report))
+            } else if outputJSON {
+                try printJSON(report)
+            } else {
+                print("Root role is now \(report.usageRole.rawValue): \(report.canonicalPath)")
+                print("Media files were not modified. The new policy applies to future plans and reviews.")
+            }
         case "enable", "disable":
             var catalogURL = PhotoArchivePaths.defaultCatalogURL
             var targets: [String] = []
@@ -1710,12 +1772,18 @@ struct PhotoArchiveCLI {
             """
             Usage:
               photoarchive root list [--all] [--json|--agent-json] [--catalog PATH]
-              photoarchive root add [--kind KIND] [--provenance VALUE] [--catalog PATH] PATH
+              photoarchive root add [--role ROLE] [--kind KIND] [--provenance VALUE] [--catalog PATH] PATH
+              photoarchive root role [--json|--agent-json] [--catalog PATH] ROOT_ID_OR_PATH ROLE
               photoarchive root enable [--catalog PATH] ROOT_ID_OR_PATH
               photoarchive root disable [--catalog PATH] ROOT_ID_OR_PATH
               photoarchive root remove [--json|--agent-json] [--catalog PATH] ROOT_ID_OR_PATH
               photoarchive root inspect PATH
               photoarchive root init [--apply] PATH
+
+            ROLE is one of staging, primary_library, archive, import_source, reference. Roles are
+            per registered root, not per device. Changing a role updates policy only; it never
+            moves or deletes media. staging and primary_library both use the internal inbox kind,
+            while the other roles map to their matching kind. provenance remains independent.
 
             root list shows the explicit library-location registry; --all also shows removed and
             history-only roots observed by older scans. add/enable/disable only change catalog

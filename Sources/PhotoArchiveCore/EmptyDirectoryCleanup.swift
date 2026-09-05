@@ -5,6 +5,7 @@ public enum EmptyDirectoryCleanupError: LocalizedError {
     case invalidManifest
     case incompleteOrganizationManifest
     case missingRoot(String)
+    case rootRoleDisallowsCleanup(String)
     case rootMarkerRequired(String)
     case sourceLocationNotInCatalog(String)
     case unsafeSourceLocation(String)
@@ -23,6 +24,8 @@ public enum EmptyDirectoryCleanupError: LocalizedError {
             return "Empty-directory cleanup requires a completed organization manifest."
         case let .missingRoot(rootID):
             return "A source root recorded by the organization manifest is missing from the catalog: \(rootID)"
+        case let .rootRoleDisallowsCleanup(rootID):
+            return "The current root role does not allow organization cleanup: \(rootID)"
         case let .rootMarkerRequired(rootID):
             return "Empty-directory cleanup requires a stable root marker for: \(rootID)"
         case let .sourceLocationNotInCatalog(resourceID):
@@ -223,6 +226,11 @@ public enum EmptyDirectoryCleanupExecutor {
             } else {
                 guard let rootPath = try catalog.sourceRootPath(rootID: move.rootID) else {
                     throw EmptyDirectoryCleanupError.missingRoot(move.rootID)
+                }
+                guard let usageRole = try catalog.sourceRootUsageRole(rootID: move.rootID),
+                      usageRole.allowsOrganizationMutation
+                else {
+                    throw EmptyDirectoryCleanupError.rootRoleDisallowsCleanup(move.rootID)
                 }
                 rootURL = URL(fileURLWithPath: rootPath)
                     .resolvingSymlinksInPath()

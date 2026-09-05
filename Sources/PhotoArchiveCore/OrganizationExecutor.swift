@@ -4,6 +4,7 @@ public enum OrganizationApplyError: LocalizedError {
     case planSessionMismatch
     case noAutomaticCandidates
     case missingRoot(String)
+    case rootRoleDisallowsOrganization(String)
     case rootMarkerRequired(String)
     case missingResource(String)
     case unsafeRelativePath(String)
@@ -23,6 +24,8 @@ public enum OrganizationApplyError: LocalizedError {
             return "The organization plan has no automatic candidates."
         case let .missingRoot(rootID):
             return "A planned source root is missing from the scan report: \(rootID)"
+        case let .rootRoleDisallowsOrganization(rootID):
+            return "The current root role does not allow organization mutation: \(rootID)"
         case let .rootMarkerRequired(path):
             return "Organization apply requires a stable .photoarchive-root marker: \(path)"
         case let .missingResource(resourceID):
@@ -280,6 +283,9 @@ public enum OrganizationExecutor {
             for planned in item.moves {
                 guard let root = roots[planned.rootID] else {
                     throw OrganizationApplyError.missingRoot(planned.rootID)
+                }
+                guard root.usageRole.allowsOrganizationMutation else {
+                    throw OrganizationApplyError.rootRoleDisallowsOrganization(planned.rootID)
                 }
                 let rootURL = URL(fileURLWithPath: root.canonicalPath)
                     .resolvingSymlinksInPath()

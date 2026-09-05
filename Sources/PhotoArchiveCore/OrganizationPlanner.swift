@@ -281,7 +281,8 @@ public enum OrganizationPlanner {
             (ResourceKey(rootID: $0.rootID, relativePath: $0.relativePath), $0)
         })
         let eligibleRootIDs = Set(report.roots.filter {
-            $0.provenance == .localLibrary || $0.provenance == .appleDirect
+            $0.usageRole.allowsOrganizationMutation
+                && ($0.provenance == .localLibrary || $0.provenance == .appleDirect)
         }.map(\.rootID))
 
         var handled = Set<ResourceKey>()

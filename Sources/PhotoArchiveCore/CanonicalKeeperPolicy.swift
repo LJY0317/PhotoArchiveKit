@@ -25,24 +25,19 @@ enum CanonicalKeeperPolicy {
         CanonicalResourceKey(rootID: resource.rootID, relativePath: resource.relativePath)
     }
 
-    static func isProtectedReplicaRoot(_ root: RootScanReport?) -> Bool {
-        guard let root else { return true }
-        return root.kind == .archive || root.kind == .reference
+    static func allowsLocalExactDuplicateCleanup(_ root: RootScanReport?) -> Bool {
+        guard let root else { return false }
+        return root.usageRole.allowsLocalExactDuplicateCleanup
     }
 
-    static func isPrimaryLibraryRoot(_ root: RootScanReport?) -> Bool {
+    static func canRetainAgainstImportCleanup(_ root: RootScanReport?) -> Bool {
         guard let root else { return false }
-        return root.kind == .inbox && root.provenance == .localLibrary
+        return root.usageRole.canRetainAgainstImportCleanup
     }
 
     static func isImportCleanupRoot(_ root: RootScanReport?) -> Bool {
         guard let root else { return false }
-        if isProtectedReplicaRoot(root) || isPrimaryLibraryRoot(root) { return false }
-        return root.kind == .importSource
-            || root.provenance == .googleTakeout
-            || root.provenance == .googleWeb
-            || root.provenance == .googleIOSShare
-            || root.provenance == .appleDirect
+        return root.usageRole == .importSource
     }
 
     static func preferredResource(
@@ -316,17 +311,24 @@ enum CanonicalKeeperPolicy {
 
     private static func rootRank(_ root: RootScanReport?) -> Int {
         guard let root else { return 100 }
-        if isPrimaryLibraryRoot(root) { return 0 }
-        if root.kind == .archive { return 1 }
-        if root.kind == .reference { return 2 }
-        switch root.provenance {
-        case .appleDirect: return 3
-        case .googleWeb: return 4
-        case .unknown: return 5
-        case .googleIOSShare: return 6
-        case .googleTakeout: return 7
-        case .localLibrary: return 8
+        let roleBase: Int
+        switch root.usageRole {
+        case .archive: roleBase = 0
+        case .primaryLibrary: roleBase = 10
+        case .staging: roleBase = 20
+        case .reference: roleBase = 30
+        case .importSource: roleBase = 40
         }
+        let provenanceRank: Int
+        switch root.provenance {
+        case .appleDirect: provenanceRank = 0
+        case .localLibrary: provenanceRank = 1
+        case .googleWeb: provenanceRank = 2
+        case .unknown: provenanceRank = 3
+        case .googleIOSShare: provenanceRank = 4
+        case .googleTakeout: provenanceRank = 5
+        }
+        return roleBase + provenanceRank
     }
 
     private static func captureRank(_ capture: CaptureTime?) -> Int {

@@ -135,7 +135,7 @@ Run a read-only scan of one folder:
 swift run photoarchive scan --inbox "~/Photo Inbox"
 ```
 
-Generate a read-only preferred-representation plan. Exact duplicates use a canonical keeper policy: archive/reference roots are protected replicas, a primary local library keeps one preferred same-root representation, import-source copies may be reduced only when exact coverage is proven, and Live Photo occurrences remain atomic. Unresolved variants stay in review:
+Generate a read-only preferred-representation plan. Exact duplicates use a role-aware canonical keeper policy. `staging` and `primary_library` roots may reduce redundant same-root exact copies while retaining a same-root survivor; `archive` and `reference` roots are never automatic removal candidates; `import_source` copies may be reduced only when an eligible retained counterpart or preserved source semantics makes that safe. Live Photo occurrences remain atomic and unresolved variants stay in review:
 
 ```bash
 swift run photoarchive plan \
@@ -354,6 +354,8 @@ Root options are repeatable:
 
 Bare paths are treated as Inbox roots.
 
+For a path that is already registered, its saved usage role is authoritative: a later scan flag does not silently change `staging`/`primary_library`/`archive`/`import_source`/`reference`. Change policy explicitly with `photoarchive root role`.
+
 Other options:
 
 - `--catalog PATH` — choose a SQLite catalog.
@@ -389,13 +391,20 @@ Sidecar policy is consumer-oriented: users are not expected to open JSON/XMP fil
 
 Exact-only Live Photo reconciliation also treats a whole incomplete occurrence (`still_only` or `video_only`) as automatically redundant when every resource in that occurrence has a byte-identical same-role counterpart outside Takeout. This does not require a complete Live Photo counterpart elsewhere and never removes only part of an occurrence; quarantine still re-hashes the candidate and keeper before moving anything.
 
-Canonical keeper selection does **not** collapse intentional backup replicas across every registered root into one global file. Archive and reference roots are protected from automatic removal. Within a primary local-library root, byte-identical standalone copies may keep the representation with better trusted capture evidence and then the shallower path; byte-identical duplicate Live Photo occurrences prefer a complete occurrence first and keep the entire selected still+paired-video representation. Import-source copies remain cleanup candidates only when a retained exact counterpart exists or source-folder semantics have already been preserved. Every automatic mutation is still re-verified by fresh full-file hashes before quarantine.
+Canonical keeper selection does **not** collapse intentional backup replicas across every registered root into one global file. Each registered root has one user-changeable usage role: `staging`, `primary_library`, `archive`, `import_source`, or `reference`. Staging is temporary working storage; primary library is retained long-term; archive is a protected long-term protection target; import source is cleanup-eligible only after safe coverage/semantics checks; reference is comparison-only and cannot authorize automatic cleanup. Within staging/primary roots, byte-identical same-root copies may keep one preferred representation. Every automatic mutation is still re-verified by fresh full-file hashes before quarantine.
 
 A future local GUI should expose the private side of this decision directly: one duplicate group per row/section, with every physical copy's root and path, protected/keeper/candidate badges, and filters by location. This is deliberately a **local-only** view; agent-safe reports continue to expose opaque group/root IDs and counts without filenames or paths. The current human `scan` report already shows paths for the first duplicate groups and `--json` contains the complete local-private result, but a Krokiet-style grouped location view is the intended consumer UX.
 
-Library locations have an explicit root registry. `photoarchive root add`, `enable`, `disable`, `remove`, and `list` separate locations the user currently manages from roots merely observed by older scans. `root remove` never touches media: it prunes that root's current resource/hash/duplicate/source-folder evidence while retaining minimal root identity/marker history so a known removable archive can be recognized again. `root list --all` also shows removed and history-only roots.
+Library locations have an explicit root registry. `photoarchive root add`, `enable`, `disable`, `remove`, `role`, and `list` separate locations the user currently manages from roots merely observed by older scans. Roles are assigned **per registered root, not per device**, so different folders on the same Mac, HDD, or future file-cloud provider can have different policies. `root role ROOT ROLE` changes policy only and never moves/deletes media; role changes are recorded in the local catalog. `staging` and `primary_library` both map to the internal `inbox` kind, while `archive`, `import_source`, and `reference` map to their matching kinds. Provenance remains a separate fact. The portable catalog snapshot preserves the current role so disaster recovery does not silently change retention policy. `root remove` never touches media: it prunes current evidence while retaining minimal root identity/history.
 
-The current keeper policy already treats `archive` and `reference` roots as protected from automatic duplicate removal. A future GUI can expose this as root-role presets rather than raw ranking numbers: archive/protected replica, managed library, import/inbox, reference-only, and excluded. Archive roots may still allow user-requested organization within the root while remaining protected from automatic deletion.
+Example:
+
+```bash
+swift run photoarchive root add --role staging --provenance local_library "~/Pictures"
+swift run photoarchive root role ROOT_ID archive
+```
+
+Legacy catalogs are migrated conservatively: an existing `inbox` is initially treated as `primary_library` so an upgrade cannot silently make it easier to clean up. New `inbox` roots default to `staging` unless another role is explicitly selected.
 
 ## Automatic organization strategy
 
