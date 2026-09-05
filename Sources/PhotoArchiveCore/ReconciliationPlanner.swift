@@ -14,6 +14,7 @@ public enum ReconciliationDecision: String, Codable, Sendable {
 public enum ReconciliationReason: String, Codable, Sendable {
     case preferredNonTakeoutExactCopy = "preferred_non_takeout_exact_copy"
     case livePhotoCanonicalCoverage = "live_photo_canonical_coverage"
+    case livePhotoIncompleteOccurrenceExactCoverage = "live_photo_incomplete_occurrence_exact_coverage"
     case noCompletePreferredLivePhoto = "no_complete_preferred_live_photo"
     case uncoveredLivePhotoVariant = "uncovered_live_photo_variant"
     case takeoutCollectionSemanticsPending = "takeout_collection_semantics_pending"
@@ -255,15 +256,58 @@ public enum ReconciliationPlanner {
             guard !exactMixedTakeout.isEmpty else { continue }
 
             guard let canonical else {
-                output.append(DraftItem(
-                    kind: .livePhotoAsset,
-                    subjectID: asset.assetID,
-                    decision: .review,
-                    reason: .noCompletePreferredLivePhoto,
-                    preferredRootID: nil,
-                    preferredResources: [],
-                    candidateResources: exactMixedTakeout.sorted(by: resourceSort)
-                ))
+                let safeOccurrences = asset.occurrences.filter { occurrence in
+                    guard rootsByID[occurrence.rootID]?.provenance == .googleTakeout,
+                          occurrence.status == .stillOnly || occurrence.status == .videoOnly
+                    else {
+                        return false
+                    }
+                    return occurrence.resources.allSatisfy { resource in
+                        preferredExactCounterpart(
+                            for: resource,
+                            report: report,
+                            rootsByID: rootsByID,
+                            duplicateGroupByResource: duplicateGroupByResource
+                        ) != nil
+                    }
+                }
+                let safeResources = safeOccurrences.flatMap(\.resources).sorted(by: resourceSort)
+                if !safeResources.isEmpty {
+                    let preferred = uniqueResources(safeResources.compactMap { resource in
+                        preferredExactCounterpart(
+                            for: resource,
+                            report: report,
+                            rootsByID: rootsByID,
+                            duplicateGroupByResource: duplicateGroupByResource
+                        )
+                    })
+                    let preferredRootIDs = Set(preferred.map(\.rootID))
+                    output.append(DraftItem(
+                        kind: .livePhotoAsset,
+                        subjectID: asset.assetID,
+                        decision: .automaticRedundant,
+                        reason: .livePhotoIncompleteOccurrenceExactCoverage,
+                        preferredRootID: preferredRootIDs.count == 1 ? preferredRootIDs.first : nil,
+                        preferredResources: preferred,
+                        candidateResources: safeResources
+                    ))
+                }
+
+                let safeKeys = Set(safeResources.map(resourceKey))
+                let remaining = exactMixedTakeout
+                    .filter { !safeKeys.contains(resourceKey($0)) }
+                    .sorted(by: resourceSort)
+                if !remaining.isEmpty {
+                    output.append(DraftItem(
+                        kind: .livePhotoAsset,
+                        subjectID: asset.assetID,
+                        decision: .review,
+                        reason: .noCompletePreferredLivePhoto,
+                        preferredRootID: nil,
+                        preferredResources: [],
+                        candidateResources: remaining
+                    ))
+                }
                 continue
             }
 
@@ -314,6 +358,33 @@ public enum ReconciliationPlanner {
             }
         }
         return result
+    }
+
+    private static func preferredExactCounterpart(
+        for resource: ResourceReference,
+        report: ScanReport,
+        rootsByID: [String: RootScanReport],
+        duplicateGroupByResource: [ResourceKey: String]
+    ) -> ResourceReference? {
+        guard let groupID = duplicateGroupByResource[resourceKey(resource)],
+              let group = report.exactDuplicateGroups.first(where: { $0.groupID == groupID })
+        else {
+            return nil
+        }
+        return group.members
+            .filter {
+                $0.role == resource.role
+                    && rootsByID[$0.rootID]?.provenance != .googleTakeout
+            }
+            .sorted { preferredResource($0, before: $1, rootsByID: rootsByID) }
+            .first
+    }
+
+    private static func uniqueResources(_ resources: [ResourceReference]) -> [ResourceReference] {
+        var seen = Set<ResourceKey>()
+        return resources
+            .sorted(by: resourceSort)
+            .filter { seen.insert(resourceKey($0)).inserted }
     }
 
     private static func resourceKey(_ resource: ResourceReference) -> ResourceKey {

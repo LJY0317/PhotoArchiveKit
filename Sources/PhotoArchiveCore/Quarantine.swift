@@ -395,20 +395,28 @@ public enum QuarantineExecutor {
             throw QuarantineError.livePhotoAtomicityViolation(item.subjectID)
         }
 
-        let candidateRootIDs = Set(item.candidateResources.map(\.rootID))
-        let expected = Set(
-            asset.occurrences
-                .filter { candidateRootIDs.contains($0.rootID) }
-                .flatMap(\.resources)
-                .map { ResourceKey(rootID: $0.rootID, relativePath: $0.relativePath) }
-        )
         let planned = Set(
             item.candidateResources.map {
                 ResourceKey(rootID: $0.rootID, relativePath: $0.relativePath)
             }
         )
+        guard !planned.isEmpty else {
+            throw QuarantineError.livePhotoAtomicityViolation(item.subjectID)
+        }
 
-        guard !candidateRootIDs.isEmpty, planned == expected else {
+        var covered = Set<ResourceKey>()
+        for occurrence in asset.occurrences {
+            let occurrenceResources = Set(occurrence.resources.map {
+                ResourceKey(rootID: $0.rootID, relativePath: $0.relativePath)
+            })
+            let intersection = occurrenceResources.intersection(planned)
+            if intersection.isEmpty { continue }
+            guard intersection == occurrenceResources else {
+                throw QuarantineError.livePhotoAtomicityViolation(item.subjectID)
+            }
+            covered.formUnion(occurrenceResources)
+        }
+        guard covered == planned else {
             throw QuarantineError.livePhotoAtomicityViolation(item.subjectID)
         }
     }

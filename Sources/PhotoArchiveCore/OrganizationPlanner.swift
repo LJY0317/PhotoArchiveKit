@@ -12,6 +12,7 @@ public enum OrganizationDecision: String, Codable, Sendable {
 
 public enum OrganizationReason: String, Codable, Sendable {
     case cameraNameAndCaptureWallClock = "camera_name_and_capture_wall_clock"
+    case cameraNamePreservedWithoutTrustedCaptureTime = "camera_name_preserved_without_trusted_capture_time"
     case incompleteLivePhoto = "incomplete_live_photo"
     case customFilenamePreserved = "custom_filename_preserved"
     case captureTimeNotTrusted = "capture_time_not_trusted"
@@ -90,6 +91,72 @@ public struct AgentSafeOrganizationPlan: Codable, Sendable, Equatable {
 }
 
 public enum OrganizationPlanner {
+    public static func preserveNameForUntrustedStandaloneCandidates(
+        from plan: OrganizationPlan,
+        report: ScanReport
+    ) -> OrganizationPlan {
+        struct ResourceKey: Hashable {
+            let rootID: String
+            let relativePath: String
+        }
+
+        let resourcesByID = Dictionary(uniqueKeysWithValues: report.resources.map { ($0.resourceID, $0) })
+        let occupied = Set(report.resources.map {
+            ResourceKey(rootID: $0.rootID, relativePath: $0.relativePath)
+        })
+
+        let items = plan.items.map { item -> OrganizationPlanItem in
+            guard item.decision == .review,
+                  item.kind == .standalone,
+                  item.reason == .captureTimeNotTrusted,
+                  item.moves.count == 1,
+                  let move = item.moves.first,
+                  let resource = resourcesByID[move.resourceID],
+                  resource.rootID == move.rootID,
+                  resource.relativePath == move.sourceRelativePath
+            else {
+                return item
+            }
+
+            let sourceDirectory = (move.sourceRelativePath as NSString).deletingLastPathComponent
+            guard !sourceDirectory.isEmpty else { return item }
+            let destination = (move.sourceRelativePath as NSString).lastPathComponent
+            let destinationKey = ResourceKey(rootID: move.rootID, relativePath: destination)
+            guard !occupied.contains(destinationKey) else { return item }
+
+            return OrganizationPlanItem(
+                itemID: item.itemID,
+                assetID: item.assetID,
+                kind: item.kind,
+                decision: .automatic,
+                reason: .cameraNamePreservedWithoutTrustedCaptureTime,
+                moves: [OrganizationMove(
+                    resourceID: move.resourceID,
+                    rootID: move.rootID,
+                    role: move.role,
+                    sourceRelativePath: move.sourceRelativePath,
+                    destinationRelativePath: destination
+                )]
+            )
+        }
+
+        let automatic = items.filter { $0.decision == .automatic }
+        let review = items.filter { $0.decision == .review }
+        return OrganizationPlan(
+            schemaVersion: plan.schemaVersion,
+            policy: plan.policy + "+preserve_untrusted_camera_name_v1",
+            sessionID: plan.sessionID,
+            summary: OrganizationPlanSummary(
+                automaticItemCount: automatic.count,
+                reviewItemCount: review.count,
+                automaticResourceCount: automatic.reduce(0) { $0 + $1.moves.count },
+                reviewResourceCount: review.reduce(0) { $0 + $1.moves.count }
+            ),
+            items: items,
+            filesModified: false
+        )
+    }
+
     public static func cleanSingletonLeafPlan(
         from plan: OrganizationPlan,
         report: ScanReport,

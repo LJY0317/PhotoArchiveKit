@@ -216,6 +216,96 @@ struct PhotoArchiveSelfTest {
         try require(!initialCoverageAgentJSON.contains(rootB.path), "agent-safe coverage exposed root B path")
         try require(!initialCoverageAgentJSON.contains("one.jpg"), "agent-safe coverage exposed a filename")
 
+        let incompleteLiveQuarantine = temporary.appendingPathComponent("IncompleteLiveQuarantine", isDirectory: true)
+        try fileManager.createDirectory(at: incompleteLiveQuarantine, withIntermediateDirectories: true)
+        guard let localRootReport = first.roots.first(where: { $0.provenance == .localLibrary }),
+              let takeoutRootReport = first.roots.first(where: { $0.provenance == .googleTakeout }),
+              let duplicateID = first.exactDuplicateGroups.first?.groupID
+        else {
+            throw SelfTestFailure("synthetic exact roots are missing")
+        }
+        let incompleteLocal = ResourceReference(
+            rootID: localRootReport.rootID,
+            rootLabel: localRootReport.label,
+            relativePath: "one.jpg",
+            role: .photo,
+            byteSize: Int64(bytes.count)
+        )
+        let incompleteTakeout = ResourceReference(
+            rootID: takeoutRootReport.rootID,
+            rootLabel: takeoutRootReport.label,
+            relativePath: "copy.jpg",
+            role: .photo,
+            byteSize: Int64(bytes.count)
+        )
+        let incompleteLiveReport = ScanReport(
+            sessionID: first.sessionID,
+            startedAt: first.startedAt,
+            completedAt: first.completedAt,
+            catalogPath: first.catalogPath,
+            summary: ScanSummary(
+                rootCount: 2,
+                resourceCount: 2,
+                logicalAssetCount: 1,
+                livePhotoAssetCount: 1,
+                exactDuplicateGroupCount: 1,
+                eventSuggestionCount: 0,
+                warningCount: 0
+            ),
+            roots: [localRootReport, takeoutRootReport],
+            livePhotos: [LivePhotoAssetReport(
+                assetID: "AINCOMPLETE",
+                occurrenceCount: 2,
+                stillCopyCount: 2,
+                videoCopyCount: 0,
+                occurrences: [
+                    LivePhotoOccurrenceReport(
+                        rootID: localRootReport.rootID,
+                        rootLabel: localRootReport.label,
+                        status: .stillOnly,
+                        stillCount: 1,
+                        videoCount: 0,
+                        resources: [incompleteLocal]
+                    ),
+                    LivePhotoOccurrenceReport(
+                        rootID: takeoutRootReport.rootID,
+                        rootLabel: takeoutRootReport.label,
+                        status: .stillOnly,
+                        stillCount: 1,
+                        videoCount: 0,
+                        resources: [incompleteTakeout]
+                    )
+                ]
+            )],
+            exactDuplicateGroups: [ExactDuplicateGroupReport(
+                groupID: duplicateID,
+                byteSize: Int64(bytes.count),
+                members: [incompleteLocal, incompleteTakeout]
+            )],
+            eventSuggestions: [],
+            warnings: [],
+            filesModified: false
+        )
+        let incompletePlan = ReconciliationPlanner.makePlan(from: incompleteLiveReport)
+        try require(
+            incompletePlan.summary.automaticRedundantResourceCount == 1,
+            "an exact-covered still-only Takeout occurrence should be automatically redundant"
+        )
+        try require(
+            incompletePlan.items.first?.reason == .livePhotoIncompleteOccurrenceExactCoverage,
+            "incomplete exact coverage should use the dedicated reconciliation reason"
+        )
+        let incompletePreflight = try QuarantineExecutor.preflight(
+            report: incompleteLiveReport,
+            plan: incompletePlan,
+            targetURL: incompleteLiveQuarantine
+        )
+        try require(
+            incompletePreflight.dryRun && incompletePreflight.resourceCount == 1,
+            "quarantine should accept a whole still-only occurrence without requiring unrelated occurrences"
+        )
+        try require(fileManager.fileExists(atPath: fileB.path), "incomplete Live Photo dry run moved media")
+
         let rootC = temporary.appendingPathComponent("C", isDirectory: true)
         try fileManager.createDirectory(at: rootC, withIntermediateDirectories: true)
         _ = try RootMarkerStore.create(at: rootC)

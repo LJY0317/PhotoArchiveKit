@@ -640,6 +640,7 @@ struct PhotoArchiveCLI {
         var maxConcurrency = min(max(ProcessInfo.processInfo.activeProcessorCount, 1), 8)
         var showProgress = true
         var singletonLeafOnly = false
+        var preserveNameIfDateUntrusted = false
         var quarantineTargetURL: URL?
         var archiveDestinationURL: URL?
         var archivePlanOutputURL: URL?
@@ -683,6 +684,11 @@ struct PhotoArchiveCLI {
                     throw CLIError("--singleton-leaf-only is only valid with organize or organize-plan.")
                 }
                 singletonLeafOnly = true
+            case "--preserve-name-if-date-untrusted":
+                guard mode == .organize || mode == .organizePlan else {
+                    throw CLIError("--preserve-name-if-date-untrusted is only valid with organize or organize-plan.")
+                }
+                preserveNameIfDateUntrusted = true
             case "--to":
                 guard mode == .quarantine || mode == .archivePlan else {
                     throw CLIError("--to is only valid with quarantine or archive-plan.")
@@ -765,6 +771,9 @@ struct PhotoArchiveCLI {
         guard !roots.isEmpty else {
             throw CLIError("No source roots were supplied. Run 'photoarchive scan --help'.")
         }
+        if preserveNameIfDateUntrusted && !singletonLeafOnly {
+            throw CLIError("--preserve-name-if-date-untrusted requires --singleton-leaf-only.")
+        }
         if mode == .archiveCoverage && roots.count < 2 {
             throw CLIError("archive-coverage requires at least two roots to compare.")
         }
@@ -823,7 +832,13 @@ struct PhotoArchiveCLI {
         }
 
         if mode == .organizePlan {
-            let basePlan = OrganizationPlanner.makePlan(from: report)
+            var basePlan = OrganizationPlanner.makePlan(from: report)
+            if preserveNameIfDateUntrusted {
+                basePlan = OrganizationPlanner.preserveNameForUntrustedStandaloneCandidates(
+                    from: basePlan,
+                    report: report
+                )
+            }
             let plan = singletonLeafOnly
                 ? OrganizationPlanner.cleanSingletonLeafPlan(from: basePlan, report: report)
                 : basePlan
@@ -863,7 +878,13 @@ struct PhotoArchiveCLI {
         }
 
         if mode == .organize {
-            let basePlan = OrganizationPlanner.makePlan(from: report)
+            var basePlan = OrganizationPlanner.makePlan(from: report)
+            if preserveNameIfDateUntrusted {
+                basePlan = OrganizationPlanner.preserveNameForUntrustedStandaloneCandidates(
+                    from: basePlan,
+                    report: report
+                )
+            }
             let plan = singletonLeafOnly
                 ? OrganizationPlanner.cleanSingletonLeafPlan(from: basePlan, report: report)
                 : basePlan
@@ -1586,9 +1607,9 @@ struct PhotoArchiveCLI {
         } else if command == "archive-plan" {
             mutationOptions = "  --to PATH                  Existing marker-initialized archive destination (required)\n  --output PATH              New local-private immutable plan JSON path (required)\n"
         } else if command == "organize" {
-            mutationOptions = "  --apply                    Rename/flatten verified AUTO organization items; default is dry-run\n  --singleton-leaf-only      Limit to clean nested folders containing exactly one planned logical asset\n"
+            mutationOptions = "  --apply                    Rename/flatten verified AUTO organization items; default is dry-run\n  --singleton-leaf-only      Limit to clean nested folders containing exactly one planned logical asset\n  --preserve-name-if-date-untrusted\n                              With --singleton-leaf-only, flatten untrusted-date standalone camera files without renaming them\n"
         } else if command == "organize-plan" {
-            mutationOptions = "  --singleton-leaf-only      Limit to clean nested folders containing exactly one planned logical asset\n"
+            mutationOptions = "  --singleton-leaf-only      Limit to clean nested folders containing exactly one planned logical asset\n  --preserve-name-if-date-untrusted\n                              With --singleton-leaf-only, propose flattening untrusted-date standalone camera files without renaming them\n"
         } else {
             mutationOptions = ""
         }

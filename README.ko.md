@@ -179,7 +179,7 @@ swift run photoarchive restore-quarantine --agent-json "/path/to/session/manifes
 swift run photoarchive organize-plan --agent-json --local "~/Pictures"
 ```
 
-Image Capture 계열에서 반복적으로 생길 수 있는, logical asset 하나만 들어 있고 다른 entry가 없는 하위 폴더만 좁게 정리하려면 `--singleton-leaf-only`를 추가할 수 있습니다. Live Photo는 여전히 still+paired-video 한 묶음으로 이동하며 기존 날짜형 destination/collision 규칙을 그대로 재사용합니다.
+Image Capture 계열에서 반복적으로 생길 수 있는, logical asset 하나만 들어 있고 다른 entry가 없는 하위 폴더만 좁게 정리하려면 `--singleton-leaf-only`를 추가할 수 있습니다. Live Photo는 여전히 still+paired-video 한 묶음으로 이동하며 기존 날짜형 destination/collision 규칙을 그대로 재사용합니다. standalone `IMG_####` / `IMG_E####` 파일의 촬영시각을 신뢰할 수 없을 때는 `--preserve-name-if-date-untrusted`를 함께 사용해 날짜를 지어내지 않고 원래 이름 그대로 root로 flatten할 수 있으며, root-level 이름 충돌이 있으면 AUTO로 승격하지 않습니다.
 
 organization apply 전에는 stable root marker를 명시적으로 초기화합니다(`photoarchive root init --apply "~/Pictures"`). `photoarchive organize`는 marker를 확인하는 dry-run이 기본이며, `--apply`에서만 automatic item을 rename/flat move합니다. custom filename과 review item은 그대로 둡니다.
 
@@ -368,6 +368,8 @@ marker가 초기화된 기존 user-managed archive root 하나를 재배치 없�
 Google Takeout root에서는 embedded media metadata로 신뢰할 수 있는 촬영시각을 얻지 못한 경우 sidecar의 `title`과 `photoTakenTime`만 읽습니다. GPS, description 등 다른 Takeout metadata는 이 경로에서 import하지 않습니다.
 
 sidecar 정책은 일반 사용자 중심입니다. 사용자가 JSON/XMP를 직접 열어볼 필요 없이, Google Takeout JSON은 검증된 `title` target에, XMP/AAE는 같은 폴더에서 basename 관계가 모호하지 않은 media에 자동 연결합니다. recognized sidecar는 `organize --singleton-leaf-only`의 media 이동을 막지 않지만 sidecar 파일 자체는 몰래 삭제하지 않고 원래 위치에 보존합니다. 관계를 확인할 수 없는 JSON은 unrecognized 상태로 남아 source folder 삭제를 막을 수 있으므로 실제 삭제 직전에만 보존/정리 여부를 판단하면 됩니다.
+
+exact-only Live Photo reconciliation은 `still_only` 또는 `video_only`인 불완전 occurrence라도 그 occurrence의 모든 resource가 Takeout 밖에 같은 role의 byte-identical counterpart를 가지고 있으면 occurrence 전체를 `automatic_redundant`로 판단할 수 있습니다. 다른 곳에 complete Live Photo가 반드시 있어야 하는 것은 아니며 occurrence 일부만 제거하지 않습니다. quarantine apply 직전에는 candidate와 keeper를 다시 fresh SHA-256으로 검증합니다.
 
 라이브러리 위치에는 명시적인 root registry가 있습니다. `photoarchive root add`, `enable`, `disable`, `remove`, `list`로 현재 관리하는 위치와 과거 scan에서 한 번 관측된 history root를 구분합니다. `root remove`는 media를 절대 건드리지 않고 해당 root의 current resource/hash/duplicate/source-folder evidence만 catalog에서 정리하며, removable archive를 다시 알아볼 수 있도록 최소 root identity/marker history는 남깁니다. `root list --all`은 removed/history-only root도 보여줍니다.
 

@@ -179,7 +179,7 @@ Preview deterministic camera-name cleanup without moving media:
 swift run photoarchive organize-plan --agent-json --local "~/Pictures"
 ```
 
-For recurring Image Capture-style folders that contain exactly one logical asset and no other entries, add `--singleton-leaf-only` to limit the plan/apply scope to those clean nested folders. Live Photos still move as one still+paired-video asset, and the existing date-based destination/collision rules are reused.
+For recurring Image Capture-style folders that contain exactly one logical asset and no other entries, add `--singleton-leaf-only` to limit the plan/apply scope to those clean nested folders. Live Photos still move as one still+paired-video asset, and the existing date-based destination/collision rules are reused. If a standalone `IMG_####` / `IMG_E####` file has no trusted capture timestamp, `--preserve-name-if-date-untrusted` can be combined with this scope to flatten it without inventing a date-based filename; root-level name collisions still block that promotion.
 
 Before any organization apply, initialize a stable root marker explicitly (`photoarchive root init --apply "~/Pictures"`). `photoarchive organize` then defaults to a marker-verified dry run; only an explicit `--apply` can rename/flatten automatic items. Custom filenames and review items stay untouched.
 
@@ -368,6 +368,8 @@ Reports required system support and whether optional executables are already ava
 For registered Google Takeout roots, the scanner reads only the sidecar `title` and `photoTakenTime` fields when embedded media metadata cannot provide a reliable capture instant. GPS, descriptions, and unrelated Takeout metadata are not imported by this path.
 
 Sidecar policy is consumer-oriented: users are not expected to open JSON/XMP files manually. Recognized sidecars are associated with their logical media asset automatically: Google Takeout JSON uses its verified `title` target, while unambiguous same-basename XMP/AAE files are linked locally. These sidecars do not block `organize --singleton-leaf-only` from moving the media asset, but the sidecar file itself is preserved in place rather than silently deleted. Unknown or ambiguous JSON remains unassociated and may block deletion of its source folder until it is explicitly reviewed or preserved.
+
+Exact-only Live Photo reconciliation also treats a whole incomplete occurrence (`still_only` or `video_only`) as automatically redundant when every resource in that occurrence has a byte-identical same-role counterpart outside Takeout. This does not require a complete Live Photo counterpart elsewhere and never removes only part of an occurrence; quarantine still re-hashes the candidate and keeper before moving anything.
 
 Library locations have an explicit root registry. `photoarchive root add`, `enable`, `disable`, `remove`, and `list` separate locations the user currently manages from roots merely observed by older scans. `root remove` never touches media: it prunes that root's current resource/hash/duplicate/source-folder evidence while retaining minimal root identity/marker history so a known removable archive can be recognized again. `root list --all` also shows removed and history-only roots.
 
