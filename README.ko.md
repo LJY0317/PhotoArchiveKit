@@ -171,7 +171,7 @@ swift run photoarchive archive-coverage --agent-json \
   --archive "/Volumes/My HDD/deep/path/My Photos"
 ```
 
-이 session에 넘긴 root만 current coverage 계산에 포함됩니다. 다른 Mac folder나 다른 외장장치에서 가져온 media의 source location까지 비교하려면 그 위치를 적절한 `--local`, `--import`, `--reference` root로 한 번은 등록·scan해야 합니다.
+이 session에 넘긴 root만 current coverage 계산에 포함됩니다. 다만 부모 root 아래에 별도 등록된 active/inactive nested root가 있으면 그 하위 영역은 부모가 다시 소유하지 않도록 자동 제외됩니다. `root remove`로 등록을 해제한 뒤에만 부모 scan이 그 파일을 다시 포함합니다. 다른 Mac folder나 다른 외장장치에서 가져온 media의 source location까지 비교하려면 그 위치를 적절한 `--local`, `--import`, `--reference` root로 한 번은 등록·scan해야 합니다.
 
 아무 파일도 이동하지 않고 quarantine 후보를 먼저 검증합니다.
 

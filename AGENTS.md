@@ -22,6 +22,7 @@
 - 초기 release에는 영구 삭제를 구현하지 않는다. copy, verify, catalog commit, quarantine을 우선한다.
 - source 또는 archive root를 사용할 수 없다는 사실은 파일이 삭제되었다는 증거가 아니다. missing file을 reconcile하기 전에 검증된 root marker를 요구한다.
 - 기존 사용자 변경을 보존하고 migration은 되돌릴 수 있게 유지한다.
+- smoke/review/temp 같은 테스트 부산물은 검증 목적이 끝나고 제품 상태·복구·유일 media에 필요하지 않음이 확인되면 같은 작업 안에서 정리한다. 안전하게 버려도 되는지 불명확하면 삭제 전에 사용자에게 확인한다.
 
 ## 개인정보 보호
 - 개인 media, Takeout export, sidecar, catalog database, credential, provider token, raw hash, perceptual hash, feature vector, GPS coordinate, Live Photo content identifier, 개인 absolute path를 절대 commit하지 않는다.

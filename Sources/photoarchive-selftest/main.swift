@@ -211,6 +211,56 @@ struct PhotoArchiveSelfTest {
         )
         try require(!registryAgentJSON.contains(registryRoot.path), "agent-safe root registry exposed a path")
 
+        let ownershipParent = temporary.appendingPathComponent("OwnershipParent", isDirectory: true)
+        let ownershipNested = ownershipParent.appendingPathComponent("Nested", isDirectory: true)
+        try fileManager.createDirectory(at: ownershipNested, withIntermediateDirectories: true)
+        try Data("parent-owned".utf8).write(to: ownershipParent.appendingPathComponent("parent.jpg"))
+        try Data("nested-owned".utf8).write(to: ownershipNested.appendingPathComponent("nested.jpg"))
+        let ownershipCatalog = temporary.appendingPathComponent("ownership.sqlite3")
+        let ownershipScanner = try ArchiveScanner(catalogURL: ownershipCatalog)
+        _ = try RootRegistry.add(
+            url: ownershipParent,
+            kind: .inbox,
+            provenance: .localLibrary,
+            catalogURL: ownershipCatalog
+        )
+        let ownershipNestedRegistered = try RootRegistry.add(
+            url: ownershipNested,
+            kind: .importSource,
+            provenance: .googleTakeout,
+            catalogURL: ownershipCatalog
+        )
+        let parentOnlyWithActiveNested = try await ownershipScanner.scan(roots: [
+            ScanRoot(url: ownershipParent, kind: .inbox, provenance: .localLibrary)
+        ])
+        try require(
+            parentOnlyWithActiveNested.summary.resourceCount == 1,
+            "a parent-only scan must exclude a separately registered active nested root"
+        )
+        _ = try RootRegistry.setState(
+            target: ownershipNestedRegistered.rootID,
+            state: .inactive,
+            catalogURL: ownershipCatalog
+        )
+        let parentOnlyWithInactiveNested = try await ownershipScanner.scan(roots: [
+            ScanRoot(url: ownershipParent, kind: .inbox, provenance: .localLibrary)
+        ])
+        try require(
+            parentOnlyWithInactiveNested.summary.resourceCount == 1,
+            "an inactive nested root must remain an ownership boundary until it is removed"
+        )
+        _ = try RootRegistry.remove(
+            target: ownershipNestedRegistered.rootID,
+            catalogURL: ownershipCatalog
+        )
+        let parentAfterNestedRemoval = try await ownershipScanner.scan(roots: [
+            ScanRoot(url: ownershipParent, kind: .inbox, provenance: .localLibrary)
+        ])
+        try require(
+            parentAfterNestedRemoval.summary.resourceCount == 2,
+            "a removed nested root should return its files to parent-root ownership"
+        )
+
         let bytes = Data("synthetic-not-a-real-photo".utf8)
         let fileA = rootA.appendingPathComponent("one.jpg")
         let fileB = rootB.appendingPathComponent("copy.jpg")

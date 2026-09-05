@@ -171,7 +171,7 @@ swift run photoarchive archive-coverage --agent-json \
   --archive "/Volumes/My HDD/deep/path/My Photos"
 ```
 
-Only roots supplied to this session participate in the current coverage result. If media was copied from another Mac folder or another external device that PhotoArchiveKit has never scanned, register that location as an appropriate `--local`, `--import`, or `--reference` root when you want it included in the comparison.
+Only roots supplied to this session participate in the current coverage result. A separately registered active or inactive nested root remains an ownership boundary and is automatically excluded from a parent-only scan; only `root remove` returns that subtree to parent ownership. If media was copied from another Mac folder or another external device that PhotoArchiveKit has never scanned, register that location as an appropriate `--local`, `--import`, or `--reference` root when you want it included in the comparison.
 
 Preview a quarantine without moving anything:
 

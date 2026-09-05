@@ -103,6 +103,15 @@ public final class ArchiveScanner {
             completedAt: startedAt
         )
         let roots = try resolveAndValidateRoots(inputs)
+        let registeredOwnershipPaths = Set(
+            try catalog.rootRegistryRows(includeHistory: false)
+                .filter { $0.state == .active || $0.state == .inactive }
+                .map {
+                    URL(fileURLWithPath: $0.canonicalPath)
+                        .resolvingSymlinksInPath()
+                        .standardizedFileURL.path
+                }
+        )
         let sessionID = try catalog.beginScan(startedAt: startedAt, rootCount: roots.count)
 
         do {
@@ -113,6 +122,7 @@ public final class ArchiveScanner {
             ))
             let enumeration = try enumerate(
                 roots: roots,
+                registeredOwnershipPaths: registeredOwnershipPaths,
                 progressHandler: options.progressHandler
             )
             warnings.append(contentsOf: enumeration.warnings)
@@ -320,6 +330,7 @@ public final class ArchiveScanner {
 
     private func enumerate(
         roots: [RootDescriptor],
+        registeredOwnershipPaths: Set<String>,
         progressHandler: ScanProgressHandler?
     ) throws -> (files: [PendingFile], warnings: [ScanWarning]) {
         let keys: Set<URLResourceKey> = [
@@ -335,11 +346,18 @@ public final class ArchiveScanner {
         var warnings: [ScanWarning] = []
 
         for root in roots {
-            let nestedRootPaths = Set(
+            let suppliedNestedRootPaths = Set(
                 roots
                     .filter { $0.id != root.id && isDescendant($0.url, of: root.url) }
                     .map { $0.url.standardizedFileURL.path }
             )
+            let registeredNestedRootPaths = Set(
+                registeredOwnershipPaths.filter { path in
+                    path != root.url.standardizedFileURL.path
+                        && isDescendant(URL(fileURLWithPath: path), of: root.url)
+                }
+            )
+            let nestedRootPaths = suppliedNestedRootPaths.union(registeredNestedRootPaths)
 
             guard let enumerator = FileManager.default.enumerator(
                 at: root.url,
