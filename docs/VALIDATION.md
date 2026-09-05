@@ -53,6 +53,7 @@ exact resource group 7개는 여러 경로에서 identical하게 보존된 still
 - 올바른 still/motion pair는 두 filename을 모두 바꾼 뒤에도 Live Photo로 유지되었다.
 - 한 Live Photo의 still과 다른 Live Photo의 motion resource는 basename을 같게 만들어도 Live Photo가 되지 않았다.
 - test한 Google web HEIC + MP4 pair는 Apple Photos에 Live Photo로 import되었다.
+- synthetic complete occurrence에서 still/video basename이 다를 때 `live_photo_verified_distinct_component_names` notice가 생성되고, basename이 같을 때는 생성되지 않는 것을 self-test로 확인했다. agent-safe scan과 archive-coverage JSON에는 notice code가 유지되지만 component filename은 포함되지 않는다.
 
 따라서 PhotoArchiveKit은 embedded linkage evidence를 사용한다. basename은 disambiguation hint일 수 있지만 pairing authority가 아니다.
 

@@ -99,6 +99,7 @@ public struct ArchiveCoverageReport: Codable, Sendable, Equatable {
     public let sessionID: String
     public let roots: [ArchiveCoverageRootReport]
     public let pairwiseExact: [PairwiseExactCoverageReport]
+    public let notices: [ScanNotice]
     public let filesModified: Bool
 
     public init(
@@ -106,12 +107,14 @@ public struct ArchiveCoverageReport: Codable, Sendable, Equatable {
         sessionID: String,
         roots: [ArchiveCoverageRootReport],
         pairwiseExact: [PairwiseExactCoverageReport],
+        notices: [ScanNotice] = [],
         filesModified: Bool = false
     ) {
         self.schemaVersion = schemaVersion
         self.sessionID = sessionID
         self.roots = roots
         self.pairwiseExact = pairwiseExact
+        self.notices = notices
         self.filesModified = filesModified
     }
 }
@@ -133,6 +136,7 @@ public struct AgentSafeArchiveCoverageReport: Codable, Sendable, Equatable {
     public let sessionID: String
     public let roots: [AgentSafeArchiveCoverageRootReport]
     public let pairwiseExact: [PairwiseExactCoverageReport]
+    public let notices: [AgentSafeNotice]
     public let filesModified: Bool
 
     public init(report: ArchiveCoverageReport) {
@@ -152,6 +156,9 @@ public struct AgentSafeArchiveCoverageReport: Codable, Sendable, Equatable {
             )
         }
         pairwiseExact = report.pairwiseExact
+        notices = report.notices.map { notice in
+            AgentSafeNotice(code: notice.code, rootID: notice.rootID)
+        }
         filesModified = report.filesModified
     }
 }
@@ -282,6 +289,7 @@ public enum ArchiveCoverageBuilder {
             sessionID: scan.sessionID,
             roots: roots,
             pairwiseExact: pairwise,
+            notices: scan.notices,
             filesModified: false
         )
     }

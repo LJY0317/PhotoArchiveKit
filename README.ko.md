@@ -58,6 +58,7 @@ byte 보존 복제본          provenance와 이력
 
 - Inbox, archive, import, reference root를 하나 이상 재귀적으로 scan
 - 내부 Apple linkage metadata로 Live Photo의 still/video resource 식별
+- 검증된 Live Photo still/video 한 쌍의 basename이 서로 다르면 non-blocking notice로 알려줌. filename 일치가 아니라 embedded linkage metadata가 identity authority이므로 pair 자체는 정상으로 유지하며, agent-safe output에는 notice code와 root ID만 노출
 - identifier가 일치하는 paired video에 유효한 QuickTime `still-image-time` timed-metadata marker가 정확히 하나 있어야 해당 Live Photo occurrence를 complete로 인정
 - 서로 다른 root에서 발견된 사본을 하나의 논리 Live Photo asset으로 통합하고, embedded identifier로 identity를 먼저 확정한 뒤 directory/basename은 경계 힌트로만 사용해 반복 export occurrence를 분할
 - 다른 root에 완전한 사본이 있어도 현재 root의 누락을 숨기지 않도록 root별 completeness 보고

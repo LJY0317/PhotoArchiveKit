@@ -930,6 +930,18 @@ struct PhotoArchiveCLI {
             for pair in report.pairwiseExact {
                 print("  \(pair.leftRootID) <-> \(pair.rightRootID): \(pair.sharedExactGroupCount) groups")
             }
+            print("")
+        }
+
+        if !report.notices.isEmpty {
+            print("Notices:")
+            for notice in report.notices.prefix(30) {
+                let location = notice.relativePath.map { " [\($0)]" } ?? ""
+                print("  \(notice.code)\(location): \(notice.message)")
+            }
+            if report.notices.count > 30 {
+                print("  ... \(report.notices.count - 30) more; use --json for the full report")
+            }
         }
     }
 
@@ -1044,6 +1056,7 @@ struct PhotoArchiveCLI {
         print("Exact duplicate groups: \(report.summary.exactDuplicateGroupCount)")
         print("Exact hashes reused from cache: \(report.summary.reusedExactHashCount)")
         print("Automatic event suggestions: \(report.summary.eventSuggestionCount)")
+        print("Notices: \(report.notices.count)")
         print("Warnings: \(report.summary.warningCount)")
         print("")
 
@@ -1084,6 +1097,18 @@ struct PhotoArchiveCLI {
             }
             if report.eventSuggestions.count > 20 {
                 print("  ... \(report.eventSuggestions.count - 20) more; use --json for the full report")
+            }
+            print("")
+        }
+
+        if !report.notices.isEmpty {
+            print("Notices:")
+            for notice in report.notices.prefix(30) {
+                let location = notice.relativePath.map { " [\($0)]" } ?? ""
+                print("  \(notice.code)\(location): \(notice.message)")
+            }
+            if report.notices.count > 30 {
+                print("  ... \(report.notices.count - 30) more; use --json for the full report")
             }
             print("")
         }

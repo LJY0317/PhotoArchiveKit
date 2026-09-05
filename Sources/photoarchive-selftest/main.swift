@@ -1144,7 +1144,91 @@ struct PhotoArchiveSelfTest {
         try require(fileManager.fileExists(atPath: cleanupKeep.path), "non-empty directory must be preserved")
         try require(cleanupApplied.cleanupManifestPath != nil, "empty-directory cleanup should record a local manifest")
 
+        let distinctNameOccurrence = LivePhotoOccurrenceReport(
+            rootID: "RNOTICE",
+            rootLabel: "NoticeRoot",
+            status: .complete,
+            stillCount: 1,
+            videoCount: 1,
+            resources: [
+                ResourceReference(
+                    rootID: "RNOTICE",
+                    rootLabel: "NoticeRoot",
+                    relativePath: "album/verified-still.HEIC",
+                    role: .photo,
+                    byteSize: 100
+                ),
+                ResourceReference(
+                    rootID: "RNOTICE",
+                    rootLabel: "NoticeRoot",
+                    relativePath: "album/verified-motion.MOV",
+                    role: .pairedVideo,
+                    byteSize: 200
+                )
+            ]
+        )
+        guard let distinctNameNotice = LivePhotoNamingDiagnostics.notice(for: distinctNameOccurrence) else {
+            throw SelfTestFailure("verified Live Photo components with distinct basenames should emit a notice")
+        }
+        try require(
+            distinctNameNotice.code == LivePhotoNamingDiagnostics.distinctComponentBasenamesCode,
+            "verified distinct-component Live Photo notice should use the stable diagnostic code"
+        )
+        let matchingNameOccurrence = LivePhotoOccurrenceReport(
+            rootID: "RNOTICE",
+            rootLabel: "NoticeRoot",
+            status: .complete,
+            stillCount: 1,
+            videoCount: 1,
+            resources: [
+                ResourceReference(rootID: "RNOTICE", rootLabel: "NoticeRoot", relativePath: "album/IMG_0001.HEIC", role: .photo, byteSize: 100),
+                ResourceReference(rootID: "RNOTICE", rootLabel: "NoticeRoot", relativePath: "album/IMG_0001.MOV", role: .pairedVideo, byteSize: 200)
+            ]
+        )
+        try require(
+            LivePhotoNamingDiagnostics.notice(for: matchingNameOccurrence) == nil,
+            "matching Live Photo component basenames should not emit the naming notice"
+        )
+
         let coverageReport = syntheticCanonicalCoverageReport()
+        let coverageReportWithNotice = ScanReport(
+            schemaVersion: coverageReport.schemaVersion,
+            sessionID: coverageReport.sessionID,
+            startedAt: coverageReport.startedAt,
+            completedAt: coverageReport.completedAt,
+            catalogPath: coverageReport.catalogPath,
+            summary: coverageReport.summary,
+            roots: coverageReport.roots,
+            resources: coverageReport.resources,
+            livePhotos: coverageReport.livePhotos,
+            exactDuplicateGroups: coverageReport.exactDuplicateGroups,
+            eventSuggestions: coverageReport.eventSuggestions,
+            notices: [distinctNameNotice],
+            warnings: coverageReport.warnings,
+            filesModified: coverageReport.filesModified
+        )
+        let noticeAgentJSON = String(
+            decoding: try encoder.encode(AgentSafeScanReport(report: coverageReportWithNotice)),
+            as: UTF8.self
+        )
+        try require(
+            noticeAgentJSON.contains(LivePhotoNamingDiagnostics.distinctComponentBasenamesCode),
+            "agent-safe scan output should expose the verified distinct-component naming notice code"
+        )
+        try require(
+            !noticeAgentJSON.contains("verified-still") && !noticeAgentJSON.contains("verified-motion"),
+            "agent-safe naming notice must not expose component filenames"
+        )
+        let coverageNoticeAgentJSON = String(
+            decoding: try encoder.encode(AgentSafeArchiveCoverageReport(
+                report: ArchiveCoverageBuilder.makeReport(from: coverageReportWithNotice)
+            )),
+            as: UTF8.self
+        )
+        try require(
+            coverageNoticeAgentJSON.contains(LivePhotoNamingDiagnostics.distinctComponentBasenamesCode),
+            "agent-safe archive coverage should carry the verified distinct-component naming notice"
+        )
         let archiveCoverageReport = ArchiveCoverageBuilder.makeReport(from: coverageReport)
         guard let localLiveCoverage = archiveCoverageReport.roots.first(where: { $0.rootID == "RLOCAL" }) else {
             throw SelfTestFailure("archive coverage is missing the synthetic local root")

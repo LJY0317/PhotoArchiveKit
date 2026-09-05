@@ -187,3 +187,35 @@ enum AssetAssembler {
         (lhs.root.label, lhs.relativePath) < (rhs.root.label, rhs.relativePath)
     }
 }
+
+public enum LivePhotoNamingDiagnostics {
+    public static let distinctComponentBasenamesCode = "live_photo_verified_distinct_component_names"
+
+    public static func notice(for occurrence: LivePhotoOccurrenceReport) -> ScanNotice? {
+        guard occurrence.status == .complete,
+              occurrence.stillCount == 1,
+              occurrence.videoCount == 1,
+              let still = occurrence.resources.first(where: { $0.role == .photo }),
+              let video = occurrence.resources.first(where: { $0.role == .pairedVideo })
+        else {
+            return nil
+        }
+
+        let stillStem = basenameStem(still.relativePath)
+        let videoStem = basenameStem(video.relativePath)
+        guard stillStem != videoStem else { return nil }
+
+        return ScanNotice(
+            code: distinctComponentBasenamesCode,
+            message: "Verified Live Photo components use different basenames; embedded Live Photo metadata confirms they belong together.",
+            rootID: occurrence.rootID,
+            relativePath: [still.relativePath, video.relativePath].sorted().first
+        )
+    }
+
+    private static func basenameStem(_ relativePath: String) -> String {
+        (((relativePath as NSString).lastPathComponent) as NSString)
+            .deletingPathExtension
+            .lowercased()
+    }
+}

@@ -58,6 +58,7 @@ The initial CLI can:
 
 - recursively scan one or more Inbox, archive, import, or reference roots;
 - identify Live Photo still and video resources from embedded Apple linkage metadata;
+- report a non-blocking notice when a verified Live Photo still/video pair uses different basenames; the pair remains valid because embedded linkage metadata, not filename equality, is the identity authority, and agent-safe output exposes only the notice code/root ID;
 - require a paired video with a matching identifier to contain exactly one valid QuickTime `still-image-time` timed-metadata marker before reporting that Live Photo occurrence as complete;
 - group copies found in different roots into one logical Live Photo asset and partition repeated same-identifier exports into physical occurrences using directory/basename only as boundary hints after embedded identifier identity is established;
 - report completeness separately for every root, so a complete copy elsewhere does not hide a broken local copy;

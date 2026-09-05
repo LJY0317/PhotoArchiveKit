@@ -196,6 +196,7 @@ public final class ArchiveScanner {
                     livePhotos: reportParts.livePhotos,
                     exactDuplicateGroups: reportParts.duplicates,
                     eventSuggestions: reportParts.events,
+                    notices: reportParts.notices,
                     warnings: reportParts.warnings,
                     filesModified: false
                 )
@@ -647,6 +648,7 @@ public final class ArchiveScanner {
         let livePhotos: [LivePhotoAssetReport]
         let duplicates: [ExactDuplicateGroupReport]
         let events: [EventSuggestionReport]
+        let notices: [ScanNotice]
         let warnings: [ScanWarning]
         let logicalAssetCount: Int
     }
@@ -661,6 +663,7 @@ public final class ArchiveScanner {
         sourceFolderSemanticsCapturedRootIDs: Set<String>
     ) -> ReportParts {
         let assemblies = AssetAssembler.livePhotoAssemblies(from: resources)
+        var notices: [ScanNotice] = []
         var warnings = initialWarnings
         var occurrencesByRoot: [String: [LivePhotoOccurrenceReport]] = [:]
 
@@ -687,6 +690,10 @@ public final class ArchiveScanner {
                             $0.relativePath < $1.relativePath
                         }
                     )
+
+                    if let notice = LivePhotoNamingDiagnostics.notice(for: report) {
+                        notices.append(notice)
+                    }
 
                     if status != .complete {
                         warnings.append(ScanWarning(
@@ -769,6 +776,10 @@ public final class ArchiveScanner {
             ($0.code, $0.rootID ?? "", $0.relativePath ?? "")
                 < ($1.code, $1.rootID ?? "", $1.relativePath ?? "")
         }
+        notices.sort {
+            ($0.code, $0.rootID ?? "", $0.relativePath ?? "")
+                < ($1.code, $1.rootID ?? "", $1.relativePath ?? "")
+        }
 
         let resourceReports = resources.compactMap { resource -> ScannedResourceReport? in
             guard let resourceID = resource.persistentResourceID else { return nil }
@@ -793,6 +804,7 @@ public final class ArchiveScanner {
             livePhotos: livePhotoReports,
             duplicates: duplicateReports,
             events: events,
+            notices: notices,
             warnings: warnings,
             logicalAssetCount: logicalAssetCount
         )

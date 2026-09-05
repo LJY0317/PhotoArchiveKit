@@ -374,6 +374,20 @@ public struct ScanWarning: Codable, Sendable, Equatable {
     }
 }
 
+public struct ScanNotice: Codable, Sendable, Equatable {
+    public let code: String
+    public let message: String
+    public let rootID: String?
+    public let relativePath: String?
+
+    public init(code: String, message: String, rootID: String? = nil, relativePath: String? = nil) {
+        self.code = code
+        self.message = message
+        self.rootID = rootID
+        self.relativePath = relativePath
+    }
+}
+
 public struct ScanSummary: Codable, Sendable, Equatable {
     public let rootCount: Int
     public let resourceCount: Int
@@ -452,6 +466,11 @@ public struct AgentSafeWarning: Codable, Sendable, Equatable {
     public let rootID: String?
 }
 
+public struct AgentSafeNotice: Codable, Sendable, Equatable {
+    public let code: String
+    public let rootID: String?
+}
+
 public struct AgentSafeScanReport: Codable, Sendable, Equatable {
     public let schemaVersion: Int
     public let privacyMode: String
@@ -461,6 +480,7 @@ public struct AgentSafeScanReport: Codable, Sendable, Equatable {
     public let livePhotos: [AgentSafeLivePhotoAssetReport]
     public let exactDuplicateGroups: [AgentSafeExactDuplicateGroupReport]
     public let eventSuggestions: [AgentSafeEventSuggestionReport]
+    public let notices: [AgentSafeNotice]
     public let warnings: [AgentSafeWarning]
     public let filesModified: Bool
 
@@ -514,6 +534,9 @@ public struct AgentSafeScanReport: Codable, Sendable, Equatable {
         eventSuggestions = report.eventSuggestions.map { event in
             AgentSafeEventSuggestionReport(eventID: event.eventID, assetIDs: event.assetIDs)
         }
+        notices = report.notices.map { notice in
+            AgentSafeNotice(code: notice.code, rootID: notice.rootID)
+        }
         warnings = report.warnings.map { warning in
             AgentSafeWarning(code: warning.code, rootID: warning.rootID)
         }
@@ -533,6 +556,7 @@ public struct ScanReport: Codable, Sendable, Equatable {
     public let livePhotos: [LivePhotoAssetReport]
     public let exactDuplicateGroups: [ExactDuplicateGroupReport]
     public let eventSuggestions: [EventSuggestionReport]
+    public let notices: [ScanNotice]
     public let warnings: [ScanWarning]
     public let filesModified: Bool
 
@@ -548,6 +572,7 @@ public struct ScanReport: Codable, Sendable, Equatable {
         livePhotos: [LivePhotoAssetReport],
         exactDuplicateGroups: [ExactDuplicateGroupReport],
         eventSuggestions: [EventSuggestionReport],
+        notices: [ScanNotice] = [],
         warnings: [ScanWarning],
         filesModified: Bool = false
     ) {
@@ -562,6 +587,7 @@ public struct ScanReport: Codable, Sendable, Equatable {
         self.livePhotos = livePhotos
         self.exactDuplicateGroups = exactDuplicateGroups
         self.eventSuggestions = eventSuggestions
+        self.notices = notices
         self.warnings = warnings
         self.filesModified = filesModified
     }

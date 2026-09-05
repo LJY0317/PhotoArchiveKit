@@ -28,6 +28,7 @@
 - paired video의 QuickTime timed metadata track에서 `com.apple.quicktime.still-image-time` marker를 strict 검증하고, identifier 일치 + 정확히 1개의 valid int8 marker + 유효한 timeline 위치를 모두 만족해야 occurrence를 complete로 인정
 - Live Photo identifier를 위한 catalog-local HMAC 보호
 - root별 Live Photo completeness report
+- 검증된 complete Live Photo의 still/video basename이 서로 다르면 `live_photo_verified_distinct_component_names` notice를 추가한다. mutation을 막거나 rename하지 않으며, agent-safe scan/archive-coverage output에는 filename/path 없이 notice code와 root ID만 전달한다.
 - opaque report ID를 사용하는 local exact duplicate grouping
 - exact duplicate group이 다시 관측될 때 `exact_duplicate_members`를 최신 group membership snapshot으로 전체 교체하여, 이전 scan의 unscanned/stale member가 current group에 섞이지 않도록 함. 과거 group row 자체는 history/stable ID를 위해 남을 수 있지만 current report는 current scan observation을 사용
 - `photoarchive archive-coverage`: 두 개 이상의 등록 root를 current media-read-only scan한 뒤 root별 exact-covered/exact-unique resource 수, peer root별/pairwise exact group overlap, Live Photo occurrence의 `complete_elsewhere` / `split_or_ambiguous_elsewhere` / still-only / video-only / no-counterpart 상태를 report. exact resource coverage와 logical Live Photo counterpart completeness를 별도 축으로 유지하며, `--agent-json`은 root ID·kind·provenance·count/status만 노출
