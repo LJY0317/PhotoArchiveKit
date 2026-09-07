@@ -8,6 +8,7 @@ PhotoArchiveKit의 중요한 변경 사항을 여기에 기록한다.
 
 ### 추가됨
 
+- native duplicate-review GUI의 sidebar를 단일 검색 목록으로 단순화하고 Live Photo는 row 안에서만 표시한다. detail은 keeper/candidate를 세로 1열 흐름으로 배치하고 현재 catalog가 이미 보유한 path, component role, exact/capture-time metadata를 더 넓게 노출한다.
 - `PhotoArchiveCore`, `photoarchive`, dependency-free synthetic self-test를 포함한 local-first macOS Swift package
 - Inbox, archive, import, reference source를 위한 read-only multi-root scan
 - embedded Apple identifier 기반 Live Photo grouping과 catalog-local keyed fingerprint 보호

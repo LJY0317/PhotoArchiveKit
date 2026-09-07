@@ -47,17 +47,7 @@ struct ReviewRootView: View {
                 ReviewSummaryHeader(presentation: presentation)
                     .padding(.horizontal, 14)
                     .padding(.top, 12)
-                    .padding(.bottom, 8)
-
-                Picker("필터", selection: $store.filter) {
-                    ForEach(ReviewStore.Filter.allCases) { filter in
-                        Text(filter.label).tag(filter)
-                    }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .padding(.horizontal, 12)
-                .padding(.bottom, 8)
+                    .padding(.bottom, 10)
             }
 
             List(store.visibleItems, selection: $store.selection) { item in
@@ -92,7 +82,7 @@ struct ReviewRootView: View {
             ContentUnavailableView(
                 "검토할 중복이 없습니다",
                 systemImage: "checkmark.circle",
-                description: Text("현재 필터에 표시할 automatic exact duplicate group이 없습니다.")
+                description: Text("현재 검색에 표시할 automatic exact duplicate group이 없습니다.")
             )
         }
     }
@@ -133,15 +123,22 @@ private struct ReviewSidebarRow: View {
             Image(systemName: item.kind == .livePhotoAsset ? "livephoto" : "photo.stack")
                 .font(.system(size: 16, weight: .medium))
                 .frame(width: 24)
-                .foregroundStyle(.secondary)
+                .foregroundStyle(item.kind == .livePhotoAsset ? .blue : .secondary)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(primaryName)
                     .font(.body)
                     .lineLimit(1)
-                Text(item.kind == .livePhotoAsset ? "Live Photo" : "Exact duplicate")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+                HStack(spacing: 5) {
+                    Text("Exact duplicate")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    if item.kind == .livePhotoAsset {
+                        Text("Live Photo")
+                            .font(.caption2.weight(.medium))
+                            .foregroundStyle(.blue)
+                    }
+                }
             }
 
             Spacer(minLength: 8)
@@ -172,29 +169,28 @@ private struct ReviewDetailView: View {
             VStack(alignment: .leading, spacing: 20) {
                 header
 
-                HStack(alignment: .top, spacing: 16) {
-                    ReviewSideSection(
-                        title: "KEEPER",
-                        subtitle: "남길 사본",
-                        systemImage: "checkmark.circle.fill",
-                        resources: item.preferredResources,
-                        isKeeper: true
-                    )
-                    .frame(maxWidth: .infinity, alignment: .top)
+                ReviewSideSection(
+                    title: "KEEPER",
+                    subtitle: "남길 사본",
+                    systemImage: "checkmark.circle.fill",
+                    resources: item.preferredResources,
+                    isKeeper: true
+                )
 
-                    ReviewSideSection(
-                        title: "CANDIDATE",
-                        subtitle: item.candidateResources.count == 1
-                            ? "중복 정리 후보"
-                            : "중복 정리 후보 \(item.candidateResources.count)개",
-                        systemImage: "minus.circle",
-                        resources: item.candidateResources,
-                        isKeeper: false
-                    )
-                    .frame(maxWidth: .infinity, alignment: .top)
-                }
+                ReviewSideSection(
+                    title: "CANDIDATE",
+                    subtitle: item.candidateResources.count == 1
+                        ? "중복 정리 후보"
+                        : "중복 정리 후보 \(item.candidateResources.count)개",
+                    systemImage: "minus.circle",
+                    resources: item.candidateResources,
+                    isKeeper: false
+                )
             }
-            .padding(22)
+            .frame(maxWidth: 1120)
+            .frame(maxWidth: .infinity)
+            .padding(.horizontal, 22)
+            .padding(.vertical, 20)
         }
         .background(Color(nsColor: .windowBackgroundColor))
     }
@@ -258,7 +254,7 @@ private struct ReviewSideSection: View {
                 ReviewResourceCard(resource: resource, isKeeper: isKeeper)
             }
         }
-        .padding(16)
+        .padding(18)
         .background(.background.secondary, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 }
@@ -271,7 +267,7 @@ private struct ReviewResourceCard: View {
         VStack(alignment: .leading, spacing: 12) {
             ReviewThumbnail(url: resource.fileURL)
                 .frame(maxWidth: .infinity)
-                .aspectRatio(4 / 3, contentMode: .fit)
+                .frame(minHeight: 320, idealHeight: 460, maxHeight: 560)
 
             VStack(alignment: .leading, spacing: 8) {
                 HStack(alignment: .firstTextBaseline) {
@@ -286,11 +282,25 @@ private struct ReviewResourceCard: View {
 
                 MetadataLine(label: "위치", value: resource.rootLabel)
                 MetadataLine(label: "경로", value: resource.relativePath)
+                MetadataLine(label: "전체 경로", value: resource.absolutePath)
+                MetadataLine(label: "종류", value: mediaKindLabel(resource.mediaKind))
+                MetadataLine(label: "역할", value: resourceRoleLabel(resource.role))
+                MetadataLine(label: "Exact", value: "스캔 당시 byte 단위 동일")
                 if let addedAt = resource.addedAt {
                     MetadataLine(label: "Date Added", value: addedAt.formatted(date: .abbreviated, time: .shortened))
                 }
                 if let captureTime = resource.captureTime {
-                    MetadataLine(label: "촬영 근거", value: captureSummary(captureTime))
+                    if let localTimestamp = captureTime.localTimestamp {
+                        MetadataLine(label: "촬영 시각", value: localTimestamp)
+                    }
+                    if let instant = captureTime.instant {
+                        MetadataLine(label: "절대 시각", value: instant.formatted(date: .abbreviated, time: .standard))
+                    }
+                    if let utcOffset = captureTime.utcOffset {
+                        MetadataLine(label: "UTC offset", value: utcOffset)
+                    }
+                    MetadataLine(label: "촬영 근거", value: captureSourceLabel(captureTime.source))
+                    MetadataLine(label: "신뢰도", value: captureConfidenceLabel(captureTime.confidence))
                 }
             }
 
@@ -328,10 +338,10 @@ private struct MetadataLine: View {
             Text(label)
                 .font(.caption)
                 .foregroundStyle(.secondary)
-                .frame(width: 66, alignment: .leading)
+                .frame(width: 78, alignment: .leading)
             Text(value)
                 .font(.caption)
-                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
                 .textSelection(.enabled)
         }
     }
@@ -391,9 +401,42 @@ private enum ThumbnailProvider {
     }
 }
 
-private func captureSummary(_ captureTime: CaptureTime) -> String {
-    let source = captureTime.source.rawValue.replacingOccurrences(of: "_", with: " ")
-    return "\(source) · \(captureTime.confidence.rawValue)"
+private func mediaKindLabel(_ kind: MediaKind) -> String {
+    switch kind {
+    case .image: return "Image"
+    case .video: return "Video"
+    case .sidecar: return "Sidecar"
+    }
+}
+
+private func resourceRoleLabel(_ role: ResourceRole) -> String {
+    switch role {
+    case .photo: return "Live Photo still"
+    case .pairedVideo: return "Live Photo paired video"
+    case .standaloneImage: return "Standalone image"
+    case .standaloneVideo: return "Standalone video"
+    case .sidecar: return "Sidecar"
+    }
+}
+
+private func captureSourceLabel(_ source: CaptureTimeSource) -> String {
+    switch source {
+    case .exifDateTimeOriginal: return "EXIF DateTimeOriginal"
+    case .quickTimeCreationDate: return "QuickTime creation date"
+    case .googleTakeoutPhotoTakenTime: return "Google Takeout photoTakenTime"
+    case .fileCreationDate: return "파일시스템 생성 시각 fallback"
+    case .unknown: return "알 수 없음"
+    }
+}
+
+private func captureConfidenceLabel(_ confidence: CaptureTimeConfidence) -> String {
+    switch confidence {
+    case .trusted: return "Trusted"
+    case .providerSidecar: return "Provider sidecar"
+    case .incompleteTimezone: return "Timezone 불완전"
+    case .fallback: return "Fallback"
+    case .unknown: return "알 수 없음"
+    }
 }
 
 private func rationaleTitle(_ rationale: DuplicateReviewPresentationRationale) -> String {
