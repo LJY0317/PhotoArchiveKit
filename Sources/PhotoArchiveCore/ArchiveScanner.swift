@@ -346,6 +346,7 @@ public final class ArchiveScanner {
             .fileSizeKey,
             .contentModificationDateKey,
             .creationDateKey,
+            .addedToDirectoryDateKey,
             .fileResourceIdentifierKey
         ]
         var pending: [PendingFile] = []
@@ -405,6 +406,7 @@ public final class ArchiveScanner {
                         byteSize: Int64(values.fileSize ?? 0),
                         modifiedAt: values.contentModificationDate,
                         createdAt: values.creationDate,
+                        addedAt: values.addedToDirectoryDate,
                         fileSystemIdentifier: values.fileResourceIdentifier.map { String(describing: $0) }
                     ))
                     progressHandler?(ScanProgress(
@@ -899,6 +901,7 @@ public final class ArchiveScanner {
                 mediaKind: resource.mediaKind,
                 role: AssetAssembler.role(for: resource),
                 byteSize: resource.byteSize,
+                addedAt: resource.addedAt,
                 captureTime: resource.captureTime
             )
         }

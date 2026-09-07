@@ -83,6 +83,7 @@ public enum DuplicateReviewWorkspace {
         let parentRelativePath: String
         let byteSize: Int64
         let creationDate: Date?
+        let addedDate: Date?
         let modificationDate: Date?
         let fileSystemIdentifier: String?
         let captureTime: CaptureTime?
@@ -529,6 +530,7 @@ public enum DuplicateReviewWorkspace {
             parentRelativePath: parentRelativePath,
             byteSize: (attributes?[.size] as? NSNumber)?.int64Value ?? resource.byteSize,
             creationDate: attributes?[.creationDate] as? Date,
+            addedDate: scanned?.addedAt,
             modificationDate: attributes?[.modificationDate] as? Date,
             fileSystemIdentifier: (attributes?[.systemFileNumber] as? NSNumber).map { String($0.uint64Value) },
             captureTime: scanned?.captureTime,
@@ -543,6 +545,7 @@ public enum DuplicateReviewWorkspace {
             "  부모 폴더: \(facts.parentRelativePath)",
             "  실제 원본 대상 크기: \(facts.byteSize) 바이트",
             "  파일시스템 생성 시각: \(formatDate(facts.creationDate))",
+            "  Finder 추가 시각(Date Added): \(formatDate(facts.addedDate))",
             "  파일시스템 수정 시각: \(formatDate(facts.modificationDate))",
             "  scan 촬영 시각 근거: \(formatCaptureTime(facts.captureTime))",
             "  파일시스템 식별자: \(facts.fileSystemIdentifier ?? "확인 불가")",
@@ -571,6 +574,7 @@ public enum DuplicateReviewWorkspace {
         }
         lines.append("- 파일 확장자: \(extensionComparison)")
         lines.append("- 파일시스템 생성 시각: \(dateComparison(preferred.creationDate, candidate.creationDate))")
+        lines.append("- Finder 추가 시각(Date Added): \(dateComparison(preferred.addedDate, candidate.addedDate))")
         lines.append("- 파일시스템 수정 시각: \(dateComparison(preferred.modificationDate, candidate.modificationDate))")
         lines.append("- 파일 내부 메타데이터: 동일 (파일 바이트가 동일하므로 내부 메타데이터도 동일)")
         lines.append("- scan 촬영 시각 근거: \(captureComparison(preferred.captureTime, candidate.captureTime))")
@@ -581,6 +585,7 @@ public enum DuplicateReviewWorkspace {
             && preferred.fileName == candidate.fileName
             && preferred.parentRelativePath == candidate.parentRelativePath
             && datesMatch(preferred.creationDate, candidate.creationDate)
+            && datesMatch(preferred.addedDate, candidate.addedDate)
             && datesMatch(preferred.modificationDate, candidate.modificationDate)
             && preferred.captureTime == candidate.captureTime
             && preferred.extendedAttributes == candidate.extendedAttributes
@@ -657,6 +662,7 @@ public enum DuplicateReviewWorkspace {
         case .protectedOrPreferredRoot: return "더 우선하거나 보호되는 저장 위치"
         case .cleanerFilename: return "복사본 표식이 없는 더 깔끔한 파일명"
         case .recognizableFilename: return "출처·용도를 더 알아보기 쉬운 파일명"
+        case .earlierDateAdded: return "Finder에서 더 먼저 추가된 사본"
         case .matchingParentFolder: return "파일명과 맞아떨어지는 의도적인 부모 폴더 구조"
         case .strongerCaptureEvidence: return "더 신뢰도 높은 촬영 시각 근거"
         case .shallowerPath: return "더 얕고 단순한 폴더 경로"

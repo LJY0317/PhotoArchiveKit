@@ -1740,6 +1740,83 @@ struct PhotoArchiveSelfTest {
             "confirmed copy-name, recognizable-name, structured-parent, and shallow-path rules should receive automatic quarantine preflight authority"
         )
 
+        let stagingEarlierRoot = temporary.appendingPathComponent("StagingEarlier", isDirectory: true)
+        let stagingLaterRoot = temporary.appendingPathComponent("StagingLater", isDirectory: true)
+        try fileManager.createDirectory(at: stagingEarlierRoot, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: stagingLaterRoot, withIntermediateDirectories: true)
+        let dateAddedBytes = Data("cross-staging-date-added-policy".utf8)
+        try dateAddedBytes.write(to: stagingEarlierRoot.appendingPathComponent("same.jpg"))
+        let filenameBeforeDateBytes = Data("cross-staging-filename-before-date-policy".utf8)
+        try filenameBeforeDateBytes.write(
+            to: stagingEarlierRoot.appendingPathComponent("72FD56C3-50FF-4980-B882-549DA293DE44.JPG")
+        )
+        try await Task.sleep(for: .milliseconds(1_100))
+        try dateAddedBytes.write(to: stagingLaterRoot.appendingPathComponent("same.jpg"))
+        try filenameBeforeDateBytes.write(to: stagingLaterRoot.appendingPathComponent("IMG_5199.JPG"))
+        let stagingPolicyCatalog = temporary.appendingPathComponent("staging-policy.sqlite3")
+        let stagingPolicyScanner = try ArchiveScanner(catalogURL: stagingPolicyCatalog)
+        let stagingPolicyReport = try await stagingPolicyScanner.scan(roots: [
+            ScanRoot(url: stagingEarlierRoot, kind: .inbox, provenance: .localLibrary),
+            ScanRoot(url: stagingLaterRoot, kind: .inbox, provenance: .localLibrary)
+        ])
+        let earlierRootID = stagingPolicyReport.roots.first(where: {
+            URL(fileURLWithPath: $0.canonicalPath).standardizedFileURL == stagingEarlierRoot.standardizedFileURL
+        })?.rootID
+        let laterRootID = stagingPolicyReport.roots.first(where: {
+            URL(fileURLWithPath: $0.canonicalPath).standardizedFileURL == stagingLaterRoot.standardizedFileURL
+        })?.rootID
+        try require(
+            earlierRootID != nil && laterRootID != nil
+                && stagingPolicyReport.roots.allSatisfy { $0.usageRole == .staging },
+            "cross-staging policy fixture should resolve both inbox roots as staging"
+        )
+        let sameNameReports = stagingPolicyReport.resources.filter { $0.relativePath == "same.jpg" }
+        try require(
+            sameNameReports.count == 2
+                && sameNameReports.allSatisfy { $0.addedAt != nil }
+                && sameNameReports.first(where: { $0.rootID == earlierRootID })!.addedAt!
+                    < sameNameReports.first(where: { $0.rootID == laterRootID })!.addedAt!,
+            "scanner should capture Finder Date Added for cross-staging keeper decisions"
+        )
+        let stagingPolicyPlan = ReconciliationPlanner.makePlan(from: stagingPolicyReport)
+        guard let dateAddedItem = stagingPolicyPlan.items.first(where: {
+            $0.preferredResources.contains { $0.relativePath == "same.jpg" }
+                && $0.candidateResources.contains { $0.relativePath == "same.jpg" }
+        }) else {
+            throw SelfTestFailure("cross-staging Date Added fixture did not produce an exact reconciliation item")
+        }
+        try require(
+            dateAddedItem.preferredRootID == earlierRootID
+                && dateAddedItem.candidateResources.contains { $0.rootID == laterRootID },
+            "when stronger evidence ties, the earlier Finder Date Added staging copy should be canonical"
+        )
+        guard let crossStagingFilenameItem = stagingPolicyPlan.items.first(where: {
+            $0.preferredResources.contains { $0.relativePath == "IMG_5199.JPG" }
+                || $0.candidateResources.contains { $0.relativePath.contains("72FD56C3") }
+        }) else {
+            throw SelfTestFailure("cross-staging filename-priority fixture did not produce an exact reconciliation item")
+        }
+        try require(
+            crossStagingFilenameItem.preferredResources.first?.relativePath == "IMG_5199.JPG"
+                && crossStagingFilenameItem.preferredRootID == laterRootID,
+            "recognizable source filenames must outrank an earlier Date Added opaque filename"
+        )
+        let stagingPolicyQuarantineRoot = temporary.appendingPathComponent(
+            "StagingPolicyQuarantine",
+            isDirectory: true
+        )
+        try fileManager.createDirectory(at: stagingPolicyQuarantineRoot, withIntermediateDirectories: true)
+        let stagingPolicyPreflight = try QuarantineExecutor.preflight(
+            report: stagingPolicyReport,
+            plan: stagingPolicyPlan,
+            targetURL: stagingPolicyQuarantineRoot
+        )
+        try require(
+            stagingPolicyPreflight.moves.contains { $0.itemID == dateAddedItem.itemID }
+                && stagingPolicyPreflight.moves.contains { $0.itemID == crossStagingFilenameItem.itemID },
+            "confirmed cross-staging filename and Date Added rules should receive automatic quarantine preflight authority"
+        )
+
         let localDuplicateLiveReport = syntheticLocalDuplicateLivePhotoReport()
         let localDuplicateLivePlan = ReconciliationPlanner.makePlan(from: localDuplicateLiveReport)
         guard let localDuplicateLiveItem = localDuplicateLivePlan.items.first(where: {

@@ -172,7 +172,7 @@ public enum ReconciliationPlanner {
         let reviewItems = items.filter { $0.decision == .review }
         return ReconciliationPlan(
             schemaVersion: 1,
-            policy: "canonical_exact_keeper_v5_root_retention_aware",
+            policy: "canonical_exact_keeper_v6_staging_date_added",
             sessionID: report.sessionID,
             summary: ReconciliationPlanSummary(
                 automaticItemCount: automaticItems.count,
@@ -205,6 +205,24 @@ public enum ReconciliationPlanner {
                           rootMembers.count > 1
                     else { continue }
                     let sorted = rootMembers.sorted {
+                        CanonicalKeeperPolicy.preferredResource(
+                            $0,
+                            before: $1,
+                            rootsByID: rootsByID,
+                            resourcesByKey: resourcesByKey
+                        )
+                    }
+                    for candidate in sorted.dropFirst() {
+                        candidateKeys.insert(resourceKey(candidate))
+                    }
+                }
+
+                let stagingSurvivors = members.filter {
+                    !candidateKeys.contains(resourceKey($0))
+                        && rootsByID[$0.rootID]?.usageRole == .staging
+                }
+                if stagingSurvivors.count > 1 {
+                    let sorted = stagingSurvivors.sorted {
                         CanonicalKeeperPolicy.preferredResource(
                             $0,
                             before: $1,

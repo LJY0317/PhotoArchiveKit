@@ -442,9 +442,14 @@ public enum QuarantineExecutor {
         switch sourceRoot.usageRole {
         case .reference:
             return false
-        case .staging, .primaryLibrary, .archive:
-            // These roles may dedupe inside themselves, but generic reconciliation must
-            // never collapse the root itself merely because another root has a replica.
+        case .staging:
+            if sameRoot {
+                return sourceRoot.usageRole.allowsSameRootExactDedupe
+            }
+            return preferredRoot.usageRole == .staging
+        case .primaryLibrary, .archive:
+            // Primary/archive roots may dedupe inside themselves, but generic reconciliation
+            // must never collapse an intentional cross-root library/archive replica.
             return sameRoot && sourceRoot.usageRole.allowsSameRootExactDedupe
         case .importSource:
             if sourceRoot.provenance == .googleTakeout,

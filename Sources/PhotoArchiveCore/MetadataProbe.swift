@@ -118,6 +118,7 @@ struct MetadataProbe {
             mediaKind: pending.type.mediaKind,
             byteSize: pending.byteSize,
             modifiedAt: pending.modifiedAt,
+            addedAt: pending.addedAt,
             fileSystemIdentifier: pending.fileSystemIdentifier,
             captureTime: captureTime,
             rawLivePhotoIdentifier: normalizedIdentifier(rawIdentifier),

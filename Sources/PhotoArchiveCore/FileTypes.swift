@@ -72,6 +72,7 @@ struct PendingFile: Sendable {
     let byteSize: Int64
     let modifiedAt: Date?
     let createdAt: Date?
+    let addedAt: Date?
     let fileSystemIdentifier: String?
 }
 
@@ -84,6 +85,7 @@ struct ProbedResource: Sendable {
     let mediaKind: MediaKind
     let byteSize: Int64
     let modifiedAt: Date?
+    let addedAt: Date?
     let fileSystemIdentifier: String?
     var captureTime: CaptureTime?
     var rawLivePhotoIdentifier: String?

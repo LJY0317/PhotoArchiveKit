@@ -425,10 +425,10 @@ final class SQLiteCatalog {
                     """
                     INSERT INTO resources (
                         id, root_id, relative_path, file_name, file_extension, media_kind,
-                        byte_size, modified_at, capture_local_time, capture_utc_offset,
+                        byte_size, modified_at, added_at, capture_local_time, capture_utc_offset,
                         capture_instant, capture_source, capture_confidence, exact_hash,
                         live_identifier_fingerprint, metadata_probe_failed, last_seen_session
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     bindings: resourceBindings(
                         id: resourceID,
@@ -441,7 +441,7 @@ final class SQLiteCatalog {
                     """
                     UPDATE resources SET
                         relative_path = ?, file_name = ?, file_extension = ?, media_kind = ?, byte_size = ?,
-                        modified_at = ?, capture_local_time = ?, capture_utc_offset = ?,
+                        modified_at = ?, added_at = ?, capture_local_time = ?, capture_utc_offset = ?,
                         capture_instant = ?, capture_source = ?, capture_confidence = ?,
                         exact_hash = ?, live_identifier_fingerprint = ?, metadata_probe_failed = ?,
                         last_seen_session = ?
@@ -914,6 +914,7 @@ final class SQLiteCatalog {
                 mediaKind: pending.type.mediaKind,
                 byteSize: pending.byteSize,
                 modifiedAt: pending.modifiedAt,
+                addedAt: pending.addedAt,
                 fileSystemIdentifier: pending.fileSystemIdentifier,
                 captureTime: evidence.captureTime,
                 rawLivePhotoIdentifier: nil,
@@ -1341,6 +1342,7 @@ final class SQLiteCatalog {
             .text(resource.mediaKind.rawValue),
             .int64(resource.byteSize),
             resource.modifiedAt.map { .double($0.timeIntervalSince1970) } ?? .null,
+            resource.addedAt.map { .double($0.timeIntervalSince1970) } ?? .null,
             resource.captureTime?.localTimestamp.map(SQLiteBinding.text) ?? .null,
             resource.captureTime?.utcOffset.map(SQLiteBinding.text) ?? .null,
             resource.captureTime?.instant.map { .double($0.timeIntervalSince1970) } ?? .null,
@@ -1365,6 +1367,7 @@ final class SQLiteCatalog {
             .text(resource.mediaKind.rawValue),
             .int64(resource.byteSize),
             resource.modifiedAt.map { .double($0.timeIntervalSince1970) } ?? .null,
+            resource.addedAt.map { .double($0.timeIntervalSince1970) } ?? .null,
             resource.captureTime?.localTimestamp.map(SQLiteBinding.text) ?? .null,
             resource.captureTime?.utcOffset.map(SQLiteBinding.text) ?? .null,
             resource.captureTime?.instant.map { .double($0.timeIntervalSince1970) } ?? .null,
@@ -1476,6 +1479,7 @@ final class SQLiteCatalog {
                 media_kind TEXT NOT NULL,
                 byte_size INTEGER NOT NULL,
                 modified_at REAL,
+                added_at REAL,
                 capture_local_time TEXT,
                 capture_utc_offset TEXT,
                 capture_instant REAL,
@@ -1669,6 +1673,26 @@ final class SQLiteCatalog {
             );
             """
         )
+
+        if try !table("resources", hasColumn: "added_at") {
+            try execute("ALTER TABLE resources ADD COLUMN added_at REAL")
+        }
+    }
+
+    private func table(_ table: String, hasColumn column: String) throws -> Bool {
+        try withStatement("PRAGMA table_info(\(table))", bindings: []) { statement in
+            while true {
+                let result = sqlite3_step(statement)
+                if result == SQLITE_DONE { return false }
+                guard result == SQLITE_ROW else {
+                    throw sqliteError(sql: "PRAGMA table_info(\(table))")
+                }
+                if let name = sqlite3_column_text(statement, 1),
+                   String(cString: name) == column {
+                    return true
+                }
+            }
+        }
     }
 
     private enum SQLiteBinding {
@@ -2158,7 +2182,7 @@ final class SQLiteCatalog {
         try withStatement(
             """
             SELECT r.id, ar.asset_id, r.root_id, r.relative_path, r.file_name,
-                   r.media_kind, ar.role, r.byte_size,
+                   r.media_kind, ar.role, r.byte_size, r.added_at,
                    r.capture_local_time, r.capture_utc_offset, r.capture_instant,
                    r.capture_source, r.capture_confidence, r.exact_hash,
                    rlms.status, r.metadata_probe_failed
@@ -2206,18 +2230,18 @@ final class SQLiteCatalog {
                 }
 
                 let captureTime: CaptureTime?
-                if let sourceText = sqlite3_column_text(statement, 11),
-                   let confidenceText = sqlite3_column_text(statement, 12),
+                if let sourceText = sqlite3_column_text(statement, 12),
+                   let confidenceText = sqlite3_column_text(statement, 13),
                    let source = CaptureTimeSource(rawValue: String(cString: sourceText)),
                    let confidence = CaptureTimeConfidence(rawValue: String(cString: confidenceText)) {
                     captureTime = CaptureTime(
-                        localTimestamp: sqlite3_column_text(statement, 8)
+                        localTimestamp: sqlite3_column_text(statement, 9)
                             .map { String(cString: $0) },
-                        utcOffset: sqlite3_column_text(statement, 9)
+                        utcOffset: sqlite3_column_text(statement, 10)
                             .map { String(cString: $0) },
-                        instant: sqlite3_column_type(statement, 10) == SQLITE_NULL
+                        instant: sqlite3_column_type(statement, 11) == SQLITE_NULL
                             ? nil
-                            : Date(timeIntervalSince1970: sqlite3_column_double(statement, 10)),
+                            : Date(timeIntervalSince1970: sqlite3_column_double(statement, 11)),
                         source: source,
                         confidence: confidence
                     )
@@ -2226,15 +2250,18 @@ final class SQLiteCatalog {
                 }
 
                 let exactHash: Data?
-                if sqlite3_column_type(statement, 13) != SQLITE_NULL,
-                   let bytes = sqlite3_column_blob(statement, 13) {
-                    exactHash = Data(bytes: bytes, count: Int(sqlite3_column_bytes(statement, 13)))
+                if sqlite3_column_type(statement, 14) != SQLITE_NULL,
+                   let bytes = sqlite3_column_blob(statement, 14) {
+                    exactHash = Data(bytes: bytes, count: Int(sqlite3_column_bytes(statement, 14)))
                 } else {
                     exactHash = nil
                 }
-                let timedStatus = sqlite3_column_text(statement, 14)
+                let timedStatus = sqlite3_column_text(statement, 15)
                     .flatMap { LivePhotoTimedMetadataStatus(rawValue: String(cString: $0)) }
                 let assetID = sqlite3_column_text(statement, 1).map { String(cString: $0) }
+                let addedAt = sqlite3_column_type(statement, 8) == SQLITE_NULL
+                    ? nil
+                    : Date(timeIntervalSince1970: sqlite3_column_double(statement, 8))
                 let report = ScannedResourceReport(
                     resourceID: String(cString: resourceText),
                     assetID: assetID,
@@ -2245,13 +2272,14 @@ final class SQLiteCatalog {
                     mediaKind: mediaKind,
                     role: role,
                     byteSize: sqlite3_column_int64(statement, 7),
+                    addedAt: addedAt,
                     captureTime: captureTime
                 )
                 rows.append(CachedScanResourceRow(
                     report: report,
                     exactHash: exactHash,
                     timedMetadataStatus: timedStatus,
-                    metadataProbeFailed: sqlite3_column_int64(statement, 15) != 0
+                    metadataProbeFailed: sqlite3_column_int64(statement, 16) != 0
                 ))
             }
             return rows

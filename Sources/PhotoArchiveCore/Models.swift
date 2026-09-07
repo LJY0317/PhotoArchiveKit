@@ -309,6 +309,7 @@ public struct ScannedResourceReport: Codable, Sendable, Equatable {
     public let mediaKind: MediaKind
     public let role: ResourceRole
     public let byteSize: Int64
+    public let addedAt: Date?
     public let captureTime: CaptureTime?
 
     public init(
@@ -321,6 +322,7 @@ public struct ScannedResourceReport: Codable, Sendable, Equatable {
         mediaKind: MediaKind,
         role: ResourceRole,
         byteSize: Int64,
+        addedAt: Date? = nil,
         captureTime: CaptureTime?
     ) {
         self.resourceID = resourceID
@@ -332,6 +334,7 @@ public struct ScannedResourceReport: Codable, Sendable, Equatable {
         self.mediaKind = mediaKind
         self.role = role
         self.byteSize = byteSize
+        self.addedAt = addedAt
         self.captureTime = captureTime
     }
 }

@@ -10,6 +10,7 @@ enum CanonicalKeeperPolicy {
         case protectedOrPreferredRoot = "preferred_root_role"
         case cleanerFilename = "cleaner_filename"
         case recognizableFilename = "recognizable_filename"
+        case earlierDateAdded = "earlier_date_added"
         case matchingParentFolder = "matching_parent_folder"
         case strongerCaptureEvidence = "stronger_capture_evidence"
         case shallowerPath = "shallower_path"
@@ -69,6 +70,8 @@ enum CanonicalKeeperPolicy {
         let copyPreference = pairwiseCopyPreference(lhs, rhs)
         if copyPreference != 0 { return copyPreference < 0 }
         if lhsScore.filenameRank != rhsScore.filenameRank { return lhsScore.filenameRank < rhsScore.filenameRank }
+        let addedPreference = pairwiseDateAddedPreference(lhsScore.addedAt, rhsScore.addedAt)
+        if addedPreference != 0 { return addedPreference < 0 }
         let parentPreference = pairwiseParentFolderPreference(lhs, rhs)
         if parentPreference != 0 { return parentPreference < 0 }
         if lhsScore.captureRank != rhsScore.captureRank { return lhsScore.captureRank < rhsScore.captureRank }
@@ -99,6 +102,9 @@ enum CanonicalKeeperPolicy {
         }
         if pairwiseCopyPreference(preferred, candidate) != 0 { return .cleanerFilename }
         if preferredScore.filenameRank != candidateScore.filenameRank { return .recognizableFilename }
+        if pairwiseDateAddedPreference(preferredScore.addedAt, candidateScore.addedAt) != 0 {
+            return .earlierDateAdded
+        }
         if pairwiseParentFolderPreference(preferred, candidate) != 0 { return .matchingParentFolder }
         if preferredScore.captureRank != candidateScore.captureRank { return .strongerCaptureEvidence }
         if preferredScore.pathDepth != candidateScore.pathDepth { return .shallowerPath }
@@ -135,7 +141,7 @@ enum CanonicalKeeperPolicy {
                 rootsByID: rootsByID,
                 resourcesByKey: resourcesByKey
             ) {
-            case .protectedOrPreferredRoot, .cleanerFilename, .recognizableFilename,
+            case .protectedOrPreferredRoot, .cleanerFilename, .recognizableFilename, .earlierDateAdded,
                     .matchingParentFolder, .shallowerPath:
                 continue
             case .strongerCaptureEvidence, .deterministicTieBreak:
@@ -164,6 +170,7 @@ enum CanonicalKeeperPolicy {
         let rootRank: Int
         let explicitCopyMarkerRank: Int
         let filenameRank: Int
+        let addedAt: Date?
         let captureRank: Int
         let pathDepth: Int
     }
@@ -184,6 +191,7 @@ enum CanonicalKeeperPolicy {
             rootRank: rootRank(rootsByID[resource.rootID]),
             explicitCopyMarkerRank: hasExplicitCopyMarker(filenameStem(resource.relativePath)) ? 1 : 0,
             filenameRank: filenameRank(resource.relativePath),
+            addedAt: resourcesByKey[key(resource)]?.addedAt,
             captureRank: captureRank(resourcesByKey[key(resource)]?.captureTime),
             pathDepth: pathDepth(resource.relativePath)
         )
@@ -199,6 +207,13 @@ enum CanonicalKeeperPolicy {
         let rhsDerived = copyBaseName(rhsName).map { normalizedName($0) == normalizedName(lhsName) } ?? false
         if lhsDerived == rhsDerived { return 0 }
         return lhsDerived ? 1 : -1
+    }
+
+    private static func pairwiseDateAddedPreference(_ lhs: Date?, _ rhs: Date?) -> Int {
+        guard let lhs, let rhs else { return 0 }
+        let difference = lhs.timeIntervalSince(rhs)
+        if abs(difference) < 0.001 { return 0 }
+        return difference < 0 ? -1 : 1
     }
 
     private static func filenameRank(_ relativePath: String) -> Int {
