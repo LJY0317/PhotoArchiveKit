@@ -1961,6 +1961,30 @@ final class SQLiteCatalog {
         return nil
     }
 
+    func latestReusableDuplicateReviewScanReport() throws -> ScanReport? {
+        let activeRoots = try rootRegistryRows(includeHistory: false)
+            .filter { $0.state == .active }
+        guard !activeRoots.isEmpty else { return nil }
+
+        let activeRootIDs = Set(activeRoots.map(\.rootID))
+        let sessions = try cachedCompletedScanSessions(limit: 64)
+        for session in sessions {
+            let observation = try cachedSessionObservationSummary(sessionID: session.sessionID)
+            guard observation.resourceCount == session.resourceCount,
+                  !observation.rootIDs.isEmpty,
+                  observation.rootIDs.isSubset(of: activeRootIDs),
+                  try cachedSessionExactDuplicateGroupCount(sessionID: session.sessionID) > 0
+            else {
+                continue
+            }
+
+            let roots = activeRoots.filter { observation.rootIDs.contains($0.rootID) }
+            guard roots.count == observation.rootIDs.count else { continue }
+            return try cachedScanReport(session: session, roots: roots)
+        }
+        return nil
+    }
+
     func duplicateReviewExpectedResourceEvidence(
         resourceIDs: [String]
     ) throws -> [String: DuplicateReviewExpectedResourceEvidence] {
@@ -2075,6 +2099,18 @@ final class SQLiteCatalog {
                 count += Int(sqlite3_column_int64(statement, 1))
             }
             return (count, rootIDs)
+        }
+    }
+
+    private func cachedSessionExactDuplicateGroupCount(sessionID: String) throws -> Int {
+        try withStatement(
+            "SELECT COUNT(*) FROM exact_duplicate_groups WHERE last_seen_session = ?",
+            bindings: [.text(sessionID)]
+        ) { statement in
+            guard sqlite3_step(statement) == SQLITE_ROW else {
+                throw sqliteError(sql: "SELECT reusable duplicate-review exact groups")
+            }
+            return Int(sqlite3_column_int64(statement, 0))
         }
     }
 

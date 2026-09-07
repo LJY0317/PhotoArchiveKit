@@ -437,6 +437,59 @@ struct PhotoArchiveSelfTest {
             "restoring staging role should restore import-cleanup authority without a media rescan"
         )
 
+        let reviewSubsetCatalog = temporary.appendingPathComponent("review-subset.sqlite3")
+        let reviewSubsetA = temporary.appendingPathComponent("ReviewSubsetA", isDirectory: true)
+        let reviewSubsetB = temporary.appendingPathComponent("ReviewSubsetB", isDirectory: true)
+        let reviewSubsetC = temporary.appendingPathComponent("ReviewSubsetC", isDirectory: true)
+        for root in [reviewSubsetA, reviewSubsetB, reviewSubsetC] {
+            try fileManager.createDirectory(at: root, withIntermediateDirectories: true)
+        }
+        let reviewSubsetBytes = Data("review-subset-duplicate".utf8)
+        try reviewSubsetBytes.write(to: reviewSubsetA.appendingPathComponent("keeper.jpg"))
+        try reviewSubsetBytes.write(to: reviewSubsetB.appendingPathComponent("keeper 2.jpg"))
+        try Data("unrelated-review-resource".utf8).write(
+            to: reviewSubsetC.appendingPathComponent("unrelated.jpg")
+        )
+        for root in [reviewSubsetA, reviewSubsetB, reviewSubsetC] {
+            _ = try RootRegistry.add(
+                url: root,
+                kind: .inbox,
+                provenance: .unknown,
+                usageRole: .staging,
+                catalogURL: reviewSubsetCatalog
+            )
+        }
+        let reviewSubsetScanner = try ArchiveScanner(catalogURL: reviewSubsetCatalog)
+        let reviewDuplicateScan = try await reviewSubsetScanner.scan(roots: [
+            ScanRoot(url: reviewSubsetA, kind: .inbox, provenance: .unknown),
+            ScanRoot(url: reviewSubsetB, kind: .inbox, provenance: .unknown)
+        ])
+        _ = try await reviewSubsetScanner.scan(roots: [
+            ScanRoot(url: reviewSubsetC, kind: .inbox, provenance: .unknown)
+        ])
+        try require(
+            try reviewSubsetScanner.latestReusableActiveRootsScanReport() == nil,
+            "an unrelated active-root scan should make the strict all-active-root snapshot unavailable"
+        )
+        guard let reusableReviewSubset = try reviewSubsetScanner.latestReusableDuplicateReviewScanReport() else {
+            throw SelfTestFailure("duplicate review should reuse the latest valid exact-duplicate root subset")
+        }
+        try require(
+            reusableReviewSubset.sessionID == reviewDuplicateScan.sessionID
+                && Set(reusableReviewSubset.roots.map(\.canonicalPath))
+                    == Set([reviewSubsetA.standardizedFileURL.path, reviewSubsetB.standardizedFileURL.path]),
+            "duplicate review should skip a newer unrelated scan and recover the latest valid duplicate snapshot"
+        )
+        let reusablePresentation = try DuplicateReviewPresentationBuilder.latest(
+            catalogURL: reviewSubsetCatalog
+        )
+        try require(
+            reusablePresentation.items.count == 1
+                && reusablePresentation.candidateResourceCount == 1
+                && reusablePresentation.scopeRootLabels.count == 2,
+            "duplicate-review GUI presentation should open the reusable root subset without requiring every active root"
+        )
+
         let takeoutSidecarRoot = temporary.appendingPathComponent("TakeoutSidecar", isDirectory: true)
         try fileManager.createDirectory(at: takeoutSidecarRoot, withIntermediateDirectories: true)
         let takeoutSidecarMedia = takeoutSidecarRoot.appendingPathComponent("IMG_2468.JPG")

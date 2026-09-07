@@ -6,7 +6,7 @@ public enum DuplicateReviewPresentationError: LocalizedError {
     public var errorDescription: String? {
         switch self {
         case .noReusableSnapshot:
-            return "No reusable complete scan snapshot matches the active root registry. Refresh the catalog before opening duplicate review."
+            return "No reusable exact-duplicate scan snapshot is available for the currently active roots. Refresh the duplicate comparison first."
         }
     }
 }
@@ -57,6 +57,7 @@ public struct DuplicateReviewPresentationItem: Identifiable, Sendable, Equatable
 public struct DuplicateReviewPresentation: Sendable, Equatable {
     public let sessionID: String
     public let policy: String
+    public let scopeRootLabels: [String]
     public let items: [DuplicateReviewPresentationItem]
 
     public var standaloneItemCount: Int {
@@ -77,7 +78,7 @@ public enum DuplicateReviewPresentationBuilder {
         catalogURL: URL = PhotoArchivePaths.defaultCatalogURL
     ) throws -> DuplicateReviewPresentation {
         let scanner = try ArchiveScanner(catalogURL: catalogURL)
-        guard let report = try scanner.latestReusableActiveRootsScanReport() else {
+        guard let report = try scanner.latestReusableDuplicateReviewScanReport() else {
             throw DuplicateReviewPresentationError.noReusableSnapshot
         }
         let plan = ReconciliationPlanner.makePlan(from: report)
@@ -126,6 +127,7 @@ public enum DuplicateReviewPresentationBuilder {
         return DuplicateReviewPresentation(
             sessionID: report.sessionID,
             policy: plan.policy,
+            scopeRootLabels: report.roots.map(\.label).sorted(),
             items: items
         )
     }

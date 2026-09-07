@@ -73,6 +73,10 @@ public final class ArchiveScanner {
         try catalog.latestReusableActiveRootsScanReport()
     }
 
+    public func latestReusableDuplicateReviewScanReport() throws -> ScanReport? {
+        try catalog.latestReusableDuplicateReviewScanReport()
+    }
+
     public func makeArchivePlan(
         from report: ScanReport,
         destinationURL: URL

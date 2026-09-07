@@ -109,6 +109,13 @@ private struct ReviewSummaryHeader: View {
                 Text("\(presentation.items.count)개 그룹 · \(presentation.candidateResourceCount)개 후보")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                if !presentation.scopeRootLabels.isEmpty {
+                    Text(presentation.scopeRootLabels.joined(separator: " + "))
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                        .lineLimit(1)
+                        .help("이 검토 snapshot에 포함된 위치")
+                }
             }
             Spacer(minLength: 8)
             Image(systemName: "checkmark.shield")
