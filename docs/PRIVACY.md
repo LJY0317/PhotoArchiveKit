@@ -127,6 +127,8 @@ raw digest와 path는 agent-safe output에 출력하지 않는다.
 
 native duplicate-review GUI도 같은 **local-private human surface**다. 사람이 사본을 직접 비교할 수 있도록 filename/path, 정확한 byte count, raw exact SHA-256, catalog/filesystem identifier, root marker/provenance/role, capture-time evidence, extended-attribute 이름/크기 같은 상세 정보를 표시할 수 있다. 이 정보는 GUI process 안에서만 읽고 agent-safe report나 public log로 승격하지 않는다. GUI에 보이는 cached hash/metadata는 사람이 비교하기 위한 evidence일 뿐 mutation authority가 아니며 실제 변경 작업은 기존 fresh verification boundary를 다시 통과해야 한다.
 
+GUI의 `검토 제출`은 별도 local decision bundle을 저장한다. 이 bundle은 schema/session/item/subject/resource의 opaque ID와 제출 시각만 포함하고 filename/path/hash/metadata dump를 저장하지 않는다. `photoarchive review-decisions --agent-json`은 같은 opaque decision만 출력하므로 사용자가 “제출했어”라고 알린 뒤 agent가 한 번에 검토 결과를 읽을 수 있다. 제출 자체는 파일 변경 권한이 아니며 실제 cleanup은 current plan과 fresh verification을 다시 통과해야 한다.
+
 `--agent-json`은 AI agent용 privacy-minimized output이다. 현재 다음을 제거한다.
 
 - catalog/root/file path

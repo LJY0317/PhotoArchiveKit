@@ -1929,6 +1929,37 @@ struct PhotoArchiveSelfTest {
             "native duplicate-review presentation should preserve the keeper rationale and local resource locations"
         )
 
+        let decisionURL = temporary.appendingPathComponent("review-decisions.json")
+        let decisionBundle = DuplicateReviewDecisionBundle(
+            sessionID: duplicateReviewPresentation.sessionID,
+            decisions: [
+                DuplicateReviewDecision(
+                    itemID: dateAddedItem.itemID,
+                    subjectID: dateAddedItem.subjectID,
+                    keptResourceIDs: [duplicateReviewPresentation.items[0].preferredResources[0].id],
+                    cleanupResourceIDs: [duplicateReviewPresentation.items[0].candidateResources[0].id]
+                )
+            ]
+        )
+        try DuplicateReviewDecisionStore.save(decisionBundle, to: decisionURL)
+        guard let loadedDecisionBundle = try DuplicateReviewDecisionStore.load(from: decisionURL) else {
+            throw SelfTestFailure("GUI duplicate-review decision bundle should be readable after save")
+        }
+        try require(
+            loadedDecisionBundle.schemaVersion == decisionBundle.schemaVersion
+                && loadedDecisionBundle.sessionID == decisionBundle.sessionID
+                && loadedDecisionBundle.decisions == decisionBundle.decisions
+                && abs(loadedDecisionBundle.submittedAt.timeIntervalSince(decisionBundle.submittedAt)) < 1.0,
+            "GUI duplicate-review decisions should round-trip through the local decision bundle"
+        )
+        let decisionText = try String(contentsOf: decisionURL, encoding: .utf8)
+        try require(
+            !decisionText.contains(rootA.path)
+                && !decisionText.contains(rootB.path)
+                && !decisionText.contains("IMG_5199.JPG"),
+            "submitted duplicate-review decisions must not persist filenames or paths"
+        )
+
         let trashCleanupRoot = temporary.appendingPathComponent("TrashCleanup", isDirectory: true)
         let trashCleanupNested = trashCleanupRoot
             .appendingPathComponent("nested/deeper", isDirectory: true)

@@ -119,6 +119,18 @@ public struct DuplicateReviewPresentationCopy: Identifiable, Sendable, Equatable
     public var totalByteSize: Int64 {
         resources.reduce(0) { $0 + $1.byteSize }
     }
+
+    public var hasLivePhotoStill: Bool {
+        resources.contains { $0.role == .photo }
+    }
+
+    public var hasPairedVideo: Bool {
+        resources.contains { $0.role == .pairedVideo }
+    }
+
+    public var isCompleteLivePhotoOccurrence: Bool {
+        hasLivePhotoStill && hasPairedVideo
+    }
 }
 
 public struct DuplicateReviewPresentationItem: Identifiable, Sendable, Equatable {
@@ -137,11 +149,25 @@ public struct DuplicateReviewPresentationItem: Identifiable, Sendable, Equatable
     }
 }
 
+public struct DuplicateReviewScopeRoot: Identifiable, Sendable, Equatable {
+    public let id: String
+    public let label: String
+
+    public init(id: String, label: String) {
+        self.id = id
+        self.label = label
+    }
+}
+
 public struct DuplicateReviewPresentation: Sendable, Equatable {
     public let sessionID: String
     public let policy: String
-    public let scopeRootLabels: [String]
+    public let scopeRoots: [DuplicateReviewScopeRoot]
     public let items: [DuplicateReviewPresentationItem]
+
+    public var scopeRootLabels: [String] {
+        scopeRoots.map(\.label)
+    }
 
     public var standaloneItemCount: Int {
         items.filter { $0.kind == .standaloneExactGroup }.count
@@ -235,7 +261,9 @@ public enum DuplicateReviewPresentationBuilder {
         return DuplicateReviewPresentation(
             sessionID: report.sessionID,
             policy: plan.policy,
-            scopeRootLabels: report.roots.map(\.label).sorted(),
+            scopeRoots: report.roots
+                .map { DuplicateReviewScopeRoot(id: $0.rootID, label: $0.label) }
+                .sorted { $0.label < $1.label },
             items: items
         )
     }

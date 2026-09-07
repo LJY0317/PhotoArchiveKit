@@ -29,6 +29,28 @@ struct ReviewRootView: View {
                 )
             }
 
+            ToolbarItem {
+                Menu {
+                    if let presentation = store.presentation {
+                        ForEach(presentation.scopeRoots) { root in
+                            Button {
+                                store.toggleRoot(root.id)
+                            } label: {
+                                Label(
+                                    root.label,
+                                    systemImage: store.selectedRootIDs.contains(root.id)
+                                        ? "checkmark.circle.fill"
+                                        : "circle"
+                                )
+                            }
+                        }
+                    }
+                } label: {
+                    Label("비교 위치", systemImage: "folder.badge.gearshape")
+                }
+                .help("현재 duplicate snapshot에서 비교할 registered root를 선택합니다")
+            }
+
             ToolbarItem(placement: .primaryAction) {
                 Button(action: store.reload) {
                     Label("다시 불러오기", systemImage: "arrow.clockwise")
@@ -38,6 +60,9 @@ struct ReviewRootView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .photoArchiveReloadReview)) { _ in
             store.reload()
+        }
+        .safeAreaInset(edge: .bottom) {
+            ReviewActionBar(store: store)
         }
     }
 
@@ -51,7 +76,7 @@ struct ReviewRootView: View {
             }
 
             List(store.visibleItems, selection: $store.selection) { item in
-                ReviewSidebarRow(item: item)
+                ReviewSidebarRow(item: item, isApproved: store.isApproved(item))
                     .tag(item.id)
             }
             .listStyle(.sidebar)
@@ -76,7 +101,13 @@ struct ReviewRootView: View {
             ReviewDetailView(
                 item: item,
                 index: (store.selectedIndex ?? 0) + 1,
-                total: store.visibleItems.count
+                total: store.visibleItems.count,
+                isApproved: store.isApproved(item),
+                cleanupCopyIDs: store.cleanupCopyIDsByItem[item.id, default: []],
+                onToggleCleanup: { store.toggleCleanup($0, item: item) },
+                onKeepOnly: { store.keepOnly($0, item: item) },
+                onApproveAndNext: { store.approveAndNext(item) },
+                onUnapprove: { store.unapprove(item) }
             )
         } else {
             ContentUnavailableView(
@@ -85,6 +116,42 @@ struct ReviewRootView: View {
                 description: Text("현재 검색에 표시할 automatic exact duplicate group이 없습니다.")
             )
         }
+    }
+}
+
+private struct ReviewActionBar: View {
+    @ObservedObject var store: ReviewStore
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Label("검토 완료 \(store.approvedCount)", systemImage: "checkmark.circle.fill")
+                .foregroundStyle(store.approvedCount > 0 ? .green : .secondary)
+            Text("남음 \(store.pendingCount)")
+                .foregroundStyle(.secondary)
+
+            if let status = store.statusMessage {
+                Divider().frame(height: 16)
+                Text(status)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+            }
+
+            Spacer()
+
+            Button {
+                store.submitApproved()
+            } label: {
+                Label("검토 제출 (\(store.approvedCount))", systemImage: "tray.and.arrow.down.fill")
+            }
+            .buttonStyle(.borderedProminent)
+            .disabled(store.approvedCount == 0)
+            .help("검토 결정을 로컬에 저장합니다. 파일은 아직 이동하지 않습니다.")
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 9)
+        .background(.bar)
+        .overlay(alignment: .top) { Divider() }
     }
 }
 
@@ -107,16 +174,13 @@ private struct ReviewSummaryHeader: View {
                         .help("이 검토 snapshot에 포함된 위치")
                 }
             }
-            Spacer(minLength: 8)
-            Image(systemName: "checkmark.shield")
-                .foregroundStyle(.secondary)
-                .help("읽기 전용 검토")
         }
     }
 }
 
 private struct ReviewSidebarRow: View {
     let item: DuplicateReviewPresentationItem
+    let isApproved: Bool
 
     var body: some View {
         HStack(spacing: 10) {
@@ -133,21 +197,23 @@ private struct ReviewSidebarRow: View {
                     Text("Exact duplicate")
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                    if item.kind == .livePhotoAsset {
-                        Text("Live Photo")
-                            .font(.caption2.weight(.medium))
-                            .foregroundStyle(.blue)
-                    }
                 }
             }
 
             Spacer(minLength: 8)
-            Text("\(candidateCopyCount)")
+            if isApproved {
+                Image(systemName: "checkmark.circle.fill")
+                    .foregroundStyle(.green)
+                    .help("검토 완료")
+            }
+            Label("\(candidateCopyCount)", systemImage: "minus.circle")
+                .labelStyle(.titleAndIcon)
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)
-                .padding(.horizontal, 7)
+                .padding(.horizontal, 6)
                 .padding(.vertical, 2)
                 .background(.quaternary, in: Capsule())
+                .help("현재 추천 정리 후보 \(candidateCopyCount)개")
         }
         .padding(.vertical, 3)
     }
@@ -168,6 +234,12 @@ private struct ReviewDetailView: View {
     let item: DuplicateReviewPresentationItem
     let index: Int
     let total: Int
+    let isApproved: Bool
+    let cleanupCopyIDs: Set<String>
+    let onToggleCleanup: (DuplicateReviewPresentationCopy) -> Void
+    let onKeepOnly: (DuplicateReviewPresentationCopy) -> Void
+    let onApproveAndNext: () -> Void
+    let onUnapprove: () -> Void
 
     var body: some View {
         GeometryReader { proxy in
@@ -202,8 +274,27 @@ private struct ReviewDetailView: View {
                         copies: copies,
                         labelWidth: labelWidth,
                         columnWidth: columnWidth,
-                        gap: gap
+                        gap: gap,
+                        cleanupCopyIDs: cleanupCopyIDs,
+                        isApproved: isApproved,
+                        onToggleCleanup: onToggleCleanup,
+                        onKeepOnly: onKeepOnly
                     )
+
+                    HStack {
+                        if isApproved {
+                            Label("이 그룹은 검토 완료 상태입니다", systemImage: "checkmark.circle.fill")
+                                .foregroundStyle(.green)
+                            Button("검토 완료 취소", action: onUnapprove)
+                        } else {
+                            Text("현재 표시된 남김/정리 선택을 확인한 뒤 승인하세요.")
+                                .foregroundStyle(.secondary)
+                            Button("현재 선택 승인하고 다음", action: onApproveAndNext)
+                                .buttonStyle(.borderedProminent)
+                        }
+                        Spacer()
+                    }
+                    .frame(width: contentWidth)
                 }
                 .frame(width: contentWidth, alignment: .leading)
                 .padding(.horizontal, horizontalPadding)
@@ -222,42 +313,32 @@ private struct ReviewDetailView: View {
     }
 
     private var header: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 8) {
-                Text("\(index) / \(total)")
-                    .font(.callout.monospacedDigit())
-                    .foregroundStyle(.secondary)
-                Text("EXACT")
-                    .font(.caption2.weight(.semibold))
-                    .padding(.horizontal, 7)
-                    .padding(.vertical, 3)
-                    .background(.quaternary, in: Capsule())
-                if item.kind == .livePhotoAsset {
-                    Label("Live Photo", systemImage: "livephoto")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            Text(rationaleTitle(item.rationale))
-                .font(.title2.weight(.semibold))
-
-            Text(rationaleDetail(item.rationale))
-                .font(.body)
+        HStack(spacing: 8) {
+            Text("\(index) / \(total)")
+                .font(.callout.monospacedDigit())
                 .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
-
+            Text("EXACT")
+                .font(.caption2.weight(.semibold))
+                .padding(.horizontal, 7)
+                .padding(.vertical, 3)
+                .background(.quaternary, in: Capsule())
+            if item.kind == .livePhotoAsset {
+                Image(systemName: "livephoto")
+                    .foregroundStyle(.blue)
+                    .help("Live Photo")
+            }
+            Text("추천 근거: \(rationaleTitle(item.rationale))")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Spacer()
             Text(
-                "item \(item.id)  ·  subject \(item.subjectID)  ·  "
-                    + "\(item.kind.rawValue)  ·  \(item.decision.rawValue)  ·  \(item.reason.rawValue)"
+                "item \(item.id) · \(item.reason.rawValue)"
             )
             .font(.caption2.monospaced())
             .foregroundStyle(.tertiary)
             .textSelection(.enabled)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(18)
-        .background(.background.secondary, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
     }
 }
 
@@ -267,6 +348,10 @@ private struct ReviewComparisonTable: View {
     let labelWidth: CGFloat
     let columnWidth: CGFloat
     let gap: CGFloat
+    let cleanupCopyIDs: Set<String>
+    let isApproved: Bool
+    let onToggleCleanup: (DuplicateReviewPresentationCopy) -> Void
+    let onKeepOnly: (DuplicateReviewPresentationCopy) -> Void
 
     private var rows: [ComparisonRowSpec] {
         comparisonRows(for: copies)
@@ -282,7 +367,14 @@ private struct ReviewComparisonTable: View {
                     .padding(.top, 8)
 
                 ForEach(copies) { copy in
-                    CopyHeaderCell(copy: copy, itemKind: item.kind)
+                    CopyHeaderCell(
+                        copy: copy,
+                        itemKind: item.kind,
+                        isMarkedForCleanup: cleanupCopyIDs.contains(copy.id),
+                        isApproved: isApproved,
+                        onToggleCleanup: { onToggleCleanup(copy) },
+                        onKeepOnly: { onKeepOnly(copy) }
+                    )
                         .frame(width: columnWidth, alignment: .top)
                 }
             }
@@ -308,21 +400,27 @@ private struct ReviewComparisonTable: View {
 private struct CopyHeaderCell: View {
     let copy: DuplicateReviewPresentationCopy
     let itemKind: ReconciliationItemKind
+    let isMarkedForCleanup: Bool
+    let isApproved: Bool
+    let onToggleCleanup: () -> Void
+    let onKeepOnly: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 7) {
                 Label(
-                    copy.isKeeper ? "KEEPER" : "CANDIDATE",
-                    systemImage: copy.isKeeper ? "checkmark.circle.fill" : "minus.circle"
+                    isMarkedForCleanup ? "정리" : "남김",
+                    systemImage: isMarkedForCleanup ? "trash.circle.fill" : "checkmark.circle.fill"
                 )
                 .font(.caption.weight(.semibold))
-                .foregroundStyle(copy.isKeeper ? .green : .secondary)
+                .foregroundStyle(isMarkedForCleanup ? .red : .green)
+
+                Text(copy.isKeeper ? "추천 keeper" : "추천 candidate")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
 
                 if itemKind == .livePhotoAsset {
-                    Label("Live Photo", systemImage: "livephoto")
-                        .font(.caption2)
-                        .foregroundStyle(.secondary)
+                    livePhotoIntegrityBadge
                 }
 
                 Spacer(minLength: 4)
@@ -334,6 +432,16 @@ private struct CopyHeaderCell: View {
             if let primary = copy.primaryResource {
                 ReviewThumbnail(url: primary.fileURL)
                     .frame(height: 260)
+                    .overlay(alignment: .topTrailing) {
+                        Image(systemName: isMarkedForCleanup ? "trash.circle.fill" : "checkmark.circle.fill")
+                            .font(.title2)
+                            .symbolRenderingMode(.hierarchical)
+                            .foregroundStyle(isMarkedForCleanup ? .red : .green)
+                            .padding(9)
+                    }
+                    .contentShape(Rectangle())
+                    .onTapGesture(perform: onToggleCleanup)
+                    .help(isMarkedForCleanup ? "클릭하면 정리 표시를 취소합니다" : "클릭하면 정리 대상으로 표시합니다")
 
                 Text(primary.fileName)
                     .font(.headline)
@@ -343,8 +451,10 @@ private struct CopyHeaderCell: View {
                     VStack(alignment: .leading, spacing: 3) {
                         ForEach(copy.resources) { resource in
                             HStack(spacing: 6) {
-                                Image(systemName: resource.mediaKind == .video ? "film" : "photo")
+                                Image(systemName: resource.role == .pairedVideo ? "checkmark.seal.fill" : (resource.mediaKind == .video ? "film" : "photo"))
+                                    .foregroundStyle(resource.role == .pairedVideo ? .green : .secondary)
                                 Text(resourceRoleLabel(resource.role))
+                                    .fontWeight(resource.role == .pairedVideo ? .semibold : .regular)
                                 Spacer(minLength: 4)
                                 Text(ByteCountFormatter.string(fromByteCount: resource.byteSize, countStyle: .file))
                                     .monospacedDigit()
@@ -357,14 +467,60 @@ private struct CopyHeaderCell: View {
             }
 
             if !copy.resources.isEmpty {
-                Button("Finder에서 보기") {
-                    NSWorkspace.shared.activateFileViewerSelecting(copy.resources.map(\.fileURL))
+                HStack {
+                    Button("Finder에서 보기") {
+                        NSWorkspace.shared.activateFileViewerSelecting(copy.resources.map(\.fileURL))
+                    }
+                    .buttonStyle(.borderless)
+
+                    Spacer()
+
+                    if itemKind != .livePhotoAsset || copy.isCompleteLivePhotoOccurrence {
+                        Button("이 사본만 남기기", action: onKeepOnly)
+                            .buttonStyle(.borderless)
+                    }
+
+                    Button(isMarkedForCleanup ? "정리 취소" : "정리 대상으로 표시", action: onToggleCleanup)
+                        .buttonStyle(.bordered)
                 }
-                .buttonStyle(.borderless)
             }
         }
         .padding(12)
-        .background(Color(nsColor: .controlBackgroundColor), in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .background(
+            isMarkedForCleanup ? Color.red.opacity(0.055) : Color(nsColor: .controlBackgroundColor),
+            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+        )
+        .overlay {
+            RoundedRectangle(cornerRadius: 12, style: .continuous)
+                .strokeBorder(
+                    isApproved
+                        ? (isMarkedForCleanup ? Color.red.opacity(0.4) : Color.green.opacity(0.4))
+                        : Color.primary.opacity(0.06),
+                    lineWidth: 1
+                )
+        }
+    }
+
+    @ViewBuilder
+    private var livePhotoIntegrityBadge: some View {
+        if copy.isCompleteLivePhotoOccurrence {
+            Label("Still + Paired Video", systemImage: "livephoto")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.green)
+                .help("온전한 Live Photo occurrence")
+        } else if copy.hasLivePhotoStill {
+            Label("Still only", systemImage: "exclamationmark.triangle.fill")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.orange)
+                .help("paired video가 없는 occurrence")
+        } else if copy.hasPairedVideo {
+            Label("Paired video only", systemImage: "exclamationmark.triangle.fill")
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(.orange)
+        } else {
+            Image(systemName: "livephoto")
+                .foregroundStyle(.secondary)
+        }
     }
 }
 

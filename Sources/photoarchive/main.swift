@@ -24,6 +24,8 @@ struct PhotoArchiveCLI {
                 try await runScan(arguments, mode: .plan)
             case "duplicate-review":
                 try await runScan(arguments, mode: .duplicateReview)
+            case "review-decisions":
+                try runReviewDecisions(arguments)
             case "organize-plan":
                 try await runScan(arguments, mode: .organizePlan)
             case "archive-plan":
@@ -1224,6 +1226,51 @@ struct PhotoArchiveCLI {
         print(String(decoding: data, as: UTF8.self))
     }
 
+    private static func runReviewDecisions(_ arguments: [String]) throws {
+        var outputJSON = false
+        var outputAgentJSON = false
+        for argument in arguments {
+            switch argument {
+            case "--json": outputJSON = true
+            case "--agent-json": outputAgentJSON = true
+            case "--help", "-h":
+                print(
+                    """
+                    Usage:
+                      photoarchive review-decisions [--json|--agent-json]
+
+                    Reads the latest GUI-submitted duplicate review decisions. The stored bundle
+                    contains only opaque session/item/subject/resource IDs and timestamps; it does
+                    not contain filenames or paths. This command never modifies media.
+                    """
+                )
+                return
+            default:
+                throw CLIError("Unknown review-decisions option: \(argument)")
+            }
+        }
+
+        guard let bundle = try DuplicateReviewDecisionStore.load() else {
+            if outputJSON || outputAgentJSON {
+                print("{\n  \"submitted\" : false\n}")
+            } else {
+                print("No submitted duplicate-review decisions.")
+            }
+            return
+        }
+
+        if outputJSON || outputAgentJSON {
+            try printJSON(bundle)
+        } else {
+            let cleanupResourceCount = bundle.decisions.reduce(0) { $0 + $1.cleanupResourceIDs.count }
+            print("PhotoArchiveKit submitted duplicate-review decisions")
+            print("Session: \(bundle.sessionID)")
+            print("Reviewed groups: \(bundle.decisions.count)")
+            print("Selected cleanup resources: \(cleanupResourceCount)")
+            print("No media files were modified.")
+        }
+    }
+
     private static func printReconciliationPlan(_ plan: ReconciliationPlan) {
         print("PhotoArchiveKit read-only reconciliation plan")
         print("Policy: \(plan.policy)")
@@ -1660,6 +1707,7 @@ struct PhotoArchiveCLI {
               photoarchive archive-coverage [options] ROOT...
               photoarchive plan [options] ROOT...
               photoarchive duplicate-review --output PATH [--candidate-root ROOT_ID_OR_PATH] [--preference-only] [--refresh] [options] [ROOT...]
+              photoarchive review-decisions [--json|--agent-json]
               photoarchive organize-plan [options] ROOT...
               photoarchive archive-plan --to PATH --output PLAN [options] ROOT...
               photoarchive archive-copy [--apply] [--to PATH] [--bind-root ROOT_ID=PATH] PLAN
@@ -1686,6 +1734,7 @@ struct PhotoArchiveCLI {
 
             Run 'photoarchive scan --help', 'photoarchive archive-coverage --help', 'photoarchive plan --help',
             'photoarchive duplicate-review --help',
+            'photoarchive review-decisions --help',
             'photoarchive organize-plan --help', 'photoarchive archive-plan --help',
             'photoarchive archive-copy --help',
             'photoarchive archive-index --help',
