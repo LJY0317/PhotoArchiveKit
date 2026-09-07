@@ -4,4 +4,6 @@ updates:
     directory: /
     schedule:
       interval: monthly
-    open-pull-requests-limit: 3
+    # Remote branches are intentionally limited to main/dev for now.
+    # Keep Dependabot version updates from opening temporary PR branches.
+    open-pull-requests-limit: 0
