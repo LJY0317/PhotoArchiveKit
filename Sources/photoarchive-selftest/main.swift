@@ -1483,20 +1483,89 @@ struct PhotoArchiveSelfTest {
             warnings: canonicalReport.warnings,
             filesModified: false
         )
+        let archiveRolePlan = ReconciliationPlanner.makePlan(from: roleChangedCanonicalReport)
+        guard let archiveSameRootItem = archiveRolePlan.items.first(where: {
+            $0.reason == .canonicalExactCopy
+                && $0.candidateResources.contains { $0.rootID == reclassifiedArchiveRoot.rootID }
+        }) else {
+            throw SelfTestFailure("an archive role should still dedupe exact copies inside the same root")
+        }
+        try require(
+            archiveSameRootItem.preferredResources.allSatisfy { $0.rootID == reclassifiedArchiveRoot.rootID }
+                && archiveSameRootItem.candidateResources.allSatisfy { $0.rootID == reclassifiedArchiveRoot.rootID },
+            "archive same-root dedupe must retain a survivor inside that archive root"
+        )
+        try require(
+            !archiveRolePlan.items.flatMap(\.candidateResources).contains {
+                $0.rootID == canonicalReport.roots.first(where: {
+                    $0.rootID != reclassifiedArchiveRoot.rootID && $0.usageRole == .archive
+                })?.rootID
+            },
+            "a separate archive replica must not be collapsed by generic reconciliation"
+        )
         let protectedCandidateQuarantine = temporary.appendingPathComponent(
             "ProtectedCandidateQuarantine",
             isDirectory: true
         )
         try fileManager.createDirectory(at: protectedCandidateQuarantine, withIntermediateDirectories: true)
+        let archiveDedupePreflight = try QuarantineExecutor.preflight(
+            report: roleChangedCanonicalReport,
+            plan: archiveRolePlan,
+            targetURL: protectedCandidateQuarantine
+        )
+        try require(
+            archiveDedupePreflight.resourceCount == 1,
+            "archive same-root exact dedupe should pass quarantine preflight"
+        )
+
+        let reclassifiedReferenceRoot = RootScanReport(
+            rootID: canonicalLocalRootReport.rootID,
+            label: canonicalLocalRootReport.label,
+            kind: .reference,
+            usageRole: .reference,
+            provenance: canonicalLocalRootReport.provenance,
+            canonicalPath: canonicalLocalRootReport.canonicalPath,
+            stableMarkerKey: canonicalLocalRootReport.stableMarkerKey,
+            mediaFileCount: canonicalLocalRootReport.mediaFileCount,
+            completeLivePhotos: canonicalLocalRootReport.completeLivePhotos,
+            stillOnlyLiveResources: canonicalLocalRootReport.stillOnlyLiveResources,
+            videoOnlyLiveResources: canonicalLocalRootReport.videoOnlyLiveResources,
+            standaloneImages: canonicalLocalRootReport.standaloneImages,
+            standaloneVideos: canonicalLocalRootReport.standaloneVideos,
+            sidecars: canonicalLocalRootReport.sidecars,
+            recognizedSidecars: canonicalLocalRootReport.recognizedSidecars,
+            unrecognizedSidecars: canonicalLocalRootReport.unrecognizedSidecars,
+            metadataProbeFailures: canonicalLocalRootReport.metadataProbeFailures,
+            sourceFolderSemanticsCaptured: canonicalLocalRootReport.sourceFolderSemanticsCaptured
+        )
+        let referenceRoleChangedReport = ScanReport(
+            schemaVersion: canonicalReport.schemaVersion,
+            sessionID: canonicalReport.sessionID,
+            startedAt: canonicalReport.startedAt,
+            completedAt: canonicalReport.completedAt,
+            catalogPath: canonicalReport.catalogPath,
+            summary: canonicalReport.summary,
+            roots: canonicalReport.roots.map {
+                $0.rootID == reclassifiedReferenceRoot.rootID ? reclassifiedReferenceRoot : $0
+            },
+            resources: canonicalReport.resources,
+            livePhotos: canonicalReport.livePhotos,
+            exactDuplicateGroups: canonicalReport.exactDuplicateGroups,
+            eventSuggestions: canonicalReport.eventSuggestions,
+            recognizedSidecars: canonicalReport.recognizedSidecars,
+            notices: canonicalReport.notices,
+            warnings: canonicalReport.warnings,
+            filesModified: false
+        )
         do {
             _ = try QuarantineExecutor.preflight(
-                report: roleChangedCanonicalReport,
+                report: referenceRoleChangedReport,
                 plan: canonicalPlan,
                 targetURL: protectedCandidateQuarantine
             )
-            throw SelfTestFailure("quarantine accepted a candidate root changed to archive after planning")
+            throw SelfTestFailure("quarantine accepted a candidate root changed to reference after planning")
         } catch QuarantineError.rootRoleDisallowsCleanup {
-            // Expected: executor enforces the current role independently of an older plan.
+            // Expected: reference remains read-only even for a previously valid same-root plan.
         }
 
         let filenamePolicyRoot = temporary.appendingPathComponent("FilenamePolicy", isDirectory: true)
@@ -1678,6 +1747,35 @@ struct PhotoArchiveSelfTest {
             Set(localDuplicateLiveItem.preferredResources.map(\.relativePath))
                 == Set(["IMG_0001.HEIC", "IMG_0001.MOV"]),
             "the shallower complete Live Photo occurrence should be the canonical keeper"
+        )
+        let archiveDuplicateLiveReport = syntheticLocalDuplicateLivePhotoReport(usageRole: .archive)
+        let archiveDuplicateLivePlan = ReconciliationPlanner.makePlan(from: archiveDuplicateLiveReport)
+        try require(
+            archiveDuplicateLivePlan.items.first(where: {
+                $0.reason == .canonicalLocalLivePhotoOccurrence
+            })?.candidateResources.count == 2,
+            "archive roots should dedupe a complete exact Live Photo occurrence inside the same root"
+        )
+        let unsafeTakeoutDuplicateLiveReport = syntheticLocalDuplicateLivePhotoReport(
+            usageRole: .importSource,
+            provenance: .googleTakeout,
+            sourceFolderSemanticsCaptured: false
+        )
+        try require(
+            ReconciliationPlanner.makePlan(from: unsafeTakeoutDuplicateLiveReport).summary
+                .automaticRedundantResourceCount == 0,
+            "Takeout same-root Live Photo dedupe must wait until source-folder semantics are captured"
+        )
+        let safeTakeoutDuplicateLiveReport = syntheticLocalDuplicateLivePhotoReport(
+            usageRole: .importSource,
+            provenance: .googleTakeout,
+            sourceFolderSemanticsCaptured: true
+        )
+        try require(
+            ReconciliationPlanner.makePlan(from: safeTakeoutDuplicateLiveReport).items.first(where: {
+                $0.reason == .canonicalLocalLivePhotoOccurrence
+            })?.candidateResources.count == 2,
+            "Takeout same-root Live Photo dedupe should become eligible after source-folder semantics are captured"
         )
 
         let quarantineRoot = temporary.appendingPathComponent("Quarantine", isDirectory: true)
@@ -2758,7 +2856,11 @@ private func syntheticOrganizationReport(
     )
 }
 
-private func syntheticLocalDuplicateLivePhotoReport() -> ScanReport {
+private func syntheticLocalDuplicateLivePhotoReport(
+    usageRole: RootUsageRole = .staging,
+    provenance: SourceProvenance = .localLibrary,
+    sourceFolderSemanticsCaptured: Bool = false
+) -> ScanReport {
     let rootID = "RLOCALDUPLIVE"
     let capture = CaptureTime(
         localTimestamp: "2026-08-14T17:42:31",
@@ -2856,8 +2958,9 @@ private func syntheticLocalDuplicateLivePhotoReport() -> ScanReport {
             RootScanReport(
                 rootID: rootID,
                 label: "Local",
-                kind: .inbox,
-                provenance: .localLibrary,
+                kind: usageRole.sourceKind,
+                usageRole: usageRole,
+                provenance: provenance,
                 canonicalPath: "/synthetic/local",
                 mediaFileCount: 4,
                 completeLivePhotos: 2,
@@ -2866,7 +2969,8 @@ private func syntheticLocalDuplicateLivePhotoReport() -> ScanReport {
                 standaloneImages: 0,
                 standaloneVideos: 0,
                 sidecars: 0,
-                metadataProbeFailures: 0
+                metadataProbeFailures: 0,
+                sourceFolderSemanticsCaptured: sourceFolderSemanticsCaptured
             )
         ],
         resources: [rootPhoto, rootVideo, nestedPhoto, nestedVideo],
@@ -2975,7 +3079,8 @@ private func syntheticCanonicalCoverageReport(
             standaloneImages: 0,
             standaloneVideos: 0,
             sidecars: 0,
-            metadataProbeFailures: 0
+            metadataProbeFailures: 0,
+            sourceFolderSemanticsCaptured: true
         )
     ]
     let livePhoto = LivePhotoAssetReport(

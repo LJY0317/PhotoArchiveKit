@@ -172,7 +172,7 @@ public enum ReconciliationPlanner {
         let reviewItems = items.filter { $0.decision == .review }
         return ReconciliationPlan(
             schemaVersion: 1,
-            policy: "canonical_exact_keeper_v4_role_aware",
+            policy: "canonical_exact_keeper_v5_root_retention_aware",
             sessionID: report.sessionID,
             summary: ReconciliationPlanSummary(
                 automaticItemCount: automaticItems.count,
@@ -200,7 +200,8 @@ public enum ReconciliationPlanner {
 
                 let byRoot = Dictionary(grouping: members, by: \.rootID)
                 for (rootID, rootMembers) in byRoot {
-                    guard CanonicalKeeperPolicy.allowsLocalExactDuplicateCleanup(rootsByID[rootID]),
+                    guard rootsByID[rootID]?.usageRole != .importSource,
+                          CanonicalKeeperPolicy.allowsSameRootExactDedupe(rootsByID[rootID]),
                           rootMembers.count > 1
                     else { continue }
                     let sorted = rootMembers.sorted {
@@ -219,6 +220,7 @@ public enum ReconciliationPlanner {
                 var retained = members.filter { !candidateKeys.contains(resourceKey($0)) }
                 let importMembers = retained.filter {
                     CanonicalKeeperPolicy.isImportCleanupRoot(rootsByID[$0.rootID])
+                        && CanonicalKeeperPolicy.importCleanupSemanticsAreSafe(rootsByID[$0.rootID])
                 }
                 let stableKeepers = retained.filter {
                     CanonicalKeeperPolicy.canRetainAgainstImportCleanup(rootsByID[$0.rootID])
@@ -230,7 +232,7 @@ public enum ReconciliationPlanner {
                     }
                 } else if importMembers.count > 1 {
                     let semanticsCaptured = importMembers.allSatisfy {
-                        rootsByID[$0.rootID]?.sourceFolderSemanticsCaptured == true
+                        CanonicalKeeperPolicy.importCleanupSemanticsAreSafe(rootsByID[$0.rootID])
                     }
                     if semanticsCaptured {
                         let sorted = importMembers.sorted {
@@ -267,7 +269,8 @@ public enum ReconciliationPlanner {
 
                 retained = members.filter { !candidateKeys.contains(resourceKey($0)) }
                 let localCandidateRootIDs = Set(candidates.compactMap { candidate -> String? in
-                    CanonicalKeeperPolicy.allowsLocalExactDuplicateCleanup(rootsByID[candidate.rootID])
+                    guard rootsByID[candidate.rootID]?.usageRole != .importSource else { return nil }
+                    return CanonicalKeeperPolicy.allowsSameRootExactDedupe(rootsByID[candidate.rootID])
                         ? candidate.rootID
                         : nil
                 })
@@ -284,7 +287,8 @@ public enum ReconciliationPlanner {
                 guard let canonical = preferred.first else { continue }
 
                 let hasLocalCandidate = candidates.contains {
-                    CanonicalKeeperPolicy.allowsLocalExactDuplicateCleanup(rootsByID[$0.rootID])
+                    rootsByID[$0.rootID]?.usageRole != .importSource
+                        && CanonicalKeeperPolicy.allowsSameRootExactDedupe(rootsByID[$0.rootID])
                 }
                 let onlyImport = retained.allSatisfy {
                     CanonicalKeeperPolicy.isImportCleanupRoot(rootsByID[$0.rootID])
@@ -325,7 +329,7 @@ public enum ReconciliationPlanner {
         for asset in report.livePhotos {
             let byRoot = Dictionary(grouping: asset.occurrences, by: \.rootID)
             for (rootID, occurrences) in byRoot {
-                guard CanonicalKeeperPolicy.allowsLocalExactDuplicateCleanup(rootsByID[rootID]),
+                guard CanonicalKeeperPolicy.allowsSameRootExactDedupe(rootsByID[rootID]),
                       occurrences.count > 1
                 else { continue }
                 let sorted = occurrences.sorted {
@@ -378,7 +382,7 @@ public enum ReconciliationPlanner {
             let takeoutResources = asset.occurrences
                 .filter {
                     rootsByID[$0.rootID]?.provenance == .googleTakeout
-                        && rootsByID[$0.rootID]?.usageRole == .importSource
+                        && CanonicalKeeperPolicy.importCleanupSemanticsAreSafe(rootsByID[$0.rootID])
                 }
                 .flatMap(\.resources)
             guard !takeoutResources.isEmpty else { continue }

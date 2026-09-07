@@ -25,9 +25,15 @@ enum CanonicalKeeperPolicy {
         CanonicalResourceKey(rootID: resource.rootID, relativePath: resource.relativePath)
     }
 
-    static func allowsLocalExactDuplicateCleanup(_ root: RootScanReport?) -> Bool {
+    static func allowsSameRootExactDedupe(_ root: RootScanReport?) -> Bool {
         guard let root else { return false }
-        return root.usageRole.allowsLocalExactDuplicateCleanup
+        guard root.usageRole.allowsSameRootExactDedupe else { return false }
+        if root.usageRole == .importSource,
+           root.provenance == .googleTakeout,
+           !root.sourceFolderSemanticsCaptured {
+            return false
+        }
+        return true
     }
 
     static func canRetainAgainstImportCleanup(_ root: RootScanReport?) -> Bool {
@@ -38,6 +44,14 @@ enum CanonicalKeeperPolicy {
     static func isImportCleanupRoot(_ root: RootScanReport?) -> Bool {
         guard let root else { return false }
         return root.usageRole == .importSource
+    }
+
+    static func importCleanupSemanticsAreSafe(_ root: RootScanReport?) -> Bool {
+        guard let root, root.usageRole == .importSource else { return false }
+        if root.provenance == .googleTakeout {
+            return root.sourceFolderSemanticsCaptured
+        }
+        return true
     }
 
     static func preferredResource(

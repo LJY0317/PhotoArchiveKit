@@ -54,11 +54,11 @@ iPhone/Apple Photos에서 직접 추출한 원본 계열
 
 - `staging`: 아직 장기 보관이 끝나지 않은 작업/임시 위치. 다른 장기 보호 root의 완전한 검증 전에는 반드시 보존한다.
 - `primary_library`: 사용자가 계속 유지하려는 주 라이브러리. 다른 replica가 있어도 이 root 자체를 offload cleanup 대상으로 보지 않는다.
-- `archive`: 장기 보관/protection target. automatic removal 대상이 아니다.
-- `import_source`: Takeout/export/camera dump 같은 입수처. exact coverage와 필요한 source semantics가 안전하게 보존될 때만 cleanup할 수 있다.
+- `archive`: 장기 보관/protection target. 같은 root 내부의 불필요한 exact duplicate는 대표 사본 하나를 그 archive 안에 남기고 정리할 수 있지만, 다른 root에 replica가 있다는 이유만으로 이 archive의 보존 사본 자체를 제거하지 않는다.
+- `import_source`: Takeout/export/camera dump 같은 입수처. 같은 root 내부 exact dedupe도 가능하되 Google Takeout처럼 folder/collection semantics가 필요한 source는 그 의미가 먼저 보존되어야 한다. 별도 retained copy를 근거로 한 더 큰 cleanup도 기존 coverage/semantics gate를 통과해야 한다.
 - `reference`: 비교 전용. PhotoArchiveKit mutation 대상이 아니며 다른 root를 자동 cleanup하기 위한 retention authority로도 사용하지 않는다.
 
-usage role은 provenance/provider capability와 별개다. 예를 들어 Google Drive의 서로 다른 folder를 archive/import/reference로 각각 등록할 수 있어야 한다. 역할 변경은 catalog policy만 바꾸며 그 순간 media를 move/delete하지 않는다. 실제 mutation은 새 역할에 따른 plan과 기존 fresh verification gate를 다시 통과해야 한다. executor도 role을 독립 재검증해 `archive`/`reference`를 automatic quarantine 후보로 받아들이지 않고, `reference`에서는 organization/empty-directory cleanup을 수행하지 않으며, 등록된 archive-copy destination은 current role이 `archive`여야 한다.
+usage role은 provenance/provider capability와 별개다. 예를 들어 Google Drive의 서로 다른 folder를 archive/import/reference로 각각 등록할 수 있어야 한다. 역할 변경은 catalog policy만 바꾸며 그 순간 media를 move/delete하지 않는다. 실제 mutation은 새 역할에 따른 plan과 기존 fresh verification gate를 다시 통과해야 한다. executor도 current role과 keeper 위치를 독립 재검증한다. `archive`는 same-root exact dedupe만 허용하고 generic cross-root replica collapse는 거부하며, `reference`는 모든 reconciliation/organization mutation을 거부한다. 등록된 archive-copy destination은 current role이 `archive`여야 한다.
 
 ## Curation과 archive의 역할 분리
 

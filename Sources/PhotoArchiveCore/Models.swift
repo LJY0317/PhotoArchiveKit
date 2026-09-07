@@ -27,12 +27,12 @@ public enum RootUsageRole: String, Codable, CaseIterable, Sendable {
         self == .primaryLibrary || self == .archive
     }
 
-    public var allowsLocalExactDuplicateCleanup: Bool {
-        self == .staging || self == .primaryLibrary
+    public var allowsSameRootExactDedupe: Bool {
+        self != .reference
     }
 
-    public var allowsAutomaticRedundantRemoval: Bool {
-        self == .staging || self == .primaryLibrary || self == .importSource
+    public var allowsReconciliationCrossRootCleanup: Bool {
+        self == .importSource
     }
 
     public var allowsOrganizationMutation: Bool {
@@ -43,12 +43,8 @@ public enum RootUsageRole: String, Codable, CaseIterable, Sendable {
         self == .staging || self == .primaryLibrary || self == .archive
     }
 
-    public var isCleanupSource: Bool {
-        self == .staging || self == .importSource
-    }
-
-    public var isMutationProtected: Bool {
-        self == .archive || self == .reference
+    public var isReadOnlyReference: Bool {
+        self == .reference
     }
 
     static func defaultForNewRoot(kind: SourceRootKind) -> RootUsageRole {

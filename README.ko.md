@@ -135,7 +135,7 @@ swift run photoarchive doctor
 swift run photoarchive scan --inbox "~/Photo Inbox"
 ```
 
-읽기 전용 preferred-representation plan을 생성할 수 있습니다. exact duplicate에는 root 역할을 반영한 canonical keeper 정책을 적용합니다. `staging`/`primary_library` root는 같은 root 안의 exact 중복을 대표 사본 하나로 줄일 수 있고, `archive`/`reference` root는 자동 제거 후보가 되지 않습니다. `import_source` 사본은 안전한 retained counterpart 또는 보존된 source semantics가 있을 때만 줄입니다. Live Photo occurrence는 항상 atomic하게 유지하고 해결되지 않은 variant만 review로 남깁니다.
+읽기 전용 preferred-representation plan을 생성할 수 있습니다. exact duplicate에는 root 역할을 반영한 canonical keeper 정책을 적용합니다. `staging`/`primary_library`/`archive` root는 같은 root 안의 exact 중복을 그 root의 대표 사본 하나로 줄일 수 있습니다. `import_source`도 Google Takeout folder membership 같은 필요한 source semantics가 보존된 뒤에는 same-root dedupe가 가능하고, 별도의 retained copy가 있을 때는 기존 import-cleanup gate에 따라 더 크게 정리할 수 있습니다. `reference`는 read-only입니다. primary/archive 사본은 다른 root에 같은 bytes가 있다는 이유만으로 generic reconciliation에서 제거하지 않으며 staging→archive offload는 별도 protection workflow로 남깁니다. Live Photo occurrence는 항상 atomic하게 유지하고 해결되지 않은 variant만 review로 남깁니다.
 
 ```bash
 swift run photoarchive plan \
@@ -391,7 +391,7 @@ sidecar 정책은 일반 사용자 중심입니다. 사용자가 JSON/XMP를 직
 
 exact-only Live Photo reconciliation은 `still_only` 또는 `video_only`인 불완전 occurrence라도 그 occurrence의 모든 resource가 Takeout 밖에 같은 role의 byte-identical counterpart를 가지고 있으면 occurrence 전체를 `automatic_redundant`로 판단할 수 있습니다. 다른 곳에 complete Live Photo가 반드시 있어야 하는 것은 아니며 occurrence 일부만 제거하지 않습니다. quarantine apply 직전에는 candidate와 keeper를 다시 fresh SHA-256으로 검증합니다.
 
-canonical keeper 선택은 등록된 모든 root의 backup 사본을 전 세계적으로 하나만 남기도록 collapse하는 정책이 아닙니다. 각 등록 root에는 사용자가 나중에 바꿀 수 있는 역할 하나를 지정합니다: `staging`, `primary_library`, `archive`, `import_source`, `reference`. staging은 임시 작업/보관 위치, primary library는 계속 유지할 주 보관 위치, archive는 장기 보호 대상, import source는 안전한 coverage/의미 보존 뒤 정리 가능한 입수처, reference는 비교 전용입니다. staging/primary 안의 byte-identical same-root copy는 대표 사본 하나를 남길 수 있지만 archive/reference는 자동 제거 후보가 되지 않습니다. 실제 quarantine 직전에는 여전히 candidate와 keeper의 full-file hash를 fresh 재검증합니다.
+canonical keeper 선택은 등록된 모든 root의 backup 사본을 전 세계적으로 하나만 남기도록 collapse하는 정책이 아닙니다. 각 등록 root에는 사용자가 나중에 바꿀 수 있는 역할 하나를 지정합니다: `staging`, `primary_library`, `archive`, `import_source`, `reference`. staging은 임시 작업/보관 위치, primary library는 계속 유지할 주 보관 위치, archive는 **장기 보존 책임을 유지하면서 내부 정리는 적극적으로 할 수 있는** protection target, import source는 필요한 coverage/의미 보존 뒤 정리 가능한 입수처, reference는 비교 전용 read-only 위치입니다. staging/primary/archive 안의 byte-identical same-root copy는 그 root 안에 대표 사본 하나를 남기고 정리할 수 있습니다. import source도 Google Takeout folder membership 같은 필요한 source semantics가 보존된 뒤에는 same-root exact dedupe가 가능하며, 별도의 안전한 retained copy가 있을 때는 기존 import-cleanup 규칙에 따라 더 크게 정리할 수 있습니다. 반대로 primary/archive 사본은 다른 root에 같은 bytes가 있다는 이유만으로 generic reconciliation에서 제거하지 않습니다. 실제 quarantine 직전에는 여전히 candidate와 keeper의 full-file hash를 fresh 재검증합니다.
 
 향후 local GUI에서는 이 판단의 private 정보를 사람이 바로 볼 수 있어야 합니다. duplicate group 하나를 한 묶음으로 보여주고, 그 안의 모든 physical copy에 실제 root/path와 protected/keeper/candidate badge를 표시하며 location별 filter를 제공하는 방식이 적합합니다. 이 화면은 **로컬 전용**이고 agent-safe report에는 계속 opaque group/root ID와 count만 전달합니다. 현재 human `scan`도 앞부분 duplicate group의 path를 보여주고 `--json`에는 전체 local-private 결과가 있지만, 장기적으로는 Krokiet처럼 위치를 그룹 안에서 바로 비교하는 GUI가 소비자 UX에 더 적합합니다.
 

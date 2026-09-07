@@ -285,6 +285,9 @@ public enum QuarantineExecutor {
         }
 
         let duplicateGroupByResource = duplicateGroupIndex(report.exactDuplicateGroups)
+        let duplicateGroupsByID = Dictionary(uniqueKeysWithValues: report.exactDuplicateGroups.map {
+            ($0.groupID, $0)
+        })
         var verifiedItems: [VerifiedItem] = []
         verifiedItems.reserveCapacity(automatic.count)
 
@@ -295,13 +298,13 @@ public enum QuarantineExecutor {
 
             var moves: [VerifiedMove] = []
             moves.reserveCapacity(item.candidateResources.count)
+            let plannedCandidateKeys = Set(item.candidateResources.map {
+                ResourceKey(rootID: $0.rootID, relativePath: $0.relativePath)
+            })
 
             for candidate in item.candidateResources {
                 guard let sourceRoot = rootsByID[candidate.rootID] else {
                     throw QuarantineError.missingRoot(candidate.rootID)
-                }
-                guard sourceRoot.usageRole.allowsAutomaticRedundantRemoval else {
-                    throw QuarantineError.rootRoleDisallowsCleanup(candidate.rootID)
                 }
                 let sourceRootURL = URL(fileURLWithPath: sourceRoot.canonicalPath)
                     .resolvingSymlinksInPath()
@@ -317,7 +320,9 @@ public enum QuarantineExecutor {
                 )
 
                 let key = ResourceKey(rootID: candidate.rootID, relativePath: candidate.relativePath)
-                guard let groupID = duplicateGroupByResource[key] else {
+                guard let groupID = duplicateGroupByResource[key],
+                      let duplicateGroup = duplicateGroupsByID[groupID]
+                else {
                     throw QuarantineError.missingPreferredMatch(sourceURL.path)
                 }
 
@@ -326,11 +331,27 @@ public enum QuarantineExecutor {
                     let preferredKey = ResourceKey(rootID: preferred.rootID, relativePath: preferred.relativePath)
                     return duplicateGroupByResource[preferredKey] == groupID
                 }
-                let preferred = preferredCandidates.first
+                let preferred = preferredCandidates.first ?? duplicateGroup.members.first { member in
+                    guard member.rootID == candidate.rootID,
+                          member.role == candidate.role
+                    else {
+                        return false
+                    }
+                    return !plannedCandidateKeys.contains(
+                        ResourceKey(rootID: member.rootID, relativePath: member.relativePath)
+                    )
+                }
                 guard let preferred,
                       let preferredRoot = rootsByID[preferred.rootID]
                 else {
                     throw QuarantineError.missingPreferredMatch(sourceURL.path)
+                }
+                guard roleAllowsReconciliationCleanup(
+                    sourceRoot: sourceRoot,
+                    preferredRoot: preferredRoot,
+                    sameRoot: preferred.rootID == candidate.rootID
+                ) else {
+                    throw QuarantineError.rootRoleDisallowsCleanup(candidate.rootID)
                 }
 
                 let preferredRootURL = URL(fileURLWithPath: preferredRoot.canonicalPath)
@@ -390,6 +411,31 @@ public enum QuarantineExecutor {
         }
 
         return (targetURL, verifiedItems)
+    }
+
+    private static func roleAllowsReconciliationCleanup(
+        sourceRoot: RootScanReport,
+        preferredRoot: RootScanReport,
+        sameRoot: Bool
+    ) -> Bool {
+        switch sourceRoot.usageRole {
+        case .reference:
+            return false
+        case .staging, .primaryLibrary, .archive:
+            // These roles may dedupe inside themselves, but generic reconciliation must
+            // never collapse the root itself merely because another root has a replica.
+            return sameRoot && sourceRoot.usageRole.allowsSameRootExactDedupe
+        case .importSource:
+            if sourceRoot.provenance == .googleTakeout,
+               !sourceRoot.sourceFolderSemanticsCaptured {
+                return false
+            }
+            if sameRoot {
+                return sourceRoot.usageRole.allowsSameRootExactDedupe
+            }
+            return sourceRoot.usageRole.allowsReconciliationCrossRootCleanup
+                && preferredRoot.usageRole.canRetainAgainstImportCleanup
+        }
     }
 
     private static func validateLivePhotoAtomicity(
