@@ -2039,6 +2039,93 @@ final class SQLiteCatalog {
         return output
     }
 
+    func duplicateReviewResourceDetails(
+        resourceIDs: [String]
+    ) throws -> [String: DuplicateReviewResourceDetails] {
+        let uniqueIDs = Array(Set(resourceIDs)).sorted()
+        guard !uniqueIDs.isEmpty else { return [:] }
+
+        var output: [String: DuplicateReviewResourceDetails] = [:]
+        for start in stride(from: 0, to: uniqueIDs.count, by: 300) {
+            let end = min(start + 300, uniqueIDs.count)
+            let chunk = Array(uniqueIDs[start..<end])
+            let placeholders = Array(repeating: "?", count: chunk.count).joined(separator: ",")
+            let sql = """
+                SELECT r.id, r.file_extension, r.modified_at, r.exact_hash,
+                       r.live_identifier_fingerprint, r.metadata_probe_failed,
+                       r.last_seen_session,
+                       ron.original_file_name, ron.first_seen_session,
+                       rfi.filesystem_identifier,
+                       rlms.status,
+                       rmcs.probe_version,
+                       (SELECT COUNT(*) FROM resource_locations rl WHERE rl.resource_id = r.id),
+                       (SELECT MIN(first_seen_at) FROM resource_locations rl WHERE rl.resource_id = r.id),
+                       (SELECT MAX(last_seen_at) FROM resource_locations rl WHERE rl.resource_id = r.id)
+                FROM resources r
+                LEFT JOIN resource_original_names ron ON ron.resource_id = r.id
+                LEFT JOIN resource_file_ids rfi ON rfi.resource_id = r.id
+                LEFT JOIN resource_live_metadata_status rlms ON rlms.resource_id = r.id
+                LEFT JOIN resource_metadata_cache_state rmcs ON rmcs.resource_id = r.id
+                WHERE r.id IN (\(placeholders))
+                """
+            let rows: [DuplicateReviewResourceDetails] = try withStatement(
+                sql,
+                bindings: chunk.map(SQLiteBinding.text)
+            ) { statement in
+                var values: [DuplicateReviewResourceDetails] = []
+                while true {
+                    let result = sqlite3_step(statement)
+                    if result == SQLITE_DONE { break }
+                    guard result == SQLITE_ROW,
+                          let resourceText = sqlite3_column_text(statement, 0),
+                          let extensionText = sqlite3_column_text(statement, 1),
+                          let lastSessionText = sqlite3_column_text(statement, 6)
+                    else {
+                        throw sqliteError(sql: "SELECT duplicate review resource details")
+                    }
+
+                    func blobHex(_ column: Int32) -> String? {
+                        guard sqlite3_column_type(statement, column) != SQLITE_NULL,
+                              let bytes = sqlite3_column_blob(statement, column)
+                        else { return nil }
+                        let data = Data(bytes: bytes, count: Int(sqlite3_column_bytes(statement, column)))
+                        return data.map { String(format: "%02x", $0) }.joined()
+                    }
+
+                    values.append(DuplicateReviewResourceDetails(
+                        resourceID: String(cString: resourceText),
+                        fileExtension: String(cString: extensionText),
+                        catalogModifiedAt: sqlite3_column_type(statement, 2) == SQLITE_NULL
+                            ? nil
+                            : Date(timeIntervalSince1970: sqlite3_column_double(statement, 2)),
+                        exactSHA256Hex: blobHex(3),
+                        liveIdentifierFingerprintHex: blobHex(4),
+                        metadataProbeFailed: sqlite3_column_int64(statement, 5) != 0,
+                        lastSeenSessionID: String(cString: lastSessionText),
+                        originalFileName: sqlite3_column_text(statement, 7).map { String(cString: $0) },
+                        originalNameFirstSeenSessionID: sqlite3_column_text(statement, 8).map { String(cString: $0) },
+                        catalogFileSystemIdentifier: sqlite3_column_text(statement, 9).map { String(cString: $0) },
+                        liveTimedMetadataStatus: sqlite3_column_text(statement, 10)
+                            .flatMap { LivePhotoTimedMetadataStatus(rawValue: String(cString: $0)) },
+                        metadataProbeVersion: sqlite3_column_type(statement, 11) == SQLITE_NULL
+                            ? nil
+                            : Int(sqlite3_column_int64(statement, 11)),
+                        locationHistoryCount: Int(sqlite3_column_int64(statement, 12)),
+                        firstSeenAt: sqlite3_column_type(statement, 13) == SQLITE_NULL
+                            ? nil
+                            : Date(timeIntervalSince1970: sqlite3_column_double(statement, 13)),
+                        lastSeenAt: sqlite3_column_type(statement, 14) == SQLITE_NULL
+                            ? nil
+                            : Date(timeIntervalSince1970: sqlite3_column_double(statement, 14))
+                    ))
+                }
+                return values
+            }
+            for row in rows { output[row.resourceID] = row }
+        }
+        return output
+    }
+
     private func cachedCompletedScanSessions(limit: Int) throws -> [CachedScanSessionRow] {
         try withStatement(
             """

@@ -125,6 +125,8 @@ raw digest와 path는 agent-safe output에 출력하지 않는다.
 
 `--json`은 사람이 로컬에서 troubleshooting할 때 쓰는 diagnostic output이다. path와 filename 같은 개인 file detail을 포함할 수 있으므로 AI agent에 그대로 전달하지 않는다.
 
+native duplicate-review GUI도 같은 **local-private human surface**다. 사람이 사본을 직접 비교할 수 있도록 filename/path, 정확한 byte count, raw exact SHA-256, catalog/filesystem identifier, root marker/provenance/role, capture-time evidence, extended-attribute 이름/크기 같은 상세 정보를 표시할 수 있다. 이 정보는 GUI process 안에서만 읽고 agent-safe report나 public log로 승격하지 않는다. GUI에 보이는 cached hash/metadata는 사람이 비교하기 위한 evidence일 뿐 mutation authority가 아니며 실제 변경 작업은 기존 fresh verification boundary를 다시 통과해야 한다.
+
 `--agent-json`은 AI agent용 privacy-minimized output이다. 현재 다음을 제거한다.
 
 - catalog/root/file path

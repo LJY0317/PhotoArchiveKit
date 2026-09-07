@@ -489,6 +489,14 @@ struct PhotoArchiveSelfTest {
                 && reusablePresentation.scopeRootLabels.count == 2,
             "duplicate-review GUI presentation should open the reusable root subset without requiring every active root"
         )
+        try require(
+            reusablePresentation.items[0].copies.count == 2
+                && reusablePresentation.items[0].copies.filter(\.isKeeper).count == 1
+                && reusablePresentation.items[0].allResources.allSatisfy {
+                    $0.details?.exactSHA256Hex?.count == 64 && $0.fileSystemFacts.exists
+                },
+            "duplicate-review GUI should expose one comparison column per standalone copy with rich local-only catalog/filesystem facts"
+        )
 
         let takeoutSidecarRoot = temporary.appendingPathComponent("TakeoutSidecar", isDirectory: true)
         try fileManager.createDirectory(at: takeoutSidecarRoot, withIntermediateDirectories: true)
@@ -1993,6 +2001,21 @@ struct PhotoArchiveSelfTest {
             Set(localDuplicateLiveItem.preferredResources.map(\.relativePath))
                 == Set(["IMG_0001.HEIC", "IMG_0001.MOV"]),
             "the shallower complete Live Photo occurrence should be the canonical keeper"
+        )
+        let localDuplicateLivePresentation = DuplicateReviewPresentationBuilder.makePresentation(
+            report: localDuplicateLiveReport,
+            plan: localDuplicateLivePlan
+        )
+        guard let localDuplicateLivePresentationItem = localDuplicateLivePresentation.items.first(where: {
+            $0.reason == .canonicalLocalLivePhotoOccurrence
+        }) else {
+            throw SelfTestFailure("Live Photo duplicate-review presentation item missing")
+        }
+        try require(
+            localDuplicateLivePresentationItem.copies.count == 2
+                && localDuplicateLivePresentationItem.copies.allSatisfy { $0.resources.count == 2 }
+                && localDuplicateLivePresentationItem.copies.filter(\.isKeeper).count == 1,
+            "duplicate-review GUI should group still+paired-video resources into one comparison column per Live Photo occurrence"
         )
         let archiveDuplicateLiveReport = syntheticLocalDuplicateLivePhotoReport(usageRole: .archive)
         let archiveDuplicateLivePlan = ReconciliationPlanner.makePlan(from: archiveDuplicateLiveReport)

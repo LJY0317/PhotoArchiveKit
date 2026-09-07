@@ -77,6 +77,12 @@ public final class ArchiveScanner {
         try catalog.latestReusableDuplicateReviewScanReport()
     }
 
+    public func duplicateReviewResourceDetails(
+        resourceIDs: [String]
+    ) throws -> [String: DuplicateReviewResourceDetails] {
+        try catalog.duplicateReviewResourceDetails(resourceIDs: resourceIDs)
+    }
+
     public func makeArchivePlan(
         from report: ScanReport,
         destinationURL: URL
