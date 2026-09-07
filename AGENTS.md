@@ -20,7 +20,7 @@
 ## 안전
 - 기본 동작은 read-only 검사다. `scan`, `plan`과 미래의 변경 작업인 `apply`를 분리한다.
 - 초기 release에는 영구 삭제를 구현하지 않는다. copy, verify, catalog commit, quarantine을 우선한다.
-- duplicate cleanup destination은 AI prompt나 별도 agent policy가 아니라 PhotoArchiveKit의 저장된 product settings를 따른다. 기본값은 OS Trash/Recycle Bin이고 사용자가 명시적으로 설정한 경우에만 app-managed custom quarantine을 사용한다. 개인 경로는 repository에 hard-code/commit하지 않는다.
+- duplicate cleanup destination은 PhotoArchiveKit의 저장된 product settings를 따른다. 기본값은 OS Trash/Recycle Bin이고 사용자가 명시적으로 설정한 경우에만 app-managed custom quarantine을 사용한다. 개인 경로는 repository에 hard-code/commit하지 않는다.
 - duplicate cleanup으로 source 하위 폴더가 실제로 비게 되면 해당 operation이 직접 비운 parent chain만 registered root 직전까지 deepest-first 정리한다. root, package/symlink boundary, 비어 있지 않은 폴더는 건드리지 않는다.
 - source 또는 archive root를 사용할 수 없다는 사실은 파일이 삭제되었다는 증거가 아니다. missing file을 reconcile하기 전에 검증된 root marker를 요구한다.
 - 기존 사용자 변경을 보존하고 migration은 되돌릴 수 있게 유지한다.

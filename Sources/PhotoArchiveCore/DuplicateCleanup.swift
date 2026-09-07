@@ -331,8 +331,16 @@ enum EmptyParentDirectoryCleaner {
                   values.isDirectory == true,
                   values.isSymbolicLink != true,
                   values.isPackage != true,
-                  let contents = try? fileManager.contentsOfDirectory(atPath: directory.path),
-                  contents.isEmpty
+                  let contents = try? fileManager.contentsOfDirectory(
+                    at: directory,
+                    includingPropertiesForKeys: [
+                        .isRegularFileKey,
+                        .isSymbolicLinkKey,
+                        .isDirectoryKey
+                    ],
+                    options: []
+                  ),
+                  contents.allSatisfy({ isIgnorableFilesystemResidue($0) })
             else {
                 continue
             }
@@ -341,6 +349,37 @@ enum EmptyParentDirectoryCleaner {
             }
         }
         return removed
+    }
+
+    private static func isIgnorableFilesystemResidue(_ url: URL) -> Bool {
+        guard let values = try? url.resourceValues(forKeys: [
+            .isRegularFileKey,
+            .isSymbolicLinkKey,
+            .isDirectoryKey
+        ]),
+        values.isRegularFile == true,
+        values.isSymbolicLink != true,
+        values.isDirectory != true
+        else {
+            return false
+        }
+
+        let name = url.lastPathComponent
+        let lowercased = name.lowercased()
+        if lowercased == ".ds_store"
+            || lowercased == "thumbs.db"
+            || lowercased == "ehthumbs.db"
+            || lowercased == "desktop.ini"
+            || lowercased == ".directory"
+            || lowercased == ".localized"
+            || lowercased == "icon\r"
+        {
+            return true
+        }
+
+        // AppleDouble metadata can remain on non-Apple filesystems after the
+        // corresponding primary file has already been moved away.
+        return name.hasPrefix("._")
     }
 
     private static func isDescendant(_ child: URL, of parent: URL) -> Bool {

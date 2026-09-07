@@ -58,6 +58,8 @@ usage role은 provenance/provider capability와 별개다. 예를 들어 Google 
 
 OS Trash를 사용할 수 없거나 volume/network 제약 때문에 안전한 reversible move를 보장할 수 없으면 자동으로 permanent unlink/remove로 fallback하지 않는다. 명시적인 user-configured quarantine을 요구하거나 operation을 중단한다. 초기 release의 permanent delete 부재 원칙은 그대로 유지한다.
 
+duplicate cleanup 뒤의 empty-parent 정리는 해당 operation이 직접 비운 source parent chain으로 제한한다. registered root, package/symlink boundary, 의미를 알 수 없는 hidden file은 보존한다. 다만 `.DS_Store`, AppleDouble `._*`, Windows thumbnail/folder metadata, KDE `.directory`처럼 OS/file-manager가 재생성할 수 있다고 명시적으로 아는 residue만 남은 경우에는 사실상 빈 directory로 보고 residue와 directory를 함께 정리할 수 있다.
+
 duplicate cleanup apply가 성공한 뒤에는 **그 operation의 source candidate가 있던 parent chain만** empty-directory cleanup 대상으로 삼는다. registered root 자체, package/symlink boundary, 다른 항목이 남은 directory는 제거하지 않는다. 모든 candidate move가 성공하기 전에는 empty-directory cleanup을 시작하지 않는다.
 
 ## Curation과 archive의 역할 분리

@@ -1857,6 +1857,14 @@ struct PhotoArchiveSelfTest {
         let trashCandidate = trashCleanupNested.appendingPathComponent("keeper 2.jpg")
         try trashCleanupBytes.write(to: trashKeeper)
         try trashCleanupBytes.write(to: trashCandidate)
+        try Data().write(to: trashCleanupNested.appendingPathComponent(".DS_Store"))
+        try Data().write(to: trashCleanupNested.appendingPathComponent("Thumbs.db"))
+        try Data().write(to: trashCleanupNested.appendingPathComponent("._keeper 2.jpg"))
+        try Data().write(
+            to: trashCleanupRoot
+                .appendingPathComponent("nested", isDirectory: true)
+                .appendingPathComponent("desktop.ini")
+        )
         let trashCleanupCatalog = temporary.appendingPathComponent("trash-cleanup.sqlite3")
         let trashCleanupScanner = try ArchiveScanner(catalogURL: trashCleanupCatalog)
         let trashCleanupReport = try await trashCleanupScanner.scan(roots: [

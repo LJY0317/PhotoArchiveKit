@@ -185,6 +185,8 @@ Dry-run을 확인한 뒤에만 `--apply`를 붙이면 fresh verification을 다�
 
 사용자가 app-managed 임시 휴지통을 원하면 product setting을 바꿀 수 있습니다. 이 경우 기존처럼 restore manifest가 생성됩니다. `--to PATH`는 한 번의 실행에서만 saved setting을 custom quarantine으로 override하고, `--trash`는 반대로 한 번만 macOS Trash를 강제합니다.
 
+중복 candidate 이동이 모두 성공한 뒤에는 그 이동 때문에 비게 된 source parent chain만 registered root 직전까지 정리합니다. `.DS_Store`, AppleDouble `._*`, Windows `Thumbs.db`/`ehthumbs.db`/`desktop.ini`, KDE `.directory`처럼 OS/file-manager가 다시 만들 수 있는 알려진 metadata 파일만 남아 있으면 사실상 빈 폴더로 취급해 함께 제거합니다. 임의의 hidden file, symlink, package, 다른 하위 directory가 있으면 보존합니다.
+
 ```bash
 swift run photoarchive settings deletion-destination trash
 swift run photoarchive settings deletion-destination quarantine "/path/to/custom quarantine"

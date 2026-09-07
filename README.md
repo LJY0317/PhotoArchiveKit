@@ -185,6 +185,8 @@ Only after reviewing the dry run, add `--apply` to send the freshly re-verified 
 
 Users who want an app-managed temporary-trash location can change the product setting; that mode retains the existing restore-manifest workflow. `--to PATH` overrides the saved destination with a custom quarantine for one invocation, while `--trash` forces the macOS Trash for one invocation.
 
+After every duplicate candidate has moved successfully, PhotoArchiveKit prunes only the source parent chain that became empty because of that operation, stopping before the registered root. A directory is also treated as effectively empty when its only remaining files are known regenerable OS/file-manager metadata such as macOS `.DS_Store` or AppleDouble `._*`, Windows `Thumbs.db`/`ehthumbs.db`/`desktop.ini`, or KDE `.directory`. Unknown hidden files, symlinks, packages, and other subdirectories remain blockers.
+
 ```bash
 swift run photoarchive settings deletion-destination trash
 swift run photoarchive settings deletion-destination quarantine "/path/to/custom quarantine"
