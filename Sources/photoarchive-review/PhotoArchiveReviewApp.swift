@@ -1,7 +1,32 @@
+import AppKit
 import SwiftUI
+
+final class PhotoArchiveReviewAppDelegate: NSObject, NSApplicationDelegate {
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    func applicationShouldHandleReopen(
+        _ sender: NSApplication,
+        hasVisibleWindows flag: Bool
+    ) -> Bool {
+        if !flag {
+            sender.windows.first?.makeKeyAndOrderFront(nil)
+        }
+        sender.activate(ignoringOtherApps: true)
+        return true
+    }
+
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        true
+    }
+}
 
 @main
 struct PhotoArchiveReviewApp: App {
+    @NSApplicationDelegateAdaptor(PhotoArchiveReviewAppDelegate.self) private var appDelegate
+
     var body: some Scene {
         WindowGroup("PhotoArchiveKit") {
             ReviewRootView()
