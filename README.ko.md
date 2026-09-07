@@ -82,7 +82,7 @@ byte 보존 복제본          provenance와 이력
 - `cleanup-empty-dirs`는 완료된 organization manifest와 catalog location history에 실제로 기록된 source directory만 대상으로 하며, stable root marker를 확인하고 package/symlink boundary를 제외한 뒤 apply 순간에도 완전히 빈 directory만 제거
 - 사람이 읽는 report와 privacy-safe JSON report 제공
 - 선택적 외부 도구의 설치 여부만 감지하며 필수 의존성으로 만들지 않음
-- strong `automatic_redundant` exact 후보를 fresh SHA-256으로 preferred copy와 다시 검증한 뒤 local quarantine dry-run/apply 가능; preference-sensitive keeper 선택은 사람이 검토한 현재 plan item을 반복 가능한 `--approve-item ITEM_ID`로 명시 승인한 경우에만 mutation authority를 얻고, Live Photo candidate set은 해당 item의 모든 resource 검증이 끝난 뒤에만 이동
+- strong `automatic_redundant` exact 후보를 fresh SHA-256으로 preferred copy와 다시 검증한 뒤 duplicate cleanup dry-run/apply 가능. 기본 destination은 macOS Trash이며 사용자가 product setting으로 custom quarantine 폴더를 선택할 수 있다. preference-sensitive keeper 선택은 사람이 검토한 현재 plan item을 반복 가능한 `--approve-item ITEM_ID`로 명시 승인한 경우에만 mutation authority를 얻고, Live Photo candidate set은 해당 item의 모든 resource 검증이 끝난 뒤에만 이동
 - Google Takeout의 source-folder/album-like membership을 local SQLite에 먼저 보존한 뒤 Takeout-only exact standalone copy를 물리적으로 collapse할 수 있으며, collection 이름/path는 agent-safe output에 노출하지 않음
 - 적용된 quarantine session에 local restore manifest를 남기고, 이동 중 오류가 발생하면 그 session에서 이미 이동한 resource 전체를 rollback하며, `restore-quarantine`도 local catalog의 원래 SHA-256 evidence와 quarantined byte를 fresh 검증한 뒤에만 dry-run/apply
 - 현재 모든 분석 단계는 network에 접속하지 않음
@@ -173,18 +173,25 @@ swift run photoarchive archive-coverage --agent-json \
 
 이 session에 넘긴 root만 current coverage 계산에 포함됩니다. 다만 부모 root 아래에 별도 등록된 active/inactive nested root가 있으면 그 하위 영역은 부모가 다시 소유하지 않도록 자동 제외됩니다. `root remove`로 등록을 해제한 뒤에만 부모 scan이 그 파일을 다시 포함합니다. 다른 Mac folder나 다른 외장장치에서 가져온 media의 source location까지 비교하려면 그 위치를 적절한 `--local`, `--import`, `--reference` root로 한 번은 등록·scan해야 합니다.
 
-아무 파일도 이동하지 않고 quarantine 후보를 먼저 검증합니다.
+아무 파일도 이동하지 않고 duplicate cleanup 후보를 먼저 검증합니다. 저장된 기본 destination은 macOS Trash입니다.
 
 ```bash
 swift run photoarchive quarantine \
-  --to "~/PhotoArchiveKit Quarantine" \
   --local "~/Pictures" \
   --takeout "~/Pictures/Takeout"
 ```
 
-Dry-run을 확인한 뒤에만 `--apply`를 붙이면 fresh verification을 다시 통과한 `automatic_redundant` resource만 이동합니다. `REVIEW` 항목은 이 명령이 절대 이동하지 않습니다. 적용된 session은 quarantine 폴더 안의 `PhotoArchiveKit/<session-id>/` 아래에 원래 위치를 복원할 수 있는 local manifest와 함께 보존됩니다.
+Dry-run을 확인한 뒤에만 `--apply`를 붙이면 fresh verification을 다시 통과한 `automatic_redundant` resource만 macOS Trash로 보냅니다. `REVIEW` 항목은 이 명령이 절대 이동하지 않습니다. 모든 candidate 이동이 성공한 뒤 이번 operation 때문에 비게 된 source parent chain만 registered root 직전까지 정리하며 root/package/symlink/non-empty directory는 보존합니다.
 
-현재 CLI는 `--to`로 app-managed quarantine 위치를 명시합니다. 배포용 UI의 일반적인 삭제 동작은 OS Trash/Recycle Bin을 기본으로 하고, 사용자가 지정한 임시 휴지통/quarantine 폴더를 선택 가능한 대안으로 제공하는 방향입니다. 어느 쪽도 안전하게 사용할 수 없을 때 permanent delete로 자동 fallback하지 않습니다.
+사용자가 app-managed 임시 휴지통을 원하면 product setting을 바꿀 수 있습니다. 이 경우 기존처럼 restore manifest가 생성됩니다. `--to PATH`는 한 번의 실행에서만 saved setting을 custom quarantine으로 override하고, `--trash`는 반대로 한 번만 macOS Trash를 강제합니다.
+
+```bash
+swift run photoarchive settings deletion-destination trash
+swift run photoarchive settings deletion-destination quarantine "/path/to/custom quarantine"
+swift run photoarchive settings show
+```
+
+설정이 없는 새 Mac은 `system_trash`가 기본입니다. 어느 reversible destination도 안전하게 사용할 수 없을 때 permanent delete로 자동 fallback하지 않습니다.
 
 완료된 quarantine은 안전하게 역복구할 수 있습니다. restore도 기본 dry-run이며, 실제 복원 전에 quarantined resource 전체를 local catalog에만 저장된 원래 exact SHA-256과 다시 비교합니다.
 

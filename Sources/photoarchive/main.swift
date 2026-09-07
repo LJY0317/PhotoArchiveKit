@@ -44,6 +44,8 @@ struct PhotoArchiveCLI {
                 try runCatalog(arguments)
             case "root":
                 try runRoot(arguments)
+            case "settings":
+                try runSettings(arguments)
             case "doctor":
                 runDoctor()
             case "version", "--version", "-v":
@@ -687,6 +689,52 @@ struct PhotoArchiveCLI {
         }
     }
 
+    private static func runSettings(_ arguments: [String]) throws {
+        if arguments.isEmpty || arguments == ["show"] {
+            let settings = try PhotoArchiveSettingsStore.load()
+            print("PhotoArchiveKit settings")
+            switch settings.duplicateCleanupDestination.kind {
+            case .systemTrash:
+                print("Duplicate cleanup destination: system trash")
+            case .customQuarantine:
+                print("Duplicate cleanup destination: custom quarantine")
+                print("Path: \(settings.duplicateCleanupDestination.path ?? "(invalid)")")
+            }
+            print("Settings file: \(PhotoArchiveSettingsStore.defaultURL.path)")
+            return
+        }
+
+        if arguments == ["--help"] || arguments == ["-h"] || arguments == ["help"] {
+            printSettingsHelp()
+            return
+        }
+
+        guard arguments.first == "deletion-destination" else {
+            throw CLIError("Unknown settings action. Run 'photoarchive settings --help'.")
+        }
+        let values = Array(arguments.dropFirst())
+        var settings = try PhotoArchiveSettingsStore.load()
+
+        if values == ["trash"] || values == ["system-trash"] {
+            settings.duplicateCleanupDestination = .systemTrash
+        } else if values.count == 2, values[0] == "quarantine" {
+            settings.duplicateCleanupDestination = .customQuarantine(path: fileURL(values[1]).path)
+        } else {
+            throw CLIError(
+                "Usage: photoarchive settings deletion-destination trash | quarantine PATH"
+            )
+        }
+
+        try PhotoArchiveSettingsStore.save(settings)
+        switch settings.duplicateCleanupDestination.kind {
+        case .systemTrash:
+            print("Duplicate cleanup destination is now the macOS Trash.")
+        case .customQuarantine:
+            print("Duplicate cleanup destination is now the custom quarantine directory:")
+            print(settings.duplicateCleanupDestination.path ?? "")
+        }
+    }
+
     private enum WorkflowMode {
         case scan
         case archiveCoverage
@@ -720,6 +768,7 @@ struct PhotoArchiveCLI {
         var duplicateReviewRefresh = false
         var duplicateReviewPreferenceOnly = false
         var approvedQuarantineItemIDs = Set<String>()
+        var forceSystemTrash = false
         var applyMutation = false
         var roots: [ScanRoot] = []
 
@@ -776,6 +825,11 @@ struct PhotoArchiveCLI {
                 let url = fileURL(try value(after: argument, at: &index, in: arguments))
                 if mode == .archivePlan { archiveDestinationURL = url }
                 else { quarantineTargetURL = url }
+            case "--trash":
+                guard mode == .quarantine else {
+                    throw CLIError("--trash is only valid with quarantine.")
+                }
+                forceSystemTrash = true
             case "--output":
                 guard mode == .archivePlan || mode == .duplicateReview else {
                     throw CLIError("--output is only valid with archive-plan or duplicate-review.")
@@ -909,6 +963,9 @@ struct PhotoArchiveCLI {
         }
         if outputJSON && outputAgentJSON {
             throw CLIError("Use either --json or --agent-json, not both.")
+        }
+        if mode == .quarantine && forceSystemTrash && quarantineTargetURL != nil {
+            throw CLIError("Use either --trash or --to PATH, not both.")
         }
 
         if mode == .duplicateReview && !duplicateReviewRefresh {
@@ -1105,33 +1162,40 @@ struct PhotoArchiveCLI {
             guard computeExactDuplicates else {
                 throw CLIError("quarantine requires exact duplicate comparison.")
             }
-            guard let quarantineTargetURL else {
-                throw CLIError("quarantine requires --to PATH.")
-            }
             let plan = ReconciliationPlanner.makePlan(from: report)
-            let quarantineReport: QuarantineReport
+            let destination: DuplicateCleanupDestination
+            if forceSystemTrash {
+                destination = .systemTrash
+            } else if let quarantineTargetURL {
+                destination = .customQuarantine(quarantineTargetURL)
+            } else {
+                destination = try PhotoArchiveSettingsStore.resolvedDestination(
+                    PhotoArchiveSettingsStore.load().duplicateCleanupDestination
+                )
+            }
+            let cleanupReport: DuplicateCleanupReport
             if applyMutation {
-                quarantineReport = try QuarantineExecutor.apply(
+                cleanupReport = try DuplicateCleanupExecutor.apply(
                     report: report,
                     plan: plan,
-                    targetURL: quarantineTargetURL,
+                    destination: destination,
                     approvedPreferenceItemIDs: approvedQuarantineItemIDs
                 )
             } else {
-                quarantineReport = try QuarantineExecutor.preflight(
+                cleanupReport = try DuplicateCleanupExecutor.preflight(
                     report: report,
                     plan: plan,
-                    targetURL: quarantineTargetURL,
+                    destination: destination,
                     approvedPreferenceItemIDs: approvedQuarantineItemIDs
                 )
             }
 
             if outputAgentJSON {
-                try printJSON(AgentSafeQuarantineReport(report: quarantineReport))
+                try printJSON(AgentSafeDuplicateCleanupReport(report: cleanupReport))
             } else if outputJSON {
-                try printJSON(quarantineReport)
+                try printJSON(cleanupReport)
             } else {
-                printQuarantineReport(quarantineReport)
+                printDuplicateCleanupReport(cleanupReport)
             }
             return
         }
@@ -1363,13 +1427,22 @@ struct PhotoArchiveCLI {
         }
     }
 
-    private static func printQuarantineReport(_ report: QuarantineReport) {
-        print(report.dryRun ? "PhotoArchiveKit quarantine dry run" : "PhotoArchiveKit quarantine applied")
+    private static func printDuplicateCleanupReport(_ report: DuplicateCleanupReport) {
+        print(report.dryRun ? "PhotoArchiveKit duplicate cleanup dry run" : "PhotoArchiveKit duplicate cleanup applied")
         print("Session: \(report.sessionID)")
-        print("Target: \(report.targetPath)")
+        switch report.destinationKind {
+        case .systemTrash:
+            print("Destination: macOS Trash")
+        case .customQuarantine:
+            print("Destination: custom quarantine")
+            if let targetPath = report.targetPath {
+                print("Target: \(targetPath)")
+            }
+        }
         print("Items: \(report.itemCount)")
         print("Resources: \(report.resourceCount)")
         print("Bytes: \(report.totalBytes)")
+        print("Empty source directories removed: \(report.removedEmptyDirectoryCount)")
         if let manifestPath = report.manifestPath {
             print("Manifest: \(manifestPath)")
         }
@@ -1378,6 +1451,9 @@ struct PhotoArchiveCLI {
             print("No media files were modified. Re-run with --apply only after reviewing this dry run.")
         } else {
             print("Only automatic exact-duplicate candidates were moved. Review candidates were untouched.")
+            if report.destinationKind == .systemTrash {
+                print("The moved items are in the macOS Trash and can be restored with Finder while they remain there.")
+            }
         }
     }
 
@@ -1589,21 +1665,24 @@ struct PhotoArchiveCLI {
               photoarchive archive-copy [--apply] [--to PATH] [--bind-root ROOT_ID=PATH] PLAN
               photoarchive archive-index [--apply] [options] PATH
               photoarchive organize [--apply] [options] ROOT...
-              photoarchive quarantine --to PATH [--apply] [options] ROOT...
+              photoarchive quarantine [--trash|--to PATH] [--apply] [options] ROOT...
               photoarchive restore-quarantine [--apply] [--catalog PATH] MANIFEST
               photoarchive cleanup-empty-dirs [--apply] [--catalog PATH] ORGANIZATION_MANIFEST
               photoarchive catalog export --output PATH [--catalog PATH]
               photoarchive catalog restore [--apply] --to PATH [--bind-root ROOT_ID=PATH] SNAPSHOT
               photoarchive root inspect PATH
               photoarchive root init [--apply] PATH
+              photoarchive settings [show]
+              photoarchive settings deletion-destination trash
+              photoarchive settings deletion-destination quarantine PATH
               photoarchive doctor
               photoarchive version
 
             Scan, archive-coverage, plan, and duplicate-review are media-read-only. duplicate-review writes only
             a local Finder workspace made of symbolic links and text metadata; original media is untouched.
-            Quarantine also defaults to a verified dry run;
-            only an explicit --apply moves automatic exact-duplicate candidates into a
-            user-supplied local quarantine directory. It never permanently deletes media.
+            Duplicate cleanup also defaults to a verified dry run. Without an override it uses
+            the saved deletion destination, which defaults to the macOS Trash. --to PATH uses a
+            custom app-managed quarantine for that invocation. It never permanently deletes media.
 
             Run 'photoarchive scan --help', 'photoarchive archive-coverage --help', 'photoarchive plan --help',
             'photoarchive duplicate-review --help',
@@ -1614,6 +1693,24 @@ struct PhotoArchiveCLI {
             'photoarchive quarantine --help', 'photoarchive restore-quarantine --help',
             'photoarchive cleanup-empty-dirs --help', or 'photoarchive catalog --help'
             for options.
+            """
+        )
+    }
+
+    private static func printSettingsHelp() {
+        print(
+            """
+            Usage:
+              photoarchive settings [show]
+              photoarchive settings deletion-destination trash
+              photoarchive settings deletion-destination quarantine PATH
+
+            Duplicate cleanup defaults to the macOS Trash. A custom quarantine directory may
+            be configured when the user wants an app-managed temporary-trash location with a
+            PhotoArchiveKit restore manifest. The directory must already exist.
+
+            The saved value is local to this Mac. 'quarantine --trash' or 'quarantine --to PATH'
+            can override it for one invocation without changing the saved setting.
             """
         )
     }
@@ -1812,7 +1909,7 @@ struct PhotoArchiveCLI {
     private static func printScanHelp(command: String) {
         let mutationOptions: String
         if command == "quarantine" {
-            mutationOptions = "  --to PATH                  Existing quarantine directory (required)\n  --approve-item ITEM_ID     Explicitly approve one preference-sensitive AUTO item; repeatable\n  --apply                    Move verified AUTO candidates; default is dry-run\n"
+            mutationOptions = "  --trash                    Override the saved destination and use the macOS Trash\n  --to PATH                  Override the saved destination with an existing quarantine directory\n  --approve-item ITEM_ID     Explicitly approve one preference-sensitive AUTO item; repeatable\n  --apply                    Move verified AUTO candidates; default is dry-run\n"
         } else if command == "archive-plan" {
             mutationOptions = "  --to PATH                  Existing marker-initialized archive destination (required)\n  --output PATH              New local-private immutable plan JSON path (required)\n"
         } else if command == "organize" {
@@ -1831,8 +1928,10 @@ struct PhotoArchiveCLI {
             every candidate against a preferred exact counterpart. Preference-sensitive AUTO
             items remain excluded unless their current item ID is explicitly supplied with
             --approve-item after human review. Live Photo candidate
-            sets are fully verified before any resource in that item is moved. A local
-            restore manifest is written under the quarantine directory.
+            sets are fully verified before any resource in that item is moved. The saved cleanup
+            destination defaults to the macOS Trash. A custom quarantine destination writes a
+            local restore manifest. After a successful move, only source directories that became
+            literally empty because of those moved candidates are removed, never the registered root.
             """
         } else if command == "archive-plan" {
             operationNotes = """

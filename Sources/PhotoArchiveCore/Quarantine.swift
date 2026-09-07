@@ -148,7 +148,7 @@ public enum QuarantineExecutor {
             schemaVersion: 1,
             sessionID: report.sessionID,
             dryRun: true,
-            targetPath: verified.targetURL.path,
+            targetPath: verified.targetURL!.path,
             itemCount: verified.items.count,
             resourceCount: moves.count,
             totalBytes: moves.reduce(0) { $0 + $1.byteSize },
@@ -171,7 +171,8 @@ public enum QuarantineExecutor {
             approvedPreferenceItemIDs: approvedPreferenceItemIDs
         )
         let fileManager = FileManager.default
-        let sessionRoot = verified.targetURL
+        let targetURL = verified.targetURL!
+        let sessionRoot = targetURL
             .appendingPathComponent("PhotoArchiveKit", isDirectory: true)
             .appendingPathComponent(report.sessionID, isDirectory: true)
         try fileManager.createDirectory(at: sessionRoot, withIntermediateDirectories: true)
@@ -185,7 +186,7 @@ public enum QuarantineExecutor {
             policy: plan.policy,
             createdAt: Date(),
             state: "pending",
-            targetPath: verified.targetURL.path,
+            targetPath: targetURL.path,
             moves: allMoves.map(\.record),
             filesModified: false
         )
@@ -214,7 +215,7 @@ public enum QuarantineExecutor {
                 policy: plan.policy,
                 createdAt: pendingManifest.createdAt,
                 state: "complete",
-                targetPath: verified.targetURL.path,
+                targetPath: targetURL.path,
                 moves: allMoves.map(\.record),
                 filesModified: true
             )
@@ -225,7 +226,7 @@ public enum QuarantineExecutor {
                 schemaVersion: 1,
                 sessionID: report.sessionID,
                 dryRun: false,
-                targetPath: verified.targetURL.path,
+                targetPath: targetURL.path,
                 itemCount: verified.items.count,
                 resourceCount: allMoves.count,
                 totalBytes: allMoves.reduce(0) { $0 + $1.record.byteSize },
@@ -253,12 +254,27 @@ public enum QuarantineExecutor {
         }
     }
 
+    package static func verifiedAutomaticCandidates(
+        report: ScanReport,
+        plan: ReconciliationPlan,
+        approvedPreferenceItemIDs: Set<String> = []
+    ) throws -> (itemCount: Int, moves: [QuarantineMoveRecord]) {
+        let verified = try verify(
+            report: report,
+            plan: plan,
+            targetURL: nil,
+            approvedPreferenceItemIDs: approvedPreferenceItemIDs
+        )
+        let moves = verified.items.flatMap(\.moves).map(\.record)
+        return (verified.items.count, moves)
+    }
+
     private static func verify(
         report: ScanReport,
         plan: ReconciliationPlan,
-        targetURL rawTargetURL: URL,
+        targetURL rawTargetURL: URL?,
         approvedPreferenceItemIDs: Set<String>
-    ) throws -> (targetURL: URL, items: [VerifiedItem]) {
+    ) throws -> (targetURL: URL?, items: [VerifiedItem]) {
         guard report.sessionID == plan.sessionID else {
             throw QuarantineError.planSessionMismatch
         }
@@ -266,25 +282,29 @@ public enum QuarantineExecutor {
             throw QuarantineError.exactEvidenceRequired
         }
 
-        let targetURL = rawTargetURL.resolvingSymlinksInPath().standardizedFileURL
-        var isDirectory: ObjCBool = false
-        guard FileManager.default.fileExists(atPath: targetURL.path, isDirectory: &isDirectory) else {
-            throw QuarantineError.targetDoesNotExist(targetURL.path)
-        }
-        guard isDirectory.boolValue else {
-            throw QuarantineError.targetIsNotDirectory(targetURL.path)
+        let targetURL = rawTargetURL?.resolvingSymlinksInPath().standardizedFileURL
+        if let targetURL {
+            var isDirectory: ObjCBool = false
+            guard FileManager.default.fileExists(atPath: targetURL.path, isDirectory: &isDirectory) else {
+                throw QuarantineError.targetDoesNotExist(targetURL.path)
+            }
+            guard isDirectory.boolValue else {
+                throw QuarantineError.targetIsNotDirectory(targetURL.path)
+            }
         }
 
         let rootsByID = Dictionary(uniqueKeysWithValues: report.roots.map { ($0.rootID, $0) })
         let resourcesByKey = Dictionary(uniqueKeysWithValues: report.resources.map {
             (CanonicalResourceKey(rootID: $0.rootID, relativePath: $0.relativePath), $0)
         })
-        for root in report.roots {
-            let rootURL = URL(fileURLWithPath: root.canonicalPath)
-                .resolvingSymlinksInPath()
-                .standardizedFileURL
-            if isDescendantOrEqual(targetURL, of: rootURL) || isDescendantOrEqual(rootURL, of: targetURL) {
-                throw QuarantineError.targetOverlapsSource(targetURL.path)
+        if let targetURL {
+            for root in report.roots {
+                let rootURL = URL(fileURLWithPath: root.canonicalPath)
+                    .resolvingSymlinksInPath()
+                    .standardizedFileURL
+                if isDescendantOrEqual(targetURL, of: rootURL) || isDescendantOrEqual(rootURL, of: targetURL) {
+                    throw QuarantineError.targetOverlapsSource(targetURL.path)
+                }
             }
         }
 
@@ -397,14 +417,20 @@ public enum QuarantineExecutor {
                     throw QuarantineError.sourceChanged(sourceURL.path)
                 }
 
-                let destinationURL = targetURL
-                    .appendingPathComponent("PhotoArchiveKit", isDirectory: true)
-                    .appendingPathComponent(report.sessionID, isDirectory: true)
-                    .appendingPathComponent(candidate.rootID, isDirectory: true)
-                    .appendingPathComponent(candidate.relativePath)
-                    .standardizedFileURL
-                guard !FileManager.default.fileExists(atPath: destinationURL.path) else {
-                    throw QuarantineError.destinationAlreadyExists(destinationURL.path)
+                let destinationURL: URL
+                if let targetURL {
+                    destinationURL = targetURL
+                        .appendingPathComponent("PhotoArchiveKit", isDirectory: true)
+                        .appendingPathComponent(report.sessionID, isDirectory: true)
+                        .appendingPathComponent(candidate.rootID, isDirectory: true)
+                        .appendingPathComponent(candidate.relativePath)
+                        .standardizedFileURL
+                    guard !FileManager.default.fileExists(atPath: destinationURL.path) else {
+                        throw QuarantineError.destinationAlreadyExists(destinationURL.path)
+                    }
+                } else {
+                    // Destination-independent validation for the system-Trash backend.
+                    destinationURL = sourceURL
                 }
 
                 moves.append(VerifiedMove(
@@ -417,7 +443,7 @@ public enum QuarantineExecutor {
                         role: candidate.role,
                         sourcePath: sourceURL.path,
                         sourceRelativePath: candidate.relativePath,
-                        destinationPath: destinationURL.path,
+                        destinationPath: targetURL == nil ? "" : destinationURL.path,
                         byteSize: candidate.byteSize
                     )
                 ))

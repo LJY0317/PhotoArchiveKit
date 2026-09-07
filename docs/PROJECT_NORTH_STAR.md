@@ -54,9 +54,11 @@ usage role은 provenance/provider capability와 별개다. 예를 들어 Google 
 
 ## 삭제와 임시 격리 destination
 
-배포 제품의 일반적인 "삭제"는 가능한 플랫폼에서 OS가 제공하는 Trash/Recycle Bin을 기본 reversible destination으로 사용한다. 사용자가 별도의 임시 휴지통/quarantine 폴더를 지정한 경우에는 그 app-managed 위치를 사용할 수 있으며, restore/audit가 중요한 workflow에서는 manifest를 가진 app-managed quarantine이 더 적합할 수 있다. 개발자 개인 경로나 특정 머신의 폴더를 제품에 hard-code하지 않는다.
+제품의 일반적인 duplicate cleanup은 가능한 플랫폼에서 OS가 제공하는 Trash/Recycle Bin을 **기본 reversible destination**으로 사용한다. 이 선택은 AI prompt가 아니라 PhotoArchiveKit의 local product setting으로 저장한다. 사용자가 별도의 임시 휴지통/quarantine 폴더를 지정한 경우에는 그 app-managed 위치를 사용할 수 있으며, restore/audit가 중요한 workflow에서는 manifest를 가진 app-managed quarantine이 더 적합할 수 있다. 개발자 개인 경로나 특정 머신의 폴더를 제품에 hard-code하지 않는다.
 
 OS Trash를 사용할 수 없거나 volume/network 제약 때문에 안전한 reversible move를 보장할 수 없으면 자동으로 permanent unlink/remove로 fallback하지 않는다. 명시적인 user-configured quarantine을 요구하거나 operation을 중단한다. 초기 release의 permanent delete 부재 원칙은 그대로 유지한다.
+
+duplicate cleanup apply가 성공한 뒤에는 **그 operation의 source candidate가 있던 parent chain만** empty-directory cleanup 대상으로 삼는다. registered root 자체, package/symlink boundary, 다른 항목이 남은 directory는 제거하지 않는다. 모든 candidate move가 성공하기 전에는 empty-directory cleanup을 시작하지 않는다.
 
 ## Curation과 archive의 역할 분리
 

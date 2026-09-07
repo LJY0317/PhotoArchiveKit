@@ -29,6 +29,37 @@ struct PhotoArchiveSelfTest {
         let rootBMarker = try RootMarkerStore.create(at: rootB)
         defer { try? fileManager.removeItem(at: temporary) }
 
+        let settingsURL = temporary.appendingPathComponent("settings.json")
+        let defaultSettings = try PhotoArchiveSettingsStore.load(url: settingsURL)
+        try require(
+            defaultSettings.duplicateCleanupDestination == .systemTrash,
+            "a Mac with no saved settings should default duplicate cleanup to the system Trash"
+        )
+        let customQuarantineSettingRoot = temporary.appendingPathComponent(
+            "CustomQuarantineSetting",
+            isDirectory: true
+        )
+        try fileManager.createDirectory(
+            at: customQuarantineSettingRoot,
+            withIntermediateDirectories: true
+        )
+        var customSettings = defaultSettings
+        customSettings.duplicateCleanupDestination = .customQuarantine(
+            path: customQuarantineSettingRoot.path
+        )
+        try PhotoArchiveSettingsStore.save(customSettings, url: settingsURL)
+        try require(
+            try PhotoArchiveSettingsStore.load(url: settingsURL).duplicateCleanupDestination
+                == .customQuarantine(path: customQuarantineSettingRoot.path),
+            "a user-selected custom quarantine directory should round-trip through product settings"
+        )
+        customSettings.duplicateCleanupDestination = .systemTrash
+        try PhotoArchiveSettingsStore.save(customSettings, url: settingsURL)
+        try require(
+            try PhotoArchiveSettingsStore.load(url: settingsURL).duplicateCleanupDestination == .systemTrash,
+            "the product setting should be able to switch back to system Trash"
+        )
+
         let validTimedVideo = temporary.appendingPathComponent("valid-timed.mov")
         try await writeSyntheticTimedMetadataMovie(to: validTimedVideo, markerValues: [-1])
         let validTimedStatus = await LivePhotoTimedMetadataValidator.validateVideo(at: validTimedVideo)
@@ -1815,6 +1846,53 @@ struct PhotoArchiveSelfTest {
             stagingPolicyPreflight.moves.contains { $0.itemID == dateAddedItem.itemID }
                 && stagingPolicyPreflight.moves.contains { $0.itemID == crossStagingFilenameItem.itemID },
             "confirmed cross-staging filename and Date Added rules should receive automatic quarantine preflight authority"
+        )
+
+        let trashCleanupRoot = temporary.appendingPathComponent("TrashCleanup", isDirectory: true)
+        let trashCleanupNested = trashCleanupRoot
+            .appendingPathComponent("nested/deeper", isDirectory: true)
+        try fileManager.createDirectory(at: trashCleanupNested, withIntermediateDirectories: true)
+        let trashCleanupBytes = Data("system-trash-cleanup-policy".utf8)
+        let trashKeeper = trashCleanupRoot.appendingPathComponent("keeper.jpg")
+        let trashCandidate = trashCleanupNested.appendingPathComponent("keeper 2.jpg")
+        try trashCleanupBytes.write(to: trashKeeper)
+        try trashCleanupBytes.write(to: trashCandidate)
+        let trashCleanupCatalog = temporary.appendingPathComponent("trash-cleanup.sqlite3")
+        let trashCleanupScanner = try ArchiveScanner(catalogURL: trashCleanupCatalog)
+        let trashCleanupReport = try await trashCleanupScanner.scan(roots: [
+            ScanRoot(url: trashCleanupRoot, kind: .inbox, provenance: .unknown)
+        ])
+        let trashCleanupPlan = ReconciliationPlanner.makePlan(from: trashCleanupReport)
+        let fakeTrashRoot = temporary.appendingPathComponent("FakeTrash", isDirectory: true)
+        try fileManager.createDirectory(at: fakeTrashRoot, withIntermediateDirectories: true)
+        let trashApplied = try DuplicateCleanupExecutor.applySystemTrashForTesting(
+            report: trashCleanupReport,
+            plan: trashCleanupPlan,
+            trashMover: { sourceURL in
+                let destination = fakeTrashRoot
+                    .appendingPathComponent(UUID().uuidString, isDirectory: true)
+                    .appendingPathComponent(sourceURL.lastPathComponent)
+                try fileManager.createDirectory(
+                    at: destination.deletingLastPathComponent(),
+                    withIntermediateDirectories: true
+                )
+                try fileManager.moveItem(at: sourceURL, to: destination)
+                return destination
+            }
+        )
+        try require(
+            trashApplied.destinationKind == .systemTrash
+                && trashApplied.resourceCount == 1
+                && trashApplied.removedEmptyDirectoryCount == 2,
+            "system-Trash cleanup should move the exact candidate and remove only newly empty source parents"
+        )
+        try require(
+            fileManager.fileExists(atPath: trashKeeper.path)
+                && !fileManager.fileExists(atPath: trashCandidate.path)
+                && !fileManager.fileExists(atPath: trashCleanupNested.path)
+                && !fileManager.fileExists(atPath: trashCleanupRoot.appendingPathComponent("nested").path)
+                && fileManager.fileExists(atPath: trashCleanupRoot.path),
+            "system-Trash cleanup must preserve the keeper/root while pruning the emptied nested directory chain"
         )
 
         let localDuplicateLiveReport = syntheticLocalDuplicateLivePhotoReport()

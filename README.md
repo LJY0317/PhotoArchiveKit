@@ -82,7 +82,7 @@ The initial CLI can:
 - let `cleanup-empty-dirs` consider only source directories proven by a completed organization manifest plus catalog location history, require the stable root marker, skip package/symlink boundaries, and remove only directories that are still literally empty at apply time;
 - produce a human-readable report or sanitized JSON;
 - detect optional user-installed interoperability tools without requiring or bundling them;
-- dry-run or apply a local quarantine for strong `automatic_redundant` exact decisions after fresh SHA-256 verification against a preferred copy; preference-sensitive keeper choices remain excluded unless the user explicitly approves their current plan item with repeatable `--approve-item ITEM_ID`, and Live Photo candidate sets are verified before any resource in the item moves;
+- dry-run or apply duplicate cleanup for strong `automatic_redundant` exact decisions after fresh SHA-256 verification against a preferred copy; the default destination is the macOS Trash and users may select a custom app-managed quarantine in product settings. Preference-sensitive keeper choices remain excluded unless the user explicitly approves their current plan item with repeatable `--approve-item ITEM_ID`, and Live Photo candidate sets are verified before any resource in the item moves;
 - preserve Google Takeout source-folder/album-like memberships in local SQLite before collapsing Takeout-only exact standalone copies, without exposing collection names or paths to agent-safe output;
 - write a local restore manifest for applied quarantine sessions, roll back the whole session if a move fails, and dry-run/apply `restore-quarantine` only after the quarantined bytes are freshly re-verified against the local catalog's original SHA-256 evidence;
 - perform all current analysis without contacting a network service.
@@ -173,18 +173,25 @@ swift run photoarchive archive-coverage --agent-json \
 
 Only roots supplied to this session participate in the current coverage result. A separately registered active or inactive nested root remains an ownership boundary and is automatically excluded from a parent-only scan; only `root remove` returns that subtree to parent ownership. If media was copied from another Mac folder or another external device that PhotoArchiveKit has never scanned, register that location as an appropriate `--local`, `--import`, or `--reference` root when you want it included in the comparison.
 
-Preview a quarantine without moving anything:
+Preview duplicate cleanup without moving anything. The saved default destination is the macOS Trash:
 
 ```bash
 swift run photoarchive quarantine \
-  --to "~/PhotoArchiveKit Quarantine" \
   --local "~/Pictures" \
   --takeout "~/Pictures/Takeout"
 ```
 
-Only after reviewing the dry run, add `--apply` to move the freshly re-verified `automatic_redundant` resources. `REVIEW` items are never moved by this command. Applied sessions are stored under `PhotoArchiveKit/<session-id>/` inside the supplied quarantine directory together with a local restore manifest.
+Only after reviewing the dry run, add `--apply` to send the freshly re-verified `automatic_redundant` resources to the macOS Trash. `REVIEW` items are never moved by this command. After all candidate moves succeed, only the source parent chain made empty by this operation is pruned up to (but never including) the registered root; packages, symlinks, and non-empty directories are preserved.
 
-The current CLI uses an explicit `--to` app-managed quarantine directory. A production UI should use the platform Trash/Recycle Bin as the normal reversible delete destination, with a user-configured temporary-trash/quarantine directory as an alternative when stronger restore/audit control is desired. If neither can be used safely, it must not silently fall back to permanent removal.
+Users who want an app-managed temporary-trash location can change the product setting; that mode retains the existing restore-manifest workflow. `--to PATH` overrides the saved destination with a custom quarantine for one invocation, while `--trash` forces the macOS Trash for one invocation.
+
+```bash
+swift run photoarchive settings deletion-destination trash
+swift run photoarchive settings deletion-destination quarantine "/path/to/custom quarantine"
+swift run photoarchive settings show
+```
+
+A new Mac with no saved setting defaults to `system_trash`. If no reversible destination can be used safely, PhotoArchiveKit does not silently fall back to permanent removal.
 
 A completed quarantine can be safely reversed. Restore is also a dry run by default and re-hashes every quarantined resource against the exact hash retained only in the local catalog before moving anything back:
 
