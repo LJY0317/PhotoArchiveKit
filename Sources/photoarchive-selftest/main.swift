@@ -1848,6 +1848,26 @@ struct PhotoArchiveSelfTest {
             "confirmed cross-staging filename and Date Added rules should receive automatic quarantine preflight authority"
         )
 
+        let duplicateReviewPresentation = DuplicateReviewPresentationBuilder.makePresentation(
+            report: stagingPolicyReport,
+            plan: stagingPolicyPlan
+        )
+        try require(
+            duplicateReviewPresentation.items.count == stagingPolicyPlan.summary.automaticItemCount
+                && duplicateReviewPresentation.candidateResourceCount
+                    == stagingPolicyPlan.summary.automaticRedundantResourceCount,
+            "native duplicate-review presentation should preserve current automatic plan item/resource counts"
+        )
+        try require(
+            duplicateReviewPresentation.items.contains {
+                $0.id == dateAddedItem.itemID
+                    && $0.rationale == .earlierDateAdded
+                    && !$0.preferredResources.isEmpty
+                    && !$0.candidateResources.isEmpty
+            },
+            "native duplicate-review presentation should preserve the keeper rationale and local resource locations"
+        )
+
         let trashCleanupRoot = temporary.appendingPathComponent("TrashCleanup", isDirectory: true)
         let trashCleanupNested = trashCleanupRoot
             .appendingPathComponent("nested/deeper", isDirectory: true)
