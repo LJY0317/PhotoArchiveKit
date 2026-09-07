@@ -20,6 +20,8 @@
 ## 안전
 - 기본 동작은 read-only 검사다. `scan`, `plan`과 미래의 변경 작업인 `apply`를 분리한다.
 - 초기 release에는 영구 삭제를 구현하지 않는다. copy, verify, catalog commit, quarantine을 우선한다.
+- 이 Mac에서 임시 제거/quarantine을 수행하기 전에는 `~/Library/Application Support/PhotoArchiveKit/local-agent-policy.json`이 있으면 먼저 읽고, `temporaryDeletionTarget`이 설정되어 있으면 그 위치를 기본 reversible destination으로 사용한다. 개인 경로 자체는 repository에 hard-code/commit하지 않는다.
+- 임시 제거로 생성했던 session/container가 이동·복구·정리 뒤 완전히 비었고 audit/restore record도 남아 있지 않다면 같은 작업에서 빈 container를 제거한다. 배포 제품은 개발자 전용 경로를 사용하지 않고 OS의 Trash/Recycle Bin 또는 사용자가 명시적으로 고른 app-managed quarantine 위치를 사용한다.
 - source 또는 archive root를 사용할 수 없다는 사실은 파일이 삭제되었다는 증거가 아니다. missing file을 reconcile하기 전에 검증된 root marker를 요구한다.
 - 기존 사용자 변경을 보존하고 migration은 되돌릴 수 있게 유지한다.
 - smoke/review/temp 같은 테스트 부산물은 검증 목적이 끝나고 제품 상태·복구·유일 media에 필요하지 않음이 확인되면 같은 작업 안에서 정리한다. 안전하게 버려도 되는지 불명확하면 삭제 전에 사용자에게 확인한다.

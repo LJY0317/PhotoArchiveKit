@@ -32,21 +32,13 @@ PhotoArchiveKit의 첫 번째 핵심 제품 가치는 **AI agent가 개인 media
 10. 모든 파괴적 작업은 검증 가능한 plan과 안전한 복사본을 전제로 한다.
 11. AI agent가 CLI/API로 archive를 다룰 때 개인 media byte, raw hash/identifier, filename/path, GPS, capture timestamp 같은 file-level private detail을 AI service에 보내지 않고 opaque asset/group/plan ID와 상태만으로 작업할 수 있어야 한다.
 
-## 기본 provenance 우선순위
+## provenance 정책
 
-같은 logical asset의 보존 후보가 여러 개이고 바이트·Live Photo completeness 등 핵심 보존 품질이 동등하다면, provenance는 사용자 정책으로 선택한다.
+provenance는 중요한 semantic/safety evidence지만 **generic exact-copy keeper의 암묵적인 품질 점수로 사용하지 않는다.** 특히 같은 `staging` 역할의 root끼리는 `local_library`, `unknown`, `google_web` 같은 provenance category만으로 한 사본을 더 좋은 keeper라고 판단하지 않는다. Downloads처럼 하나의 root에 여러 ingest 경로가 섞일 수 있기 때문이다.
 
-현재 기본 정책은 다음과 같다.
+대신 provenance는 Google Takeout folder/sidecar semantics, provider 변환 여부, import cleanup 가능성처럼 실제 source-specific 안전 규칙에 사용한다. 사용자가 명시적으로 "Apple direct를 우선" 같은 provenance preference를 설정한 경우에만, byte identity와 Live Photo completeness 같은 핵심 보존 품질이 동등하다는 전제 아래 preferred-representation 정책으로 적용할 수 있다.
 
-```text
-iPhone/Apple Photos에서 직접 추출한 원본 계열
-> 검증된 Mac ingest
-> Google Photos/Takeout에서 회수한 byte-identical 사본
-> provider가 변환한 standalone representation
-> 불완전한 Live Photo occurrence
-```
-
-이 순위는 "Google 사본의 바이트가 더 나쁘다"는 뜻이 아니다. 바이트가 같아도 어느 경로에서 직접 보존했는지를 사용자가 선호한다는 정책이다. 파일 내용만으로 provenance를 증명할 수 없는 경우 provenance는 source root와 ingest session에서 기록한다.
+기본 generic exact-copy keeper는 usage-role retention gate를 먼저 지키고, 그 안에서는 copy 표식, 알아보기 쉬운 source filename, Finder `Date Added`, 구조/capture/path 같은 file-level evidence를 사용한다. provenance가 알려지지 않았다는 이유만으로 사본을 열등하게 취급하지 않는다.
 
 ## Registered root 역할
 
@@ -59,6 +51,12 @@ iPhone/Apple Photos에서 직접 추출한 원본 계열
 - `reference`: 비교 전용. PhotoArchiveKit mutation 대상이 아니며 다른 root를 자동 cleanup하기 위한 retention authority로도 사용하지 않는다.
 
 usage role은 provenance/provider capability와 별개다. 예를 들어 Google Drive의 서로 다른 folder를 archive/import/reference로 각각 등록할 수 있어야 한다. 역할 변경은 catalog policy만 바꾸며 그 순간 media를 move/delete하지 않는다. 실제 mutation은 새 역할에 따른 plan과 기존 fresh verification gate를 다시 통과해야 한다. executor도 current role과 keeper 위치를 독립 재검증한다. `archive`는 same-root exact dedupe만 허용하고 generic cross-root replica collapse는 거부하며, `reference`는 모든 reconciliation/organization mutation을 거부한다. 등록된 archive-copy destination은 current role이 `archive`여야 한다.
+
+## 삭제와 임시 격리 destination
+
+배포 제품의 일반적인 "삭제"는 가능한 플랫폼에서 OS가 제공하는 Trash/Recycle Bin을 기본 reversible destination으로 사용한다. 사용자가 별도의 임시 휴지통/quarantine 폴더를 지정한 경우에는 그 app-managed 위치를 사용할 수 있으며, restore/audit가 중요한 workflow에서는 manifest를 가진 app-managed quarantine이 더 적합할 수 있다. 개발자 개인 경로나 특정 머신의 폴더를 제품에 hard-code하지 않는다.
+
+OS Trash를 사용할 수 없거나 volume/network 제약 때문에 안전한 reversible move를 보장할 수 없으면 자동으로 permanent unlink/remove로 fallback하지 않는다. 명시적인 user-configured quarantine을 요구하거나 operation을 중단한다. 초기 release의 permanent delete 부재 원칙은 그대로 유지한다.
 
 ## Curation과 archive의 역할 분리
 

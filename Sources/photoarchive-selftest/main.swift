@@ -1756,7 +1756,7 @@ struct PhotoArchiveSelfTest {
         let stagingPolicyCatalog = temporary.appendingPathComponent("staging-policy.sqlite3")
         let stagingPolicyScanner = try ArchiveScanner(catalogURL: stagingPolicyCatalog)
         let stagingPolicyReport = try await stagingPolicyScanner.scan(roots: [
-            ScanRoot(url: stagingEarlierRoot, kind: .inbox, provenance: .localLibrary),
+            ScanRoot(url: stagingEarlierRoot, kind: .inbox, provenance: .unknown),
             ScanRoot(url: stagingLaterRoot, kind: .inbox, provenance: .localLibrary)
         ])
         let earlierRootID = stagingPolicyReport.roots.first(where: {
@@ -1788,7 +1788,7 @@ struct PhotoArchiveSelfTest {
         try require(
             dateAddedItem.preferredRootID == earlierRootID
                 && dateAddedItem.candidateResources.contains { $0.rootID == laterRootID },
-            "when stronger evidence ties, the earlier Finder Date Added staging copy should be canonical"
+            "staging provenance must not outrank file-level evidence; the earlier Finder Date Added copy should be canonical"
         )
         guard let crossStagingFilenameItem = stagingPolicyPlan.items.first(where: {
             $0.preferredResources.contains { $0.relativePath == "IMG_5199.JPG" }

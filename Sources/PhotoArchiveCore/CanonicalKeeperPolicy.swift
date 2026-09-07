@@ -340,24 +340,13 @@ enum CanonicalKeeperPolicy {
 
     private static func rootRank(_ root: RootScanReport?) -> Int {
         guard let root else { return 100 }
-        let roleBase: Int
         switch root.usageRole {
-        case .archive: roleBase = 0
-        case .primaryLibrary: roleBase = 10
-        case .staging: roleBase = 20
-        case .reference: roleBase = 30
-        case .importSource: roleBase = 40
+        case .archive: return 0
+        case .primaryLibrary: return 10
+        case .staging: return 20
+        case .reference: return 30
+        case .importSource: return 40
         }
-        let provenanceRank: Int
-        switch root.provenance {
-        case .appleDirect: provenanceRank = 0
-        case .localLibrary: provenanceRank = 1
-        case .googleWeb: provenanceRank = 2
-        case .unknown: provenanceRank = 3
-        case .googleIOSShare: provenanceRank = 4
-        case .googleTakeout: provenanceRank = 5
-        }
-        return roleBase + provenanceRank
     }
 
     private static func captureRank(_ capture: CaptureTime?) -> Int {
