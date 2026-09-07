@@ -19,6 +19,9 @@ while IFS= read -r path; do
   base=$(basename "$lower")
 
   case "$lower" in
+    state.md|milestones.md)
+      report_failure "maintainer-only state document must stay local: $path"
+      ;;
     *.heic|*.heif|*.jpg|*.jpeg|*.png|*.gif|*.tif|*.tiff|*.dng|*.arw|*.cr2|*.cr3|*.nef|*.raf|*.mov|*.mp4|*.m4v|*.3gp|*.3g2|*.aae|*.xmp)
       report_failure "forbidden tracked or public-candidate media/sidecar: $path"
       ;;

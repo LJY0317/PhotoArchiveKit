@@ -499,8 +499,6 @@ core는 아래 프로젝트를 포함하거나 요구하지 않지만, 향후 ad
 - [검증 기록](docs/VALIDATION.md)
 - [Agent interface](docs/AGENT_INTERFACE.md)
 - [Roadmap](docs/ROADMAP.md)
-- [현재 개발 상태](STATE.md)
-- [검증된 milestone](MILESTONES.md)
 - [변경 기록](CHANGELOG.md)
 - [보안 정책](SECURITY.md)
 - [기여 안내](CONTRIBUTING.md)

@@ -5,13 +5,12 @@ PhotoArchiveKit은 의도적으로 작고 safety-first인 프로젝트다. contr
 ## Branch와 commit workflow
 
 - 기본 개발 branch는 `dev`다. 평소 작업은 `dev`에서 하고 안정화된 checkpoint만 `main`으로 승격한다.
-- 의미 있는 작은 단위마다 local commit을 남기고, 모든 commit을 자동으로 push하지 않는다. remote 공유·CI·backup 가치가 있는 굵직한 checkpoint 또는 명시적 요청이 있을 때 `dev`를 push한다.
-- commit message는 작은 PR 수준으로 작성한다. 제목 뒤 본문에 **문제/변경 내용/검증/privacy·safety 영향/남은 작업**을 적는다.
+- commit message와 pull request는 문제, 변경 내용, 검증, privacy·safety 영향을 이해할 수 있게 작성한다.
 - `main`으로 올리기 전에는 최소 `swift build`, self-test, public-tree check를 통과하고 관련 real-library validation이 있으면 재확인한다.
 
 ## 변경 전 확인
 
-1. `AGENTS.md`, `STATE.md`, 관련 design document를 읽는다.
+1. `AGENTS.md`, `docs/PROJECT_NORTH_STAR.md`, 관련 design document를 읽는다.
 2. milestone이 검토된 mutating operation을 명시적으로 도입하지 않는 한 scan 대상 media는 read-only로 유지한다.
 3. 가능하면 synthetic data로 재현한다.
 4. 실제 photo/video, Takeout export, catalog, hash, identifier, credential, 개인 absolute path를 commit하지 않는다.
@@ -44,7 +43,7 @@ scanner 변경 시에는 disposable directory에서도 테스트하고 input byt
 
 `README.md`는 기본 영어 문서이고 `README.ko.md`는 한국어 counterpart다. 사용자에게 보이는 command 또는 guarantee가 바뀌면 둘 다 갱신한다.
 
-`STATE.md`에는 지속적으로 유효한 현재 상태만 기록한다. 비용이 큰 validation 결과를 다시 반복하지 않기 위해 필요할 때만 `MILESTONES.md`에 milestone을 추가한다.
+재사용 가치가 있는 공개 validation 결과는 `docs/VALIDATION.md`, notable user-visible change는 `CHANGELOG.md`에 기록한다. maintainer 개인의 작업 상태나 실험 이력은 repository에 commit하지 않는다.
 
 ## Pull Request
 

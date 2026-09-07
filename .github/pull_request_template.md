@@ -27,6 +27,5 @@ Add any disposable-fixture or provider validation performed.
 ## Documentation
 
 - [ ] README.md / README.ko.md updated when user-visible behavior changed.
-- [ ] STATE.md updated when current behavior or the next milestone changed.
-- [ ] MILESTONES.md updated only for expensive reusable validation.
+- [ ] docs/VALIDATION.md updated when reusable public validation changed.
 - [ ] CHANGELOG.md updated for a notable change.

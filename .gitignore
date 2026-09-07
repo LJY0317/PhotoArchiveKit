@@ -43,7 +43,10 @@ tokens/
 *.log
 *.bak
 *.cache
+# Local maintainer state and private working notes
 .local/
+/STATE.md
+/MILESTONES.md
 state/private/
 test-output/
 local-reports/

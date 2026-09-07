@@ -36,6 +36,10 @@ PhotoArchiveKit의 중요한 변경 사항을 여기에 기록한다.
 - marker-gated `photoarchive organize`: 기본 dry-run, `--apply`에서 AUTO organization item만 이동하며 Live Photo 동일 basename, post-move filesystem ID/size verification 뒤 stable resource path/location history를 SQLite transaction으로 즉시 commit. catalog commit 실패 시 filesystem rollback, local restore manifest 제공
 - `photoarchive cleanup-empty-dirs`: completed organization manifest + catalog location history로 source directory provenance를 검증하고, stable root marker/package/symlink boundary를 확인한 뒤 apply 시점에도 완전히 빈 directory만 deepest-first 제거. agent-safe output에는 directory path를 노출하지 않음
 
+### 변경됨
+
+- 공개 repository 문서를 제품·기여·재사용 가능한 validation 중심으로 정리하고, maintainer의 현재 작업 상태와 개인 validation 이력은 Git에서 제거해 `.local/` 전용으로 분리
+
 ### 보안
 
 - general-purpose arbitrary media move, upload, permanent delete command 없음; quarantine과 organize는 각각 exact-redundancy 및 deterministic camera-name organization에 제한된 reversible move만 허용하고, empty-directory cleanup도 completed organization source history로 범위를 제한

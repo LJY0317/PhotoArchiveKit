@@ -499,8 +499,6 @@ Naming an interoperable tool is normal and preferable to hiding the dependency. 
 - [Validation notes](docs/VALIDATION.md)
 - [Agent interface](docs/AGENT_INTERFACE.md)
 - [Roadmap](docs/ROADMAP.md)
-- [Current development state](STATE.md)
-- [Validated milestones](MILESTONES.md)
 - [Changelog](CHANGELOG.md)
 - [Security policy](SECURITY.md)
 - [Contributing](CONTRIBUTING.md)
