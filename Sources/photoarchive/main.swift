@@ -719,6 +719,7 @@ struct PhotoArchiveCLI {
         var duplicateReviewCandidateRoot: String?
         var duplicateReviewRefresh = false
         var duplicateReviewPreferenceOnly = false
+        var approvedQuarantineItemIDs = Set<String>()
         var applyMutation = false
         var roots: [ScanRoot] = []
 
@@ -797,6 +798,13 @@ struct PhotoArchiveCLI {
                     throw CLIError("--preference-only is only valid with duplicate-review.")
                 }
                 duplicateReviewPreferenceOnly = true
+            case "--approve-item":
+                guard mode == .quarantine else {
+                    throw CLIError("--approve-item is only valid with quarantine.")
+                }
+                approvedQuarantineItemIDs.insert(
+                    try value(after: argument, at: &index, in: arguments)
+                )
             case "--apply":
                 guard mode == .quarantine || mode == .organize else {
                     throw CLIError("--apply is only valid with the quarantine or organize command.")
@@ -1106,13 +1114,15 @@ struct PhotoArchiveCLI {
                 quarantineReport = try QuarantineExecutor.apply(
                     report: report,
                     plan: plan,
-                    targetURL: quarantineTargetURL
+                    targetURL: quarantineTargetURL,
+                    approvedPreferenceItemIDs: approvedQuarantineItemIDs
                 )
             } else {
                 quarantineReport = try QuarantineExecutor.preflight(
                     report: report,
                     plan: plan,
-                    targetURL: quarantineTargetURL
+                    targetURL: quarantineTargetURL,
+                    approvedPreferenceItemIDs: approvedQuarantineItemIDs
                 )
             }
 
@@ -1802,7 +1812,7 @@ struct PhotoArchiveCLI {
     private static func printScanHelp(command: String) {
         let mutationOptions: String
         if command == "quarantine" {
-            mutationOptions = "  --to PATH                  Existing quarantine directory (required)\n  --apply                    Move verified AUTO candidates; default is dry-run\n"
+            mutationOptions = "  --to PATH                  Existing quarantine directory (required)\n  --approve-item ITEM_ID     Explicitly approve one preference-sensitive AUTO item; repeatable\n  --apply                    Move verified AUTO candidates; default is dry-run\n"
         } else if command == "archive-plan" {
             mutationOptions = "  --to PATH                  Existing marker-initialized archive destination (required)\n  --output PATH              New local-private immutable plan JSON path (required)\n"
         } else if command == "organize" {
@@ -1818,7 +1828,9 @@ struct PhotoArchiveCLI {
         if command == "quarantine" {
             operationNotes = """
             quarantine never acts on REVIEW items. Before --apply it freshly re-hashes
-            every candidate against a preferred exact counterpart; Live Photo candidate
+            every candidate against a preferred exact counterpart. Preference-sensitive AUTO
+            items remain excluded unless their current item ID is explicitly supplied with
+            --approve-item after human review. Live Photo candidate
             sets are fully verified before any resource in that item is moved. A local
             restore manifest is written under the quarantine directory.
             """

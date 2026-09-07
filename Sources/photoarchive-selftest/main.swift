@@ -1721,6 +1721,16 @@ struct PhotoArchiveSelfTest {
             !filenamePolicyQuarantine.moves.contains { $0.itemID == ambiguousNameItem.itemID },
             "pure deterministic tie-break choices must not receive automatic quarantine authority"
         )
+        let approvedFilenamePolicyQuarantine = try QuarantineExecutor.preflight(
+            report: filenamePolicyReport,
+            plan: filenamePolicyPlan,
+            targetURL: filenamePolicyQuarantineRoot,
+            approvedPreferenceItemIDs: [ambiguousNameItem.itemID]
+        )
+        try require(
+            approvedFilenamePolicyQuarantine.moves.contains { $0.itemID == ambiguousNameItem.itemID },
+            "an explicitly approved preference-sensitive exact item should gain quarantine preflight authority"
+        )
         try require(
             filenamePolicyQuarantine.moves.contains { $0.itemID == copyNameItem.itemID }
                 && filenamePolicyQuarantine.moves.contains { $0.itemID == explicitCopyMarkerItem.itemID }

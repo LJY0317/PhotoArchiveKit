@@ -82,7 +82,7 @@ The initial CLI can:
 - let `cleanup-empty-dirs` consider only source directories proven by a completed organization manifest plus catalog location history, require the stable root marker, skip package/symlink boundaries, and remove only directories that are still literally empty at apply time;
 - produce a human-readable report or sanitized JSON;
 - detect optional user-installed interoperability tools without requiring or bundling them;
-- dry-run or apply a local quarantine only for strong `automatic_redundant` exact decisions after fresh SHA-256 verification against a preferred copy; preference-sensitive keeper choices (for example recognizable-name/path/timestamp/tie-break choices) require explicit human approval before they can gain mutation authority, and Live Photo candidate sets are verified before any resource in the item moves;
+- dry-run or apply a local quarantine for strong `automatic_redundant` exact decisions after fresh SHA-256 verification against a preferred copy; preference-sensitive keeper choices remain excluded unless the user explicitly approves their current plan item with repeatable `--approve-item ITEM_ID`, and Live Photo candidate sets are verified before any resource in the item moves;
 - preserve Google Takeout source-folder/album-like memberships in local SQLite before collapsing Takeout-only exact standalone copies, without exposing collection names or paths to agent-safe output;
 - write a local restore manifest for applied quarantine sessions, roll back the whole session if a move fails, and dry-run/apply `restore-quarantine` only after the quarantined bytes are freshly re-verified against the local catalog's original SHA-256 evidence;
 - perform all current analysis without contacting a network service.

@@ -7,6 +7,7 @@ public enum QuarantineError: LocalizedError {
     case planSessionMismatch
     case exactEvidenceRequired
     case noAutomaticCandidates
+    case unknownApprovedItem(String)
     case missingRoot(String)
     case rootRoleDisallowsCleanup(String)
     case unsafeRelativePath(String)
@@ -32,6 +33,8 @@ public enum QuarantineError: LocalizedError {
             return "Quarantine requires exact-duplicate evidence. Run without --no-exact-duplicates."
         case .noAutomaticCandidates:
             return "The plan has no automatic redundant candidates to quarantine."
+        case let .unknownApprovedItem(itemID):
+            return "The approved reconciliation item is not present in the current automatic plan: \(itemID)"
         case let .missingRoot(rootID):
             return "A planned source root is missing from the scan report: \(rootID)"
         case let .rootRoleDisallowsCleanup(rootID):
@@ -131,9 +134,15 @@ public enum QuarantineExecutor {
     public static func preflight(
         report: ScanReport,
         plan: ReconciliationPlan,
-        targetURL rawTargetURL: URL
+        targetURL rawTargetURL: URL,
+        approvedPreferenceItemIDs: Set<String> = []
     ) throws -> QuarantineReport {
-        let verified = try verify(report: report, plan: plan, targetURL: rawTargetURL)
+        let verified = try verify(
+            report: report,
+            plan: plan,
+            targetURL: rawTargetURL,
+            approvedPreferenceItemIDs: approvedPreferenceItemIDs
+        )
         let moves = verified.items.flatMap(\.moves).map(\.record)
         return QuarantineReport(
             schemaVersion: 1,
@@ -152,9 +161,15 @@ public enum QuarantineExecutor {
     public static func apply(
         report: ScanReport,
         plan: ReconciliationPlan,
-        targetURL rawTargetURL: URL
+        targetURL rawTargetURL: URL,
+        approvedPreferenceItemIDs: Set<String> = []
     ) throws -> QuarantineReport {
-        let verified = try verify(report: report, plan: plan, targetURL: rawTargetURL)
+        let verified = try verify(
+            report: report,
+            plan: plan,
+            targetURL: rawTargetURL,
+            approvedPreferenceItemIDs: approvedPreferenceItemIDs
+        )
         let fileManager = FileManager.default
         let sessionRoot = verified.targetURL
             .appendingPathComponent("PhotoArchiveKit", isDirectory: true)
@@ -241,7 +256,8 @@ public enum QuarantineExecutor {
     private static func verify(
         report: ScanReport,
         plan: ReconciliationPlan,
-        targetURL rawTargetURL: URL
+        targetURL rawTargetURL: URL,
+        approvedPreferenceItemIDs: Set<String>
     ) throws -> (targetURL: URL, items: [VerifiedItem]) {
         guard report.sessionID == plan.sessionID else {
             throw QuarantineError.planSessionMismatch
@@ -272,13 +288,18 @@ public enum QuarantineExecutor {
             }
         }
 
-        let automatic = plan.items.filter { item in
-            guard item.decision == .automaticRedundant else { return false }
-            return CanonicalKeeperPolicy.reviewStrength(
+        let automaticPlanItems = plan.items.filter { $0.decision == .automaticRedundant }
+        let automaticItemIDs = Set(automaticPlanItems.map(\.itemID))
+        if let unknownApproval = approvedPreferenceItemIDs.subtracting(automaticItemIDs).sorted().first {
+            throw QuarantineError.unknownApprovedItem(unknownApproval)
+        }
+        let automatic = automaticPlanItems.filter { item in
+            let strength = CanonicalKeeperPolicy.reviewStrength(
                 item: item,
                 rootsByID: rootsByID,
                 resourcesByKey: resourcesByKey
-            ) == .strong
+            )
+            return strength == .strong || approvedPreferenceItemIDs.contains(item.itemID)
         }
         guard !automatic.isEmpty else {
             throw QuarantineError.noAutomaticCandidates

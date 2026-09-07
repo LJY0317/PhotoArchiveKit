@@ -82,7 +82,7 @@ byte 보존 복제본          provenance와 이력
 - `cleanup-empty-dirs`는 완료된 organization manifest와 catalog location history에 실제로 기록된 source directory만 대상으로 하며, stable root marker를 확인하고 package/symlink boundary를 제외한 뒤 apply 순간에도 완전히 빈 directory만 제거
 - 사람이 읽는 report와 privacy-safe JSON report 제공
 - 선택적 외부 도구의 설치 여부만 감지하며 필수 의존성으로 만들지 않음
-- `automatic_redundant` exact 후보만 fresh SHA-256으로 preferred copy와 다시 검증한 뒤 local quarantine dry-run/apply 가능; Live Photo candidate set은 해당 item의 모든 resource 검증이 끝난 뒤에만 이동
+- strong `automatic_redundant` exact 후보를 fresh SHA-256으로 preferred copy와 다시 검증한 뒤 local quarantine dry-run/apply 가능; preference-sensitive keeper 선택은 사람이 검토한 현재 plan item을 반복 가능한 `--approve-item ITEM_ID`로 명시 승인한 경우에만 mutation authority를 얻고, Live Photo candidate set은 해당 item의 모든 resource 검증이 끝난 뒤에만 이동
 - Google Takeout의 source-folder/album-like membership을 local SQLite에 먼저 보존한 뒤 Takeout-only exact standalone copy를 물리적으로 collapse할 수 있으며, collection 이름/path는 agent-safe output에 노출하지 않음
 - 적용된 quarantine session에 local restore manifest를 남기고, 이동 중 오류가 발생하면 그 session에서 이미 이동한 resource 전체를 rollback하며, `restore-quarantine`도 local catalog의 원래 SHA-256 evidence와 quarantined byte를 fresh 검증한 뒤에만 dry-run/apply
 - 현재 모든 분석 단계는 network에 접속하지 않음
