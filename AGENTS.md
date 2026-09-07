@@ -4,7 +4,6 @@
 - 기본 개발 브랜치는 `dev`다. 새 작업을 시작할 때 먼저 `dev`를 확인하고, 안정화된 checkpoint만 `main`으로 올린다.
 - 작업 재개 시 `main`이 최신이라고 가정하지 않는다. `dev`와 연결된 worktree, branch/reflog 상태를 먼저 확인하고, `dev`가 `main`보다 앞서 있거나 실제 최근 작업이 이어진 흔적이 있으면 `dev`를 현재 기준 작업선으로 취급한다. `main`은 안정화 시점에 뒤따라올 수 있다.
 - 평소에는 remote push보다 local commit을 우선한다. 의미 있는 단위마다 commit하되, push는 공유·CI·backup 가치가 있는 굵직한 checkpoint 또는 사용자의 명시적 요청이 있을 때만 한다.
-- 원격 branch는 기본적으로 `main`과 `dev`만 유지한다. agent/실험/임시 branch는 local-only로 두고 사용자가 명시적으로 요청하지 않는 한 remote에 push하거나 갱신하지 않는다. 원격에 그 외 branch가 자동 생성되거나 남아 있으면 용도와 보존 필요성을 확인한 뒤 정리한다.
 - commit message는 작은 PR 설명 수준으로 남긴다. 한 줄 제목만 쓰지 말고 문제/변경/검증/privacy·safety 영향/남은 작업을 본문에 기록한다.
 - commit message의 제목과 본문은 기본적으로 한국어로 작성한다. Conventional Commit type(`feat:`, `fix:`, `docs:` 등), 명령어, API·제품명, 코드 식별자처럼 번역하면 오히려 불명확한 기술 표기는 원문을 유지할 수 있다.
 - `main`은 안정화 branch다. `dev`에서 build, self-test, public-tree check와 관련 real-library validation이 통과한 뒤에만 merge/fast-forward 대상으로 삼는다.
