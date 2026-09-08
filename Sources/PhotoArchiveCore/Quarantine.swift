@@ -460,7 +460,7 @@ public enum QuarantineExecutor {
         return (targetURL, verifiedItems)
     }
 
-    private static func roleAllowsReconciliationCleanup(
+    package static func roleAllowsReconciliationCleanup(
         sourceRoot: RootScanReport,
         preferredRoot: RootScanReport,
         sameRoot: Bool
@@ -536,7 +536,7 @@ public enum QuarantineExecutor {
         return result
     }
 
-    private static func validateCurrentFile(
+    package static func validateCurrentFile(
         url: URL,
         expectedSize: Int64,
         rootURL: URL
@@ -560,7 +560,7 @@ public enum QuarantineExecutor {
         }
     }
 
-    private static func safeResourceURL(rootURL: URL, relativePath: String) throws -> URL {
+    package static func safeResourceURL(rootURL: URL, relativePath: String) throws -> URL {
         guard !relativePath.isEmpty,
               !relativePath.hasPrefix("/"),
               !relativePath.split(separator: "/").contains("..")

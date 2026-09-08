@@ -1944,6 +1944,79 @@ struct PhotoArchiveSelfTest {
             "native duplicate-review presentation should preserve the keeper rationale and local resource locations"
         )
 
+        guard let dateAddedPresentationItem = duplicateReviewPresentation.items.first(where: {
+            $0.id == dateAddedItem.itemID
+        }),
+        let reviewedKeeperID = dateAddedPresentationItem.preferredResources.first?.id,
+        let reviewedCandidateID = dateAddedPresentationItem.candidateResources.first?.id
+        else {
+            throw SelfTestFailure("duplicate-review cleanup fixture should expose the Date Added keeper and candidate resource IDs")
+        }
+
+        let reviewedCleanupDecision = DuplicateReviewDecision(
+            itemID: dateAddedItem.itemID,
+            subjectID: dateAddedItem.subjectID,
+            keptResourceIDs: [reviewedKeeperID],
+            cleanupResourceIDs: [reviewedCandidateID]
+        )
+        let reviewedCleanupPreflight = try DuplicateReviewCleanupExecutor.preflightForTesting(
+            report: stagingPolicyReport,
+            plan: stagingPolicyPlan,
+            decisions: [reviewedCleanupDecision],
+            explicitlyRemoveAllItemIDs: [],
+            destination: .systemTrash,
+            catalogURL: stagingPolicyCatalog
+        )
+        try require(
+            reviewedCleanupPreflight.dryRun
+                && reviewedCleanupPreflight.destinationKind == .systemTrash
+                && reviewedCleanupPreflight.itemCount == 1
+                && reviewedCleanupPreflight.resourceCount == 1
+                && reviewedCleanupPreflight.nonRedundantResourceCount == 0,
+            "review-selected duplicate cleanup should fresh-verify the chosen exact candidate without modifying files"
+        )
+
+        let reversedCleanupDecision = DuplicateReviewDecision(
+            itemID: dateAddedItem.itemID,
+            subjectID: dateAddedItem.subjectID,
+            keptResourceIDs: [reviewedCandidateID],
+            cleanupResourceIDs: [reviewedKeeperID]
+        )
+        let reversedCleanupPreflight = try DuplicateReviewCleanupExecutor.preflightForTesting(
+            report: stagingPolicyReport,
+            plan: stagingPolicyPlan,
+            decisions: [reversedCleanupDecision],
+            explicitlyRemoveAllItemIDs: [],
+            destination: .systemTrash,
+            catalogURL: stagingPolicyCatalog
+        )
+        try require(
+            reversedCleanupPreflight.resourceCount == 1
+                && reversedCleanupPreflight.nonRedundantResourceCount == 0,
+            "explicit duplicate review must be able to choose the planner's original keeper as cleanup when a retained exact counterpart remains"
+        )
+
+        let removeAllCleanupDecision = DuplicateReviewDecision(
+            itemID: dateAddedItem.itemID,
+            subjectID: dateAddedItem.subjectID,
+            keptResourceIDs: [],
+            cleanupResourceIDs: [reviewedKeeperID, reviewedCandidateID]
+        )
+        let removeAllCleanupPreflight = try DuplicateReviewCleanupExecutor.preflightForTesting(
+            report: stagingPolicyReport,
+            plan: stagingPolicyPlan,
+            decisions: [removeAllCleanupDecision],
+            explicitlyRemoveAllItemIDs: [dateAddedItem.itemID],
+            destination: .systemTrash,
+            catalogURL: stagingPolicyCatalog
+        )
+        try require(
+            removeAllCleanupPreflight.resourceCount == 2
+                && removeAllCleanupPreflight.removeAllItemCount == 1
+                && removeAllCleanupPreflight.nonRedundantResourceCount == 2,
+            "explicit remove-all review should remain reversible but must report that no retained exact counterpart remains"
+        )
+
         let decisionURL = temporary.appendingPathComponent("review-decisions.json")
         let decisionBundle = DuplicateReviewDecisionBundle(
             sessionID: duplicateReviewPresentation.sessionID,
@@ -1991,6 +2064,41 @@ struct PhotoArchiveSelfTest {
                 allCopyIDs: [reviewCopyA, reviewCopyB]
             ) == .requiresRemoveAllConfirmation,
             "clicking the last unmarked duplicate-review column should require explicit confirmation before all copies are marked for cleanup"
+        )
+
+        guard let reviewedCandidateResource = stagingPolicyReport.resources.first(where: {
+            $0.resourceID == reviewedCandidateID
+        }),
+        let reviewedCandidateRoot = stagingPolicyReport.roots.first(where: {
+            $0.rootID == reviewedCandidateResource.rootID
+        })
+        else {
+            throw SelfTestFailure("review cleanup apply fixture should resolve the selected candidate path")
+        }
+        let reviewedCandidateURL = URL(
+            fileURLWithPath: reviewedCandidateRoot.canonicalPath,
+            isDirectory: true
+        ).appendingPathComponent(reviewedCandidateResource.relativePath)
+        let reviewFakeTrash = temporary.appendingPathComponent("ReviewFakeTrash", isDirectory: true)
+        try fileManager.createDirectory(at: reviewFakeTrash, withIntermediateDirectories: true)
+        let reviewedApplied = try DuplicateReviewCleanupExecutor.applySystemTrashForTesting(
+            report: stagingPolicyReport,
+            plan: stagingPolicyPlan,
+            decisions: [reviewedCleanupDecision],
+            explicitlyRemoveAllItemIDs: [],
+            catalogURL: stagingPolicyCatalog,
+            trashMover: { sourceURL in
+                let destination = reviewFakeTrash.appendingPathComponent(UUID().uuidString)
+                try fileManager.moveItem(at: sourceURL, to: destination)
+                return destination
+            }
+        )
+        try require(
+            reviewedApplied.filesModified
+                && reviewedApplied.destinationKind == .systemTrash
+                && reviewedApplied.resourceCount == 1
+                && !fileManager.fileExists(atPath: reviewedCandidateURL.path),
+            "GUI-reviewed cleanup should move only the selected exact resource after fresh verification"
         )
 
         let trashCleanupRoot = temporary.appendingPathComponent("TrashCleanup", isDirectory: true)

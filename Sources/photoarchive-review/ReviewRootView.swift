@@ -107,6 +107,17 @@ struct ReviewRootView: View {
                 }
             )
         }
+        .sheet(item: $store.preparedCleanup) { prepared in
+            ReviewCleanupConfirmationSheet(
+                prepared: prepared,
+                isApplying: store.isApplyingCleanup,
+                errorMessage: store.cleanupErrorMessage,
+                onCancel: store.cancelPreparedCleanup,
+                onApply: {
+                    Task { await store.applyPreparedCleanup() }
+                }
+            )
+        }
         .alert(item: $store.removeAllConfirmation) { request in
             Alert(
                 title: Text("모든 사본을 정리 대상으로 표시할까요?"),
@@ -229,18 +240,152 @@ private struct ReviewActionBar: View {
             Spacer()
 
             Button {
-                store.submitApproved()
+                Task { await store.prepareApprovedCleanup() }
             } label: {
-                Label("검토 결과 제출 (\(store.approvedCount))", systemImage: "tray.and.arrow.down.fill")
+                if store.isPreparingCleanup {
+                    Label("정리 전 검증 중…", systemImage: "shield.lefthalf.filled")
+                } else {
+                    Label(
+                        "정리 전 확인 (\(store.approvedCleanupItemCount))",
+                        systemImage: "trash"
+                    )
+                }
             }
             .buttonStyle(.borderedProminent)
-            .disabled(store.approvedCount == 0 || store.isScanning)
-            .help("검토 완료한 선택을 opaque ID 기반 로컬 decision bundle로 저장합니다. 이 버튼만으로 파일을 이동하거나 삭제하지 않습니다.")
+            .disabled(
+                store.approvedCleanupItemCount == 0
+                    || store.isScanning
+                    || store.isPreparingCleanup
+                    || store.isApplyingCleanup
+            )
+            .help("검토 완료한 정리 선택을 현재 파일 상태와 다시 검증한 뒤 실제 reversible destination으로 이동하기 전 최종 확인 화면을 엽니다.")
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 9)
         .background(.bar)
         .overlay(alignment: .top) { Divider() }
+    }
+}
+
+private struct ReviewCleanupConfirmationSheet: View {
+    let prepared: PreparedReviewCleanup
+    let isApplying: Bool
+    let errorMessage: String?
+    let onCancel: () -> Void
+    let onApply: () -> Void
+
+    private var report: DuplicateReviewCleanupReport { prepared.preflight }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("정리 전 확인")
+                    .font(.title2.weight(.semibold))
+                Text("사용자가 검토한 선택만 적용합니다. 실제 이동 직전에 같은 안전 검증을 다시 수행합니다.")
+                    .foregroundStyle(.secondary)
+            }
+
+            Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 12) {
+                summaryRow("그룹", "\(report.itemCount)개")
+                summaryRow("사본", "\(prepared.selectedCopyCount)개")
+                summaryRow("파일", "\(report.resourceCount)개")
+                summaryRow("용량", ByteCountFormatter.string(fromByteCount: report.totalBytes, countStyle: .file))
+                summaryRow("목적지", destinationTitle)
+            }
+            .padding(14)
+            .background(.background.secondary, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+            VStack(alignment: .leading, spacing: 9) {
+                Label(
+                    "선택된 파일의 현재 경로·크기·파일 identity와 가능한 catalog SHA-256을 다시 확인합니다.",
+                    systemImage: "checkmark.shield.fill"
+                )
+                .foregroundStyle(.secondary)
+
+                if report.nonRedundantResourceCount > 0 {
+                    Label(
+                        "\(report.nonRedundantResourceCount)개 resource는 남아 있는 exact counterpart가 없습니다. 사용자가 명시적으로 선택한 staging/primary-library 항목으로서 reversible destination으로 이동합니다.",
+                        systemImage: "exclamationmark.triangle.fill"
+                    )
+                    .foregroundStyle(.orange)
+                }
+
+                if report.onlyCompleteLivePhotoPairRemovalCount > 0 {
+                    Label(
+                        "\(report.onlyCompleteLivePhotoPairRemovalCount)개 그룹에서는 유일한 완전한 Live Photo 페어가 정리 대상에 포함됩니다.",
+                        systemImage: "livephoto.badge.exclamationmark"
+                    )
+                    .foregroundStyle(.orange)
+                }
+
+                if report.removeAllItemCount > 0 {
+                    Label(
+                        "\(report.removeAllItemCount)개 그룹은 남기는 사본 없이 그룹 전체를 정리합니다.",
+                        systemImage: "exclamationmark.octagon.fill"
+                    )
+                    .foregroundStyle(.red)
+                }
+            }
+            .font(.callout)
+
+            if let errorMessage {
+                Label(errorMessage, systemImage: "exclamationmark.triangle.fill")
+                    .font(.callout)
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            HStack {
+                if isApplying {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text("다시 검증하고 이동하는 중…")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button("취소", action: onCancel)
+                    .keyboardShortcut(.cancelAction)
+                    .disabled(isApplying)
+                Button(applyButtonTitle, action: onApply)
+                    .buttonStyle(.borderedProminent)
+                    .tint(report.removeAllItemCount > 0 || report.nonRedundantResourceCount > 0 ? .red : nil)
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(isApplying)
+            }
+        }
+        .padding(22)
+        .frame(width: 620)
+    }
+
+    @ViewBuilder
+    private func summaryRow(_ label: String, _ value: String) -> some View {
+        GridRow {
+            Text(label)
+                .foregroundStyle(.secondary)
+            Text(value)
+                .fontWeight(.medium)
+                .textSelection(.enabled)
+        }
+    }
+
+    private var destinationTitle: String {
+        switch report.destinationKind {
+        case .systemTrash:
+            return "macOS 휴지통"
+        case .customQuarantine:
+            guard let path = report.targetPath else { return "사용자 지정 격리 폴더" }
+            return "사용자 지정 격리 폴더 · \(URL(fileURLWithPath: path).lastPathComponent)"
+        }
+    }
+
+    private var applyButtonTitle: String {
+        switch report.destinationKind {
+        case .systemTrash:
+            return "다시 검증하고 휴지통으로 이동"
+        case .customQuarantine:
+            return "다시 검증하고 격리 폴더로 이동"
+        }
     }
 }
 

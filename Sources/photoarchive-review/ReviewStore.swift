@@ -7,6 +7,17 @@ struct RemoveAllCleanupConfirmation: Identifiable {
     let message: String
 }
 
+struct PreparedReviewCleanup: Identifiable {
+    let id = UUID()
+    let report: ScanReport
+    let plan: ReconciliationPlan
+    let decisions: [DuplicateReviewDecision]
+    let explicitlyRemoveAllItemIDs: Set<String>
+    let destination: DuplicateCleanupDestination
+    let preflight: DuplicateReviewCleanupReport
+    let selectedCopyCount: Int
+}
+
 @MainActor
 final class ReviewStore: ObservableObject {
     @Published var presentation: DuplicateReviewPresentation?
@@ -16,6 +27,10 @@ final class ReviewStore: ObservableObject {
     @Published var statusMessage: String?
     @Published var isLoading = false
     @Published var isScanning = false
+    @Published var isPreparingCleanup = false
+    @Published var isApplyingCleanup = false
+    @Published var cleanupErrorMessage: String?
+    @Published var preparedCleanup: PreparedReviewCleanup?
     @Published private(set) var registeredRoots: [RegisteredRootReport] = []
     @Published var selectedRootIDs = Set<String>()
     @Published private(set) var cleanupCopyIDsByItem: [String: Set<String>] = [:]
@@ -46,6 +61,16 @@ final class ReviewStore: ObservableObject {
     }
 
     var approvedCount: Int { approvedItemIDs.count }
+
+    var approvedCleanupItemCount: Int {
+        approvedItemIDs.filter { !(cleanupCopyIDsByItem[$0] ?? []).isEmpty }.count
+    }
+
+    var approvedCleanupCopyCount: Int {
+        approvedItemIDs.reduce(0) { partial, itemID in
+            partial + (cleanupCopyIDsByItem[itemID]?.count ?? 0)
+        }
+    }
 
     var activeRegisteredRoots: [RegisteredRootReport] {
         registeredRoots
@@ -329,16 +354,116 @@ final class ReviewStore: ObservableObject {
         statusMessage = "검토 완료 표시를 취소했습니다."
     }
 
-    func submitApproved() {
+    func prepareApprovedCleanup() async {
+        guard !isPreparingCleanup && !isApplyingCleanup else { return }
         guard let presentation else { return }
-        let approvedItems = presentation.items.filter { approvedItemIDs.contains($0.id) }
-        guard !approvedItems.isEmpty else {
-            statusMessage = "먼저 하나 이상의 그룹을 검토 완료로 표시하세요."
+        let decisions = approvedCleanupDecisions(in: presentation)
+        guard !decisions.isEmpty else {
+            statusMessage = "먼저 정리 대상이 있는 그룹을 검토 완료로 표시하세요."
             return
         }
 
-        let decisions = approvedItems.map { item -> DuplicateReviewDecision in
+        isPreparingCleanup = true
+        cleanupErrorMessage = nil
+        statusMessage = "현재 파일과 정리 선택을 다시 검증하는 중입니다…"
+
+        do {
+            let scanner = try ArchiveScanner()
+            guard let report = try scanner.latestReusableDuplicateReviewScanReport(),
+                  report.sessionID == presentation.sessionID
+            else {
+                throw DuplicateReviewCleanupError.sessionMismatch
+            }
+            let plan = ReconciliationPlanner.makePlan(from: report)
+            let settings = try PhotoArchiveSettingsStore.load()
+            let destination = try PhotoArchiveSettingsStore.resolvedDestination(
+                settings.duplicateCleanupDestination
+            )
+            let explicitRemoveAll = explicitlyRemoveAllItemIDs.intersection(approvedItemIDs)
+            let preflight = try await Task.detached(priority: .userInitiated) {
+                try DuplicateReviewCleanupExecutor.preflight(
+                    report: report,
+                    plan: plan,
+                    decisions: decisions,
+                    explicitlyRemoveAllItemIDs: explicitRemoveAll,
+                    destination: destination
+                )
+            }.value
+
+            preparedCleanup = PreparedReviewCleanup(
+                report: report,
+                plan: plan,
+                decisions: decisions,
+                explicitlyRemoveAllItemIDs: explicitRemoveAll,
+                destination: destination,
+                preflight: preflight,
+                selectedCopyCount: approvedCleanupCopyCount
+            )
+            statusMessage = "정리 전 검증 완료 · 실제 이동 전 최종 확인이 필요합니다."
+        } catch {
+            cleanupErrorMessage = error.localizedDescription
+            statusMessage = "정리 전 검증에 실패했습니다: \(error.localizedDescription)"
+        }
+        isPreparingCleanup = false
+    }
+
+    func cancelPreparedCleanup() {
+        guard !isApplyingCleanup else { return }
+        preparedCleanup = nil
+        cleanupErrorMessage = nil
+        statusMessage = "정리 전 확인을 취소했습니다."
+    }
+
+    func applyPreparedCleanup() async {
+        guard !isApplyingCleanup, let preparedCleanup else { return }
+        isApplyingCleanup = true
+        cleanupErrorMessage = nil
+        statusMessage = "현재 파일을 다시 검증한 뒤 reversible destination으로 이동하는 중입니다…"
+
+        do {
+            try DuplicateReviewDecisionStore.save(
+                DuplicateReviewDecisionBundle(
+                    sessionID: preparedCleanup.report.sessionID,
+                    decisions: preparedCleanup.decisions
+                )
+            )
+            let applied = try await Task.detached(priority: .userInitiated) {
+                try DuplicateReviewCleanupExecutor.apply(
+                    report: preparedCleanup.report,
+                    plan: preparedCleanup.plan,
+                    decisions: preparedCleanup.decisions,
+                    explicitlyRemoveAllItemIDs: preparedCleanup.explicitlyRemoveAllItemIDs,
+                    destination: preparedCleanup.destination
+                )
+            }.value
+
+            self.preparedCleanup = nil
+            approvedItemIDs.removeAll()
+            explicitlyRemoveAllItemIDs.removeAll()
+            isApplyingCleanup = false
+
+            let destinationText = applied.destinationKind == .systemTrash
+                ? "macOS 휴지통"
+                : "사용자 지정 격리 폴더"
+            let movedSummary = "\(applied.resourceCount)개 파일을 \(destinationText)(으)로 이동했습니다."
+            let refreshed = await scanSelectedRoots()
+            statusMessage = refreshed
+                ? "\(movedSummary) 비교 결과도 새로고침했습니다."
+                : movedSummary
+        } catch {
+            cleanupErrorMessage = error.localizedDescription
+            statusMessage = "정리를 적용하지 못했습니다: \(error.localizedDescription)"
+            isApplyingCleanup = false
+        }
+    }
+
+    private func approvedCleanupDecisions(
+        in presentation: DuplicateReviewPresentation
+    ) -> [DuplicateReviewDecision] {
+        presentation.items.compactMap { item in
+            guard approvedItemIDs.contains(item.id) else { return nil }
             let cleanupIDs = cleanupCopyIDsByItem[item.id, default: []]
+            guard !cleanupIDs.isEmpty else { return nil }
             let keptResources = item.copies
                 .filter { !cleanupIDs.contains($0.id) }
                 .flatMap(\.resources)
@@ -353,18 +478,6 @@ final class ReviewStore: ObservableObject {
                 keptResourceIDs: keptResources,
                 cleanupResourceIDs: cleanupResources
             )
-        }
-
-        do {
-            try DuplicateReviewDecisionStore.save(
-                DuplicateReviewDecisionBundle(
-                    sessionID: presentation.sessionID,
-                    decisions: decisions
-                )
-            )
-            statusMessage = "검토 결과 \(decisions.count)개 그룹을 저장했습니다 · 파일 변경 없음 · 실제 정리는 별도 fresh verification 후 수행됩니다."
-        } catch {
-            statusMessage = "검토 제출에 실패했습니다: \(error.localizedDescription)"
         }
     }
 

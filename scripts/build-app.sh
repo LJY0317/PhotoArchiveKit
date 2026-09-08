@@ -3,7 +3,7 @@ set -eu
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 PROJECT_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
-APP_NAME="PhotoArchiveKit Review"
+APP_NAME="PhotoArchiveKit"
 APP_DIR="$PROJECT_DIR/.build/$APP_NAME.app"
 CONTENTS_DIR="$APP_DIR/Contents"
 MACOS_DIR="$CONTENTS_DIR/MacOS"
@@ -16,6 +16,8 @@ swift build -c "$CONFIGURATION" --product "$EXECUTABLE_NAME" >&2
 BIN_DIR=$(swift build -c "$CONFIGURATION" --show-bin-path)
 SOURCE_EXECUTABLE="$BIN_DIR/$EXECUTABLE_NAME"
 
+# The old development bundle name is no longer a separate product.
+rm -rf "$PROJECT_DIR/.build/PhotoArchiveKit Review.app"
 rm -rf "$APP_DIR"
 mkdir -p "$MACOS_DIR"
 cp "$SOURCE_EXECUTABLE" "$MACOS_DIR/$EXECUTABLE_NAME"
@@ -29,15 +31,15 @@ cat > "$CONTENTS_DIR/Info.plist" <<'EOF'
     <key>CFBundleDevelopmentRegion</key>
     <string>ko</string>
     <key>CFBundleDisplayName</key>
-    <string>PhotoArchiveKit Review</string>
+    <string>PhotoArchiveKit</string>
     <key>CFBundleExecutable</key>
     <string>photoarchive-review</string>
     <key>CFBundleIdentifier</key>
-    <string>io.photoarchivekit.review</string>
+    <string>io.photoarchivekit.app</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
     <key>CFBundleName</key>
-    <string>PhotoArchiveKit Review</string>
+    <string>PhotoArchiveKit</string>
     <key>CFBundlePackageType</key>
     <string>APPL</string>
     <key>CFBundleShortVersionString</key>
