@@ -648,11 +648,6 @@ private struct ReviewDetailView: View {
             Text("\(index) / \(total)")
                 .font(.callout.monospacedDigit())
                 .foregroundStyle(.secondary)
-            if item.kind == .livePhotoAsset {
-                Image(systemName: "livephoto")
-                    .foregroundStyle(.blue)
-                    .help("Live Photo")
-            }
             Spacer()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
@@ -835,28 +830,20 @@ private struct CopyHeaderCell: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             VStack(alignment: .leading, spacing: 8) {
-                statusPrimaryRow
-                    .frame(height: 22, alignment: .leading)
-
-                recommendationReasonRow
-                    .frame(height: 32, alignment: .topLeading)
-
-                if itemKind == .livePhotoAsset {
-                    statusSecondaryRow
-                        .frame(height: 22, alignment: .leading)
-                }
-
                 if let primary = copy.primaryResource {
                     ReviewThumbnail(url: primary.fileURL)
                         .frame(maxWidth: .infinity)
                         .frame(height: 260)
+                        .overlay(alignment: .topLeading) {
+                            if copy.isCompleteLivePhotoOccurrence {
+                                livePhotoThumbnailBadge
+                                    .padding(10)
+                            }
+                        }
                         .overlay(alignment: .topTrailing) {
                             if isMarkedForCleanup {
-                                Image(systemName: "trash.circle.fill")
-                                    .font(.title2)
-                                    .symbolRenderingMode(.hierarchical)
-                                    .foregroundStyle(.red)
-                                    .padding(9)
+                                cleanupThumbnailBadge
+                                    .padding(10)
                             }
                         }
 
@@ -875,6 +862,9 @@ private struct CopyHeaderCell: View {
                     resourceSummary
                         .frame(height: 42, alignment: .topLeading)
                 }
+
+                recommendationBlock
+                    .frame(height: 46, alignment: .topLeading)
             }
             .contentShape(Rectangle())
             .onTapGesture(perform: onToggleCleanupFromColumn)
@@ -888,44 +878,45 @@ private struct CopyHeaderCell: View {
         .clipped()
     }
 
-    private var statusPrimaryRow: some View {
-        HStack(spacing: 7) {
-            if isMarkedForCleanup {
-                Label("삭제 예정", systemImage: "trash.circle.fill")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.red)
-            }
-
-            if copy.isKeeper {
+    @ViewBuilder
+    private var recommendationBlock: some View {
+        if let recommendationText {
+            VStack(alignment: .leading, spacing: 3) {
                 Label("남기기 추천", systemImage: "checkmark.seal.fill")
-                    .font(.caption2.weight(.medium))
+                    .font(.caption.weight(.semibold))
                     .foregroundStyle(.green)
                     .help("이 사본을 남기는 것을 추천합니다")
-            }
-        }
-        .lineLimit(1)
-    }
 
-    @ViewBuilder
-    private var recommendationReasonRow: some View {
-        if let recommendationText {
-            Text(recommendationText)
-                .font(.caption2)
-                .foregroundStyle(.secondary)
-                .lineLimit(2)
-                .fixedSize(horizontal: false, vertical: true)
-                .help(recommendationText)
+                Text(recommendationText)
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .help(recommendationText)
+            }
         } else {
             Color.clear
         }
     }
 
-    private var statusSecondaryRow: some View {
-        HStack(spacing: 7) {
-            livePhotoIntegrityBadge
-            Spacer(minLength: 0)
-        }
-        .lineLimit(1)
+    private var livePhotoThumbnailBadge: some View {
+        Image(systemName: "livephoto")
+            .font(.system(size: 17, weight: .semibold))
+            .foregroundStyle(.primary)
+            .frame(width: 30, height: 30)
+            .background(.ultraThinMaterial, in: Circle())
+            .shadow(radius: 1.5, y: 0.5)
+            .help("Live Photo")
+    }
+
+    private var cleanupThumbnailBadge: some View {
+        Image(systemName: "trash.fill")
+            .font(.system(size: 18, weight: .bold))
+            .foregroundStyle(.white)
+            .frame(width: 38, height: 38)
+            .background(.red, in: Circle())
+            .shadow(radius: 2, y: 1)
+            .help("삭제 대상으로 선택됨")
     }
 
     private var resourceSummary: some View {
@@ -968,15 +959,6 @@ private struct CopyHeaderCell: View {
             .help(cleanupToggleHelp)
     }
 
-    @ViewBuilder
-    private var livePhotoIntegrityBadge: some View {
-        if copy.isCompleteLivePhotoOccurrence {
-            Label("Live Photo", systemImage: "livephoto")
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(.green)
-                .help("사진과 비디오가 함께 있는 완전한 Live Photo")
-        }
-    }
 }
 
 private struct ComparisonRowSpec: Identifiable {
