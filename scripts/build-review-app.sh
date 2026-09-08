@@ -10,9 +10,10 @@ MACOS_DIR="$CONTENTS_DIR/MacOS"
 EXECUTABLE_NAME="photoarchive-review"
 
 cd "$PROJECT_DIR"
-swift build --product "$EXECUTABLE_NAME" >&2
+CONFIGURATION="${PHOTOARCHIVE_BUILD_CONFIGURATION:-release}"
+swift build -c "$CONFIGURATION" --product "$EXECUTABLE_NAME" >&2
 
-BIN_DIR=$(swift build --show-bin-path)
+BIN_DIR=$(swift build -c "$CONFIGURATION" --show-bin-path)
 SOURCE_EXECUTABLE="$BIN_DIR/$EXECUTABLE_NAME"
 
 rm -rf "$APP_DIR"

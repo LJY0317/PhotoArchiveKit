@@ -8,11 +8,13 @@ struct ReviewRootView: View {
     @State private var addRootRequest: AddComparisonRootRequest?
 
     var body: some View {
-        NavigationSplitView {
+        ReviewWindowLayout {
             sidebar
                 .navigationSplitViewColumnWidth(min: 250, ideal: 290, max: 360)
         } detail: {
             detail
+        } actions: {
+            ReviewActionBar(store: store)
         }
         .toolbar {
             ToolbarItemGroup(placement: .navigation) {
@@ -84,9 +86,6 @@ struct ReviewRootView: View {
         }
         .onReceive(NotificationCenter.default.publisher(for: .photoArchiveReloadReview)) { _ in
             store.reload()
-        }
-        .safeAreaInset(edge: .bottom) {
-            ReviewActionBar(store: store)
         }
         .sheet(item: $addRootRequest) { request in
             AddComparisonRootSheet(
@@ -457,8 +456,6 @@ private struct ReviewDetailView: View {
     let onApproveAndNext: () -> Void
     let onUnapprove: () -> Void
 
-    @State private var nativeScrollView: NSScrollView?
-
     var body: some View {
         GeometryReader { proxy in
             let copies = item.copies.isEmpty
@@ -467,126 +464,73 @@ private struct ReviewDetailView: View {
             let labelWidth: CGFloat = 150
             let gap: CGFloat = 12
             let horizontalPadding: CGFloat = 22
+            let tablePadding: CGFloat = 32
+            let viewportWidth = max(0, proxy.size.width - NSScroller.scrollerWidth(
+                for: .regular, scrollerStyle: .legacy
+            ))
             let available = max(
                 0,
-                proxy.size.width
+                viewportWidth
+                    - tablePadding
                     - horizontalPadding * 2
                     - labelWidth
                     - gap * CGFloat(max(1, copies.count))
             )
             let fittedWidth = available / CGFloat(max(1, copies.count))
             let columnWidth = max(260, min(430, fittedWidth))
-            let gridWidth = labelWidth
+            let gridWidth = tablePadding + labelWidth
                 + gap
                 + (columnWidth * CGFloat(max(1, copies.count)))
                 + (gap * CGFloat(max(0, copies.count - 1)))
-            let contentWidth = max(proxy.size.width - horizontalPadding * 2, gridWidth)
-            let horizontalOverflow = gridWidth + horizontalPadding * 2 > proxy.size.width + 1
-            let horizontalStep = columnWidth + gap
+            let documentWidth = max(viewportWidth, gridWidth + horizontalPadding * 2)
 
-            ZStack(alignment: .bottomTrailing) {
-                ScrollView([.vertical, .horizontal], showsIndicators: true) {
-                    VStack(alignment: .leading, spacing: 18) {
-                        header
-                            .frame(width: contentWidth, alignment: .leading)
+            ReviewComparisonScrollView(documentID: item.id) {
+                VStack(alignment: .leading, spacing: 18) {
+                    header
+                        .frame(width: gridWidth, alignment: .leading)
 
-                        ReviewComparisonTable(
-                            item: item,
-                            copies: copies,
-                            labelWidth: labelWidth,
-                            columnWidth: columnWidth,
-                            gap: gap,
-                            cleanupCopyIDs: cleanupCopyIDs,
-                            isApproved: isApproved,
-                            onToggleCleanup: onToggleCleanup,
-                            onKeepOnly: onKeepOnly,
-                            canToggleCleanup: canToggleCleanup,
-                            cleanupToggleHelp: cleanupToggleHelp,
-                            canKeepOnly: canKeepOnly,
-                            keepOnlyHelp: keepOnlyHelp
-                        )
-                        .frame(width: gridWidth, alignment: .topLeading)
-
-                        HStack {
-                            if isApproved {
-                                Label("이 그룹은 검토 완료 상태입니다", systemImage: "checkmark.circle.fill")
-                                    .foregroundStyle(.green)
-                                Button("검토 완료 취소", action: onUnapprove)
-                            } else {
-                                Text("현재 표시된 남김/정리 선택을 확인한 뒤 승인하세요.")
-                                    .foregroundStyle(.secondary)
-                                Button("현재 선택 승인하고 다음", action: onApproveAndNext)
-                                    .buttonStyle(.borderedProminent)
-                            }
-                            Spacer()
-                        }
-                        .frame(width: contentWidth)
-                    }
-                    .frame(width: contentWidth, alignment: .leading)
-                    .padding(.horizontal, horizontalPadding)
-                    .padding(.vertical, 20)
-                    .background {
-                        NativeScrollViewResolver { scrollView in
-                            if nativeScrollView !== scrollView {
-                                nativeScrollView = scrollView
-                            }
-                            configureNativeScrollView(
-                                scrollView,
-                                horizontalOverflow: horizontalOverflow
-                            )
-                        }
-                    }
-                }
-                .scrollIndicators(.visible, axes: [.vertical, .horizontal])
-                .scrollIndicatorsFlash(onAppear: horizontalOverflow)
-                .contentMargins(.bottom, 12, for: .scrollIndicators)
-
-                if horizontalOverflow {
-                    HorizontalColumnNavigation(
-                        copyCount: copies.count,
-                        onPrevious: { scrollHorizontally(by: -horizontalStep) },
-                        onNext: { scrollHorizontally(by: horizontalStep) }
+                    ReviewComparisonTable(
+                        item: item,
+                        copies: copies,
+                        labelWidth: labelWidth,
+                        columnWidth: columnWidth,
+                        gap: gap,
+                        cleanupCopyIDs: cleanupCopyIDs,
+                        isApproved: isApproved,
+                        onToggleCleanup: onToggleCleanup,
+                        onKeepOnly: onKeepOnly,
+                        canToggleCleanup: canToggleCleanup,
+                        cleanupToggleHelp: cleanupToggleHelp,
+                        canKeepOnly: canKeepOnly,
+                        keepOnlyHelp: keepOnlyHelp
                     )
-                    .padding(.trailing, 14)
-                    .padding(.bottom, 18)
+                    .frame(width: gridWidth, alignment: .topLeading)
+
+                    HStack {
+                        if isApproved {
+                            Label("이 그룹은 검토 완료 상태입니다", systemImage: "checkmark.circle.fill")
+                                .foregroundStyle(.green)
+                            Button("검토 완료 취소", action: onUnapprove)
+                        } else {
+                            Text("현재 표시된 남김/정리 선택을 확인한 뒤 승인하세요.")
+                                .foregroundStyle(.secondary)
+                            Button("현재 선택 승인하고 다음", action: onApproveAndNext)
+                                .buttonStyle(.borderedProminent)
+                        }
+                        Spacer()
+                    }
+                    .frame(width: gridWidth)
                 }
+                .frame(width: gridWidth, alignment: .leading)
+                .padding(.horizontal, horizontalPadding)
+                .padding(.vertical, 20)
+                // Center the bounded comparison as a whole on wide windows.
+                // At overflow width there is no extra margin, so column one
+                // and the row labels remain reachable at scroll origin zero.
+                .frame(width: documentWidth, alignment: .top)
             }
         }
         .background(Color(nsColor: .windowBackgroundColor))
-    }
-
-    private func scrollHorizontally(by delta: CGFloat) {
-        guard let scrollView = nativeScrollView,
-              let documentView = scrollView.documentView
-        else { return }
-
-        let clipView = scrollView.contentView
-        let maximumX = max(0, documentView.bounds.width - clipView.bounds.width)
-        let targetX = min(max(clipView.bounds.origin.x + delta, 0), maximumX)
-        guard abs(targetX - clipView.bounds.origin.x) > 0.5 else { return }
-
-        NSAnimationContext.runAnimationGroup { context in
-            context.duration = 0.16
-            clipView.animator().setBoundsOrigin(
-                NSPoint(x: targetX, y: clipView.bounds.origin.y)
-            )
-        } completionHandler: {
-            Task { @MainActor in
-                scrollView.reflectScrolledClipView(clipView)
-            }
-        }
-    }
-
-    private func configureNativeScrollView(
-        _ scrollView: NSScrollView,
-        horizontalOverflow: Bool
-    ) {
-        scrollView.hasVerticalScroller = true
-        scrollView.hasHorizontalScroller = horizontalOverflow
-        scrollView.horizontalScroller?.isHidden = !horizontalOverflow
-        scrollView.scrollerStyle = NSScroller.preferredScrollerStyle
-        scrollView.scrollerInsets = NSEdgeInsets(top: 0, left: 0, bottom: 12, right: 0)
-        scrollView.tile()
     }
 
     private var fallbackCopies: [DuplicateReviewPresentationCopy] {
@@ -656,70 +600,6 @@ private struct ReviewDetailView: View {
     }
 }
 
-private struct HorizontalColumnNavigation: View {
-    let copyCount: Int
-    let onPrevious: () -> Void
-    let onNext: () -> Void
-
-    var body: some View {
-        HStack(spacing: 6) {
-            Text("\(copyCount)개 열")
-                .font(.caption2.monospacedDigit())
-                .foregroundStyle(.secondary)
-
-            ControlGroup {
-                Button(action: onPrevious) {
-                    Label("이전 열", systemImage: "arrow.left")
-                        .labelStyle(.iconOnly)
-                }
-                .help("왼쪽 비교 열로 이동")
-
-                Button(action: onNext) {
-                    Label("다음 열", systemImage: "arrow.right")
-                        .labelStyle(.iconOnly)
-                }
-                .help("오른쪽 비교 열로 이동")
-            }
-            .controlSize(.small)
-        }
-        .padding(.horizontal, 8)
-        .padding(.vertical, 6)
-        .background(.regularMaterial, in: Capsule())
-        .overlay {
-            Capsule()
-                .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
-        }
-        .help("가로 스크롤이 필요한 비교입니다. 스크롤 막대를 드래그하거나 화살표로 한 열씩 이동할 수 있습니다.")
-    }
-}
-
-private struct NativeScrollViewResolver: NSViewRepresentable {
-    let onResolve: (NSScrollView) -> Void
-
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView(frame: .zero)
-        resolve(from: view)
-        return view
-    }
-
-    func updateNSView(_ nsView: NSView, context: Context) {
-        resolve(from: nsView)
-    }
-
-    private func resolve(from view: NSView) {
-        DispatchQueue.main.async {
-            var current: NSView? = view
-            while let candidate = current {
-                if let scrollView = candidate as? NSScrollView {
-                    onResolve(scrollView)
-                    return
-                }
-                current = candidate.superview
-            }
-        }
-    }
-}
-
 private struct ReviewComparisonTable: View {
     let item: DuplicateReviewPresentationItem
     let copies: [DuplicateReviewPresentationCopy]
@@ -737,11 +617,10 @@ private struct ReviewComparisonTable: View {
 
     @State private var hoveredCopyID: String?
 
-    private var rows: [ComparisonRowSpec] {
-        comparisonRows(for: copies)
-    }
-
     var body: some View {
+        let rows = comparisonRows(for: copies)
+        let lastRowID = rows.last?.id
+        let completeCopyCount = copies.filter(\.isCompleteLivePhotoOccurrence).count
         Grid(alignment: .topLeading, horizontalSpacing: gap, verticalSpacing: 0) {
             GridRow(alignment: .top) {
                 Text("미리보기")
@@ -759,7 +638,7 @@ private struct ReviewComparisonTable: View {
                         isApproved: isApproved,
                         isOnlyCompleteLivePhotoOccurrence: item.kind == .livePhotoAsset
                             && copy.isCompleteLivePhotoOccurrence
-                            && copies.filter(\.isCompleteLivePhotoOccurrence).count == 1,
+                            && completeCopyCount == 1,
                         onToggleCleanup: { onToggleCleanup(copy) },
                         onKeepOnly: { onKeepOnly(copy) },
                         canToggleCleanup: canToggleCleanup(copy),
@@ -814,7 +693,7 @@ private struct ReviewComparisonTable: View {
                             key: ReviewColumnBoundsPreferenceKey.self,
                             value: .bounds
                         ) { anchor in
-                            row.id == rows.last?.id
+                            row.id == lastRowID
                                 ? [copy.id: ReviewColumnBounds(top: nil, bottom: anchor)]
                                 : [:]
                         }

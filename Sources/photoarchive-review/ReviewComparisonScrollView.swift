@@ -1,0 +1,73 @@
+import AppKit
+import SwiftUI
+
+/// Own the scroll container; SwiftUI continues to own the comparison Grid.
+/// Legacy scrollers reserve space outside the document, including above the
+/// window's bottom action bar, and remain usable with a wheel-only mouse.
+struct ReviewComparisonScrollView<Content: View>: NSViewRepresentable {
+    let documentID: String
+    @ViewBuilder var content: () -> Content
+
+    func makeNSView(context: Context) -> ComparisonScrollContainer<Content> {
+        ComparisonScrollContainer(content: content(), documentID: documentID)
+    }
+
+    func updateNSView(_ view: ComparisonScrollContainer<Content>, context: Context) {
+        view.update(content: content(), documentID: documentID)
+    }
+
+    func sizeThatFits(_ proposal: ProposedViewSize, nsView: ComparisonScrollContainer<Content>,
+                      context: Context) -> CGSize? {
+        // The viewport accepts the parent's size, never the wide/tall document's.
+        CGSize(width: proposal.width ?? 0, height: proposal.height ?? 0)
+    }
+}
+
+final class ComparisonScrollContainer<Content: View>: NSScrollView {
+    private let hostingView: NSHostingView<Content>
+    private var documentID: String
+
+    init(content: Content, documentID: String) {
+        hostingView = NSHostingView(rootView: content)
+        self.documentID = documentID
+        super.init(frame: .zero)
+        borderType = .noBorder
+        drawsBackground = false
+        hasHorizontalScroller = true
+        hasVerticalScroller = true
+        scrollerStyle = .legacy
+        autohidesScrollers = false
+        automaticallyAdjustsContentInsets = false
+        horizontalScrollElasticity = .none
+        verticalScrollElasticity = .automatic
+        hostingView.sizingOptions = [.intrinsicContentSize]
+        documentView = hostingView
+        horizontalScroller?.toolTip = "좌우로 드래그하거나 Shift + 마우스 휠로 비교 열을 이동합니다."
+        resizeDocument(resetPosition: true)
+    }
+
+    required init?(coder: NSCoder) { nil }
+
+    func update(content: Content, documentID: String) {
+        let changedGroup = self.documentID != documentID
+        self.documentID = documentID
+        hostingView.rootView = content
+        resizeDocument(resetPosition: changedGroup)
+    }
+
+    private func resizeDocument(resetPosition: Bool) {
+        // Measure only on content/width updates, never on scroll bounds changes.
+        // All preview slots have fixed heights, so thumbnail completion needs
+        // repainting but does not require a new document measurement.
+        let size = hostingView.fittingSize
+        if hostingView.frame.size != size {
+            hostingView.setFrameSize(size)
+        }
+        tile()
+        let origin = resetPosition ? NSPoint.zero : contentView.bounds.origin
+        contentView.scroll(to: contentView.constrainBoundsRect(
+            NSRect(origin: origin, size: contentView.bounds.size)
+        ).origin)
+        reflectScrolledClipView(contentView)
+    }
+}

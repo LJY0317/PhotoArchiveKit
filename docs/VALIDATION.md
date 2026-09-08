@@ -4,6 +4,14 @@
 
 이 문서는 vendor guarantee와 local observation을 구분한다. provider behavior는 바뀔 수 있으며 sample이 통과했다는 사실은 regression observation이지 permanent Apple/Google contract가 아니다.
 
+## Duplicate-review native scrolling (2026-09-08)
+
+`bash scripts/test-review-scroll.sh` compiles a dependency-free AppKit/SwiftUI synthetic Grid harness, without opening the user's catalog or media. It checks persistent horizontal scroller geometry outside the clip viewport, overflow knob state, ordinary wheel versus Shift-wheel movement, narrow/wide window resizing, updated document dimensions, same-group position preservation and new-group reset. It uses the main run loop to allow native wheel animation to finish. The test runs with Command Line Tools and does not require XCTest or Swift Testing.
+
+The comparison Grid's row specs and final-row ID are computed once per body evaluation, rather than rebuilding all formatted metadata for every cell's anchor preference. The GUI launcher uses release optimization by default. These remove identifiable redundant work and debug overhead; they do not establish a measured frame-rate improvement on a user's media library. Interactive trackpad momentum and frame-time measurements during live resize still merit human verification in the release app.
+
+The first isolated-scroll-view test missed a real integration failure: the root NavigationSplitView's bottom `safeAreaInset` placed the action bar over the embedded AppKit horizontal scroller. The regression harness now uses the production `ReviewWindowLayout` and checks the entire bar's visible rectangle and window coordinates above a 44-point action row at 980×640, 1100×750 and 1500×900. This check failed before replacing the inset with a separate VStack row and passed afterward. A separate release-app instance was also checked in the actual four-copy comparison screen: the bar was visible, dragging reached the last copy, and standard window zoom/restore changed between disabled (all columns fit) and enabled (overflow) while keeping the bar visible. The bounded two-copy comparison block was subsequently centered on wide windows; a separate release instance was visually checked at wide and restored widths with the standard scrollers still present. Existing review choices in the original running instance were preserved; the verification instance did not submit decisions or mutate media.
+
 ## 5경로 local sample
 
 Disposable set에는 새 iPhone Live Photo 3개와 ordinary video 1개가 있었다. 다음 경로로 확보했다.
