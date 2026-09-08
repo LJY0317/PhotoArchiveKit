@@ -2063,7 +2063,23 @@ struct PhotoArchiveSelfTest {
                 clickedCopyID: reviewCopyB,
                 allCopyIDs: [reviewCopyA, reviewCopyB]
             ) == .requiresRemoveAllConfirmation,
-            "clicking the last unmarked duplicate-review column should require explicit confirmation before all copies are marked for cleanup"
+            "the explicit cleanup button should require confirmation before all copies are marked for cleanup"
+        )
+        try require(
+            DuplicateReviewSelectionPolicy.toggleCleanupCopyIDsFromColumn(
+                current: [reviewCopyA],
+                clickedCopyID: reviewCopyB,
+                allCopyIDs: [reviewCopyA, reviewCopyB]
+            ) == [reviewCopyB],
+            "clicking the opposite duplicate-review column should move the cleanup selection instead of asking to remove all copies"
+        )
+        try require(
+            DuplicateReviewSelectionPolicy.toggleCleanupCopyIDsFromColumn(
+                current: [reviewCopyA, reviewCopyB],
+                clickedCopyID: "copy-c",
+                allCopyIDs: [reviewCopyA, reviewCopyB, "copy-c"]
+            ) == [reviewCopyA, reviewCopyB],
+            "column clicks must not silently select every copy in groups with more than two copies"
         )
 
         guard let reviewedCandidateResource = stagingPolicyReport.resources.first(where: {

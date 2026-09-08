@@ -24,6 +24,30 @@ public enum DuplicateReviewSelectionPolicy {
         }
         return .updated(next)
     }
+
+    public static func toggleCleanupCopyIDsFromColumn(
+        current: Set<String>,
+        clickedCopyID: String,
+        allCopyIDs: [String]
+    ) -> Set<String> {
+        var next = current
+        if next.contains(clickedCopyID) {
+            next.remove(clickedCopyID)
+            return next
+        }
+
+        next.insert(clickedCopyID)
+        let all = Set(allCopyIDs)
+        guard !all.isEmpty, all.isSubset(of: next) else {
+            return next
+        }
+
+        if all.count == 2 {
+            return [clickedCopyID]
+        }
+
+        return current
+    }
 }
 
 public struct DuplicateReviewDecision: Codable, Sendable, Equatable {

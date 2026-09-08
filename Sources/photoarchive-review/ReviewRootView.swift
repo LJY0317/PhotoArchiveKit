@@ -160,7 +160,7 @@ struct ReviewRootView: View {
             }
 
             List(store.visibleItems, selection: $store.selection) { item in
-                ReviewSidebarRow(item: item, isApproved: store.isApproved(item))
+                ReviewSidebarRow(item: item)
                     .tag(item.id)
             }
             .listStyle(.sidebar)
@@ -189,16 +189,15 @@ struct ReviewRootView: View {
                 item: item,
                 index: (store.selectedIndex ?? 0) + 1,
                 total: store.visibleItems.count,
-                isApproved: store.isApproved(item),
                 cleanupCopyIDs: store.cleanupCopyIDsByItem[item.id, default: []],
-                onToggleCleanup: { store.toggleCleanup($0, item: item) },
+                onToggleCleanupFromColumn: { store.toggleCleanupFromColumn($0, item: item) },
+                onToggleCleanupFromButton: { store.toggleCleanupFromButton($0, item: item) },
                 onKeepOnly: { store.keepOnly($0, item: item) },
                 canToggleCleanup: { store.canToggleCleanup($0, item: item) },
+                columnToggleHelp: { store.columnToggleHelp($0, item: item) },
                 cleanupToggleHelp: { store.cleanupToggleHelp($0, item: item) },
                 canKeepOnly: { store.canKeepOnly($0, item: item) },
-                keepOnlyHelp: { store.keepOnlyHelp($0, item: item) },
-                onApproveAndNext: { store.approveAndNext(item) },
-                onUnapprove: { store.unapprove(item) }
+                keepOnlyHelp: { store.keepOnlyHelp($0, item: item) }
             )
         } else {
             ContentUnavailableView(
@@ -224,10 +223,11 @@ private struct ReviewActionBar: View {
                 Divider().frame(height: 16)
             }
 
-            Label("검토 완료 \(store.approvedCount)", systemImage: "checkmark.circle.fill")
-                .foregroundStyle(store.approvedCount > 0 ? .green : .secondary)
-            Text("남음 \(store.pendingCount)")
-                .foregroundStyle(.secondary)
+            Label(
+                "정리 선택 \(store.selectedCleanupItemCount)개 그룹 · \(store.selectedCleanupCopyCount)개 사본",
+                systemImage: "trash"
+            )
+            .foregroundStyle(store.selectedCleanupItemCount > 0 ? .primary : .secondary)
 
             if let status = store.statusMessage {
                 Divider().frame(height: 16)
@@ -240,25 +240,25 @@ private struct ReviewActionBar: View {
             Spacer()
 
             Button {
-                Task { await store.prepareApprovedCleanup() }
+                Task { await store.prepareSelectedCleanup() }
             } label: {
                 if store.isPreparingCleanup {
                     Label("정리 전 검증 중…", systemImage: "shield.lefthalf.filled")
                 } else {
                     Label(
-                        "정리 전 확인 (\(store.approvedCleanupItemCount))",
+                        "정리 전 확인 (\(store.selectedCleanupItemCount))",
                         systemImage: "trash"
                     )
                 }
             }
             .buttonStyle(.borderedProminent)
             .disabled(
-                store.approvedCleanupItemCount == 0
+                store.selectedCleanupItemCount == 0
                     || store.isScanning
                     || store.isPreparingCleanup
                     || store.isApplyingCleanup
             )
-            .help("검토 완료한 정리 선택을 현재 파일 상태와 다시 검증한 뒤 실제 reversible destination으로 이동하기 전 최종 확인 화면을 엽니다.")
+            .help("현재 빨간색으로 선택한 정리 대상을 다시 검증한 뒤 실제 reversible destination으로 이동하기 전 최종 확인 화면을 엽니다.")
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 9)
@@ -281,7 +281,7 @@ private struct ReviewCleanupConfirmationSheet: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text("정리 전 확인")
                     .font(.title2.weight(.semibold))
-                Text("사용자가 검토한 선택만 적용합니다. 실제 이동 직전에 같은 안전 검증을 다시 수행합니다.")
+                Text("현재 빨간색으로 선택한 정리 대상만 적용합니다. 실제 이동 직전에 같은 안전 검증을 다시 수행합니다.")
                     .foregroundStyle(.secondary)
             }
 
@@ -530,7 +530,6 @@ private struct ReviewSummaryHeader: View {
 
 private struct ReviewSidebarRow: View {
     let item: DuplicateReviewPresentationItem
-    let isApproved: Bool
 
     var body: some View {
         HStack(spacing: 10) {
@@ -557,11 +556,6 @@ private struct ReviewSidebarRow: View {
             }
 
             Spacer(minLength: 8)
-            if isApproved {
-                Image(systemName: "checkmark.circle.fill")
-                    .foregroundStyle(.green)
-                    .help("검토 완료")
-            }
             Label("\(copyCount)", systemImage: "doc.on.doc")
                 .labelStyle(.titleAndIcon)
                 .font(.caption.monospacedDigit())
@@ -590,16 +584,15 @@ private struct ReviewDetailView: View {
     let item: DuplicateReviewPresentationItem
     let index: Int
     let total: Int
-    let isApproved: Bool
     let cleanupCopyIDs: Set<String>
-    let onToggleCleanup: (DuplicateReviewPresentationCopy) -> Void
+    let onToggleCleanupFromColumn: (DuplicateReviewPresentationCopy) -> Void
+    let onToggleCleanupFromButton: (DuplicateReviewPresentationCopy) -> Void
     let onKeepOnly: (DuplicateReviewPresentationCopy) -> Void
     let canToggleCleanup: (DuplicateReviewPresentationCopy) -> Bool
+    let columnToggleHelp: (DuplicateReviewPresentationCopy) -> String
     let cleanupToggleHelp: (DuplicateReviewPresentationCopy) -> String
     let canKeepOnly: (DuplicateReviewPresentationCopy) -> Bool
     let keepOnlyHelp: (DuplicateReviewPresentationCopy) -> String
-    let onApproveAndNext: () -> Void
-    let onUnapprove: () -> Void
 
     var body: some View {
         GeometryReader { proxy in
@@ -641,30 +634,16 @@ private struct ReviewDetailView: View {
                         columnWidth: columnWidth,
                         gap: gap,
                         cleanupCopyIDs: cleanupCopyIDs,
-                        isApproved: isApproved,
-                        onToggleCleanup: onToggleCleanup,
+                        onToggleCleanupFromColumn: onToggleCleanupFromColumn,
+                        onToggleCleanupFromButton: onToggleCleanupFromButton,
                         onKeepOnly: onKeepOnly,
                         canToggleCleanup: canToggleCleanup,
+                        columnToggleHelp: columnToggleHelp,
                         cleanupToggleHelp: cleanupToggleHelp,
                         canKeepOnly: canKeepOnly,
                         keepOnlyHelp: keepOnlyHelp
                     )
                     .frame(width: gridWidth, alignment: .topLeading)
-
-                    HStack {
-                        if isApproved {
-                            Label("이 그룹은 검토 완료 상태입니다", systemImage: "checkmark.circle.fill")
-                                .foregroundStyle(.green)
-                            Button("검토 완료 취소", action: onUnapprove)
-                        } else {
-                            Text("현재 표시된 남김/정리 선택을 확인한 뒤 승인하세요.")
-                                .foregroundStyle(.secondary)
-                            Button("현재 선택 승인하고 다음", action: onApproveAndNext)
-                                .buttonStyle(.borderedProminent)
-                        }
-                        Spacer()
-                    }
-                    .frame(width: gridWidth)
                 }
                 .frame(width: gridWidth, alignment: .leading)
                 .padding(.horizontal, horizontalPadding)
@@ -752,10 +731,11 @@ private struct ReviewComparisonTable: View {
     let columnWidth: CGFloat
     let gap: CGFloat
     let cleanupCopyIDs: Set<String>
-    let isApproved: Bool
-    let onToggleCleanup: (DuplicateReviewPresentationCopy) -> Void
+    let onToggleCleanupFromColumn: (DuplicateReviewPresentationCopy) -> Void
+    let onToggleCleanupFromButton: (DuplicateReviewPresentationCopy) -> Void
     let onKeepOnly: (DuplicateReviewPresentationCopy) -> Void
     let canToggleCleanup: (DuplicateReviewPresentationCopy) -> Bool
+    let columnToggleHelp: (DuplicateReviewPresentationCopy) -> String
     let cleanupToggleHelp: (DuplicateReviewPresentationCopy) -> String
     let canKeepOnly: (DuplicateReviewPresentationCopy) -> Bool
     let keepOnlyHelp: (DuplicateReviewPresentationCopy) -> String
@@ -765,7 +745,6 @@ private struct ReviewComparisonTable: View {
     var body: some View {
         let rows = comparisonRows(for: copies)
         let lastRowID = rows.last?.id
-        let completeCopyCount = copies.filter(\.isCompleteLivePhotoOccurrence).count
         Grid(alignment: .topLeading, horizontalSpacing: gap, verticalSpacing: 0) {
             GridRow(alignment: .top) {
                 Text("미리보기")
@@ -780,13 +759,11 @@ private struct ReviewComparisonTable: View {
                         itemKind: item.kind,
                         columnWidth: columnWidth,
                         isMarkedForCleanup: cleanupCopyIDs.contains(copy.id),
-                        isApproved: isApproved,
-                        isOnlyCompleteLivePhotoOccurrence: item.kind == .livePhotoAsset
-                            && copy.isCompleteLivePhotoOccurrence
-                            && completeCopyCount == 1,
-                        onToggleCleanup: { onToggleCleanup(copy) },
+                        onToggleCleanupFromColumn: { onToggleCleanupFromColumn(copy) },
+                        onToggleCleanupFromButton: { onToggleCleanupFromButton(copy) },
                         onKeepOnly: { onKeepOnly(copy) },
                         canToggleCleanup: canToggleCleanup(copy),
+                        columnToggleHelp: columnToggleHelp(copy),
                         cleanupToggleHelp: cleanupToggleHelp(copy),
                         canKeepOnly: canKeepOnly(copy),
                         keepOnlyHelp: keepOnlyHelp(copy)
@@ -823,9 +800,9 @@ private struct ReviewComparisonTable: View {
                             copy: copy,
                             width: columnWidth,
                             isMarkedForCleanup: cleanupCopyIDs.contains(copy.id),
-                            onToggleCleanup: { onToggleCleanup(copy) },
+                            onToggleCleanup: { onToggleCleanupFromColumn(copy) },
                             canToggleCleanup: canToggleCleanup(copy),
-                            cleanupToggleHelp: cleanupToggleHelp(copy)
+                            cleanupToggleHelp: columnToggleHelp(copy)
                         )
                         .onHover { hovering in
                             if hovering {
@@ -918,54 +895,59 @@ private struct CopyHeaderCell: View {
     let itemKind: ReconciliationItemKind
     let columnWidth: CGFloat
     let isMarkedForCleanup: Bool
-    let isApproved: Bool
-    let isOnlyCompleteLivePhotoOccurrence: Bool
-    let onToggleCleanup: () -> Void
+    let onToggleCleanupFromColumn: () -> Void
+    let onToggleCleanupFromButton: () -> Void
     let onKeepOnly: () -> Void
     let canToggleCleanup: Bool
+    let columnToggleHelp: String
     let cleanupToggleHelp: String
     let canKeepOnly: Bool
     let keepOnlyHelp: String
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            statusPrimaryRow
-                .frame(height: 22, alignment: .leading)
-
-            if itemKind == .livePhotoAsset {
-                statusSecondaryRow
+            VStack(alignment: .leading, spacing: 8) {
+                statusPrimaryRow
                     .frame(height: 22, alignment: .leading)
-            }
 
-            if let primary = copy.primaryResource {
-                ReviewThumbnail(url: primary.fileURL)
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 260)
-                    .overlay(alignment: .topTrailing) {
-                        if isMarkedForCleanup {
-                            Image(systemName: "trash.circle.fill")
-                                .font(.title2)
-                                .symbolRenderingMode(.hierarchical)
-                                .foregroundStyle(.red)
-                                .padding(9)
+                if itemKind == .livePhotoAsset {
+                    statusSecondaryRow
+                        .frame(height: 22, alignment: .leading)
+                }
+
+                if let primary = copy.primaryResource {
+                    ReviewThumbnail(url: primary.fileURL)
+                        .frame(maxWidth: .infinity)
+                        .frame(height: 260)
+                        .overlay(alignment: .topTrailing) {
+                            if isMarkedForCleanup {
+                                Image(systemName: "trash.circle.fill")
+                                    .font(.title2)
+                                    .symbolRenderingMode(.hierarchical)
+                                    .foregroundStyle(.red)
+                                    .padding(9)
+                            }
                         }
-                    }
 
-                Text(primary.fileName)
-                    .font(.headline)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
-                    .frame(height: 22, alignment: .leading)
-                    .help(primary.fileName)
-            } else {
-                Color.clear
-                    .frame(height: 290)
-            }
+                    Text(primary.fileName)
+                        .font(.headline)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                        .frame(height: 22, alignment: .leading)
+                        .help(primary.fileName)
+                } else {
+                    Color.clear
+                        .frame(height: 290)
+                }
 
-            if itemKind == .livePhotoAsset {
-                resourceSummary
-                    .frame(height: 42, alignment: .topLeading)
+                if itemKind == .livePhotoAsset {
+                    resourceSummary
+                        .frame(height: 42, alignment: .topLeading)
+                }
             }
+            .contentShape(Rectangle())
+            .onTapGesture(perform: onToggleCleanupFromColumn)
+            .help(columnToggleHelp)
 
             actionRows
                 .frame(height: 46, alignment: .topLeading)
@@ -973,9 +955,6 @@ private struct CopyHeaderCell: View {
         .padding(12)
         .frame(width: columnWidth, alignment: .topLeading)
         .clipped()
-        .contentShape(Rectangle())
-        .onTapGesture(perform: onToggleCleanup)
-        .help(cleanupToggleHelp)
     }
 
     private var statusPrimaryRow: some View {
@@ -1012,17 +991,6 @@ private struct CopyHeaderCell: View {
     private var statusSecondaryRow: some View {
         HStack(spacing: 7) {
             livePhotoIntegrityBadge
-
-            if isOnlyCompleteLivePhotoOccurrence {
-                Text("유일한 페어")
-                    .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.orange)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(Color.orange.opacity(0.10), in: Capsule())
-                    .help("이 사본은 현재 유일한 완전한 Live Photo 페어입니다")
-            }
-
             Spacer(minLength: 0)
         }
         .lineLimit(1)
@@ -1076,7 +1044,7 @@ private struct CopyHeaderCell: View {
     }
 
     private var cleanupButton: some View {
-        Button(isMarkedForCleanup ? "정리 취소" : "정리 대상으로 표시", action: onToggleCleanup)
+        Button(isMarkedForCleanup ? "정리 취소" : "정리 대상으로 표시", action: onToggleCleanupFromButton)
             .buttonStyle(.bordered)
             .disabled(!canToggleCleanup)
             .help(cleanupToggleHelp)

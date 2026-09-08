@@ -34,7 +34,6 @@ final class ReviewStore: ObservableObject {
     @Published private(set) var registeredRoots: [RegisteredRootReport] = []
     @Published var selectedRootIDs = Set<String>()
     @Published private(set) var cleanupCopyIDsByItem: [String: Set<String>] = [:]
-    @Published private(set) var approvedItemIDs = Set<String>()
     @Published var removeAllConfirmation: RemoveAllCleanupConfirmation?
     @Published private(set) var explicitlyRemoveAllItemIDs = Set<String>()
 
@@ -60,16 +59,12 @@ final class ReviewStore: ObservableObject {
         }
     }
 
-    var approvedCount: Int { approvedItemIDs.count }
-
-    var approvedCleanupItemCount: Int {
-        approvedItemIDs.filter { !(cleanupCopyIDsByItem[$0] ?? []).isEmpty }.count
+    var selectedCleanupItemCount: Int {
+        cleanupCopyIDsByItem.values.filter { !$0.isEmpty }.count
     }
 
-    var approvedCleanupCopyCount: Int {
-        approvedItemIDs.reduce(0) { partial, itemID in
-            partial + (cleanupCopyIDsByItem[itemID]?.count ?? 0)
-        }
+    var selectedCleanupCopyCount: Int {
+        cleanupCopyIDsByItem.values.reduce(0) { $0 + $1.count }
     }
 
     var activeRegisteredRoots: [RegisteredRootReport] {
@@ -87,10 +82,6 @@ final class ReviewStore: ObservableObject {
 
     var selectedRootsNeedScan: Bool {
         !selectedRootIDs.isEmpty && !selectedRootIDs.isSubset(of: currentSnapshotRootIDs)
-    }
-
-    var pendingCount: Int {
-        max(0, (presentation?.items.count ?? 0) - approvedItemIDs.count)
     }
 
     var selectedItem: DuplicateReviewPresentationItem? {
@@ -127,7 +118,10 @@ final class ReviewStore: ObservableObject {
         } else {
             selectedRootIDs.insert(rootID)
         }
-        approvedItemIDs.removeAll()
+        cleanupCopyIDsByItem = cleanupCopyIDsByItem.mapValues { _ in [] }
+        explicitlyRemoveAllItemIDs.removeAll()
+        removeAllConfirmation = nil
+        preparedCleanup = nil
         if let selection, !visibleItems.contains(where: { $0.id == selection }) {
             self.selection = visibleItems.first?.id
         }
@@ -194,17 +188,12 @@ final class ReviewStore: ObservableObject {
             )
             registeredRoots = try RootRegistry.list()
             selectedRootIDs.insert(registered.rootID)
-            approvedItemIDs.removeAll()
             statusMessage = "‘\(registered.label)’을 \(role.rawValue) root로 등록했습니다. 비교 스캔을 시작합니다…"
         } catch {
             statusMessage = "위치 등록에 실패했습니다: \(error.localizedDescription)"
             return false
         }
         return await scanSelectedRoots()
-    }
-
-    func isApproved(_ item: DuplicateReviewPresentationItem) -> Bool {
-        approvedItemIDs.contains(item.id)
     }
 
     func isMarkedForCleanup(
@@ -244,6 +233,25 @@ final class ReviewStore: ObservableObject {
         return "클릭하면 이 사본을 정리 대상으로 표시합니다. 마지막 남은 사본이라면 전체 정리 여부를 한 번 더 확인합니다."
     }
 
+    func columnToggleHelp(
+        _ copy: DuplicateReviewPresentationCopy,
+        item: DuplicateReviewPresentationItem
+    ) -> String {
+        let current = cleanupCopyIDsByItem[item.id, default: []]
+        if current.contains(copy.id) {
+            return "클릭하면 이 사본의 정리 표시를 취소합니다."
+        }
+        let wouldSelectAll = !item.copies.isEmpty
+            && current.union([copy.id]).count == item.copies.count
+        if wouldSelectAll, item.copies.count == 2 {
+            return "클릭하면 정리 대상을 이 사본으로 바꾸고 반대쪽 사본은 남깁니다."
+        }
+        if wouldSelectAll {
+            return "모든 사본을 정리하려면 미리보기의 ‘정리 대상으로 표시’ 버튼을 사용하세요."
+        }
+        return "클릭하면 이 사본을 정리 대상으로 표시합니다."
+    }
+
     func keepOnlyHelp(
         _ copy: DuplicateReviewPresentationCopy,
         item: DuplicateReviewPresentationItem
@@ -257,7 +265,31 @@ final class ReviewStore: ObservableObject {
         return "현재 보존 안전 조건 때문에 이 사본만 남길 수 없습니다."
     }
 
-    func toggleCleanup(
+    func toggleCleanupFromColumn(
+        _ copy: DuplicateReviewPresentationCopy,
+        item: DuplicateReviewPresentationItem
+    ) {
+        statusMessage = nil
+        let current = cleanupCopyIDsByItem[item.id, default: []]
+        let next = DuplicateReviewSelectionPolicy.toggleCleanupCopyIDsFromColumn(
+            current: current,
+            clickedCopyID: copy.id,
+            allCopyIDs: item.copies.map(\.id)
+        )
+
+        guard next != current else {
+            statusMessage = "모든 사본을 정리하려면 미리보기의 ‘정리 대상으로 표시’ 버튼을 사용하세요."
+            return
+        }
+
+        cleanupCopyIDsByItem[item.id] = next
+        explicitlyRemoveAllItemIDs.remove(item.id)
+        statusMessage = next.contains(copy.id)
+            ? "정리 대상으로 표시했습니다. 아직 파일은 이동하지 않았습니다."
+            : "정리 표시를 취소했습니다."
+    }
+
+    func toggleCleanupFromButton(
         _ copy: DuplicateReviewPresentationCopy,
         item: DuplicateReviewPresentationItem
     ) {
@@ -273,7 +305,6 @@ final class ReviewStore: ObservableObject {
         case let .updated(next):
             cleanupCopyIDsByItem[item.id] = next
             explicitlyRemoveAllItemIDs.remove(item.id)
-            approvedItemIDs.remove(item.id)
             if next.contains(copy.id),
                item.kind == .livePhotoAsset,
                copy.isCompleteLivePhotoOccurrence,
@@ -307,7 +338,6 @@ final class ReviewStore: ObservableObject {
         }
         cleanupCopyIDsByItem[item.id] = Set(item.copies.map(\.id))
         explicitlyRemoveAllItemIDs.insert(item.id)
-        approvedItemIDs.remove(item.id)
         removeAllConfirmation = nil
         statusMessage = "이 그룹의 모든 사본을 정리 대상으로 표시했습니다 · 파일은 아직 이동하지 않았습니다."
     }
@@ -326,40 +356,17 @@ final class ReviewStore: ObservableObject {
         guard selectionIsSafe(next, for: item) else { return }
         cleanupCopyIDsByItem[item.id] = next
         explicitlyRemoveAllItemIDs.remove(item.id)
-        approvedItemIDs.remove(item.id)
         statusMessage = item.kind == .livePhotoAsset && !copy.isCompleteLivePhotoOccurrence
             ? "이 occurrence만 남기도록 선택했습니다 · 완전한 Live Photo 페어는 남지 않습니다 · 아직 파일은 이동하지 않았습니다."
             : "이 사본을 남기고 나머지 사본을 정리 대상으로 표시했습니다."
     }
 
-    func approve(_ item: DuplicateReviewPresentationItem) {
-        let selected = cleanupCopyIDsByItem[item.id, default: []]
-        let removesAll = selected.count == item.copies.count && !item.copies.isEmpty
-        guard !removesAll || explicitlyRemoveAllItemIDs.contains(item.id) else {
-            statusMessage = "현재 선택은 보존 안전 조건을 만족하지 않습니다."
-            return
-        }
-        approvedItemIDs.insert(item.id)
-        statusMessage = "이 그룹의 선택을 검토 완료로 표시했습니다."
-    }
-
-    func approveAndNext(_ item: DuplicateReviewPresentationItem) {
-        approve(item)
-        guard approvedItemIDs.contains(item.id) else { return }
-        selectNext()
-    }
-
-    func unapprove(_ item: DuplicateReviewPresentationItem) {
-        approvedItemIDs.remove(item.id)
-        statusMessage = "검토 완료 표시를 취소했습니다."
-    }
-
-    func prepareApprovedCleanup() async {
+    func prepareSelectedCleanup() async {
         guard !isPreparingCleanup && !isApplyingCleanup else { return }
         guard let presentation else { return }
-        let decisions = approvedCleanupDecisions(in: presentation)
+        let decisions = selectedCleanupDecisions(in: presentation)
         guard !decisions.isEmpty else {
-            statusMessage = "먼저 정리 대상이 있는 그룹을 검토 완료로 표시하세요."
+            statusMessage = "먼저 정리할 사본을 하나 이상 선택하세요."
             return
         }
 
@@ -379,7 +386,8 @@ final class ReviewStore: ObservableObject {
             let destination = try PhotoArchiveSettingsStore.resolvedDestination(
                 settings.duplicateCleanupDestination
             )
-            let explicitRemoveAll = explicitlyRemoveAllItemIDs.intersection(approvedItemIDs)
+            let selectedItemIDs = Set(decisions.map(\.itemID))
+            let explicitRemoveAll = explicitlyRemoveAllItemIDs.intersection(selectedItemIDs)
             let preflight = try await Task.detached(priority: .userInitiated) {
                 try DuplicateReviewCleanupExecutor.preflight(
                     report: report,
@@ -397,7 +405,7 @@ final class ReviewStore: ObservableObject {
                 explicitlyRemoveAllItemIDs: explicitRemoveAll,
                 destination: destination,
                 preflight: preflight,
-                selectedCopyCount: approvedCleanupCopyCount
+                selectedCopyCount: selectedCleanupCopyCount
             )
             statusMessage = "정리 전 검증 완료 · 실제 이동 전 최종 확인이 필요합니다."
         } catch {
@@ -438,7 +446,6 @@ final class ReviewStore: ObservableObject {
             }.value
 
             self.preparedCleanup = nil
-            approvedItemIDs.removeAll()
             explicitlyRemoveAllItemIDs.removeAll()
             isApplyingCleanup = false
 
@@ -457,11 +464,10 @@ final class ReviewStore: ObservableObject {
         }
     }
 
-    private func approvedCleanupDecisions(
+    private func selectedCleanupDecisions(
         in presentation: DuplicateReviewPresentation
     ) -> [DuplicateReviewDecision] {
         presentation.items.compactMap { item in
-            guard approvedItemIDs.contains(item.id) else { return nil }
             let cleanupIDs = cleanupCopyIDsByItem[item.id, default: []]
             guard !cleanupIDs.isEmpty else { return nil }
             let keptResources = item.copies
@@ -509,12 +515,10 @@ final class ReviewStore: ObservableObject {
             selectedRootIDs = Set(next.scopeRoots.map(\.id))
         }
         cleanupCopyIDsByItem = Dictionary(uniqueKeysWithValues: next.items.map { item in
-            let suggested = Set(item.copies.filter { !$0.isKeeper }.map(\.id))
-            return (item.id, suggested)
+            (item.id, [])
         })
         explicitlyRemoveAllItemIDs.removeAll()
         removeAllConfirmation = nil
-        approvedItemIDs.removeAll()
         if let previousSelection,
            next.items.contains(where: { $0.id == previousSelection }) {
             selection = previousSelection
