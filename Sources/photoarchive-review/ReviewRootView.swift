@@ -457,6 +457,8 @@ private struct ReviewDetailView: View {
     let onApproveAndNext: () -> Void
     let onUnapprove: () -> Void
 
+    @State private var nativeScrollView: NSScrollView?
+
     var body: some View {
         GeometryReader { proxy in
             let copies = item.copies.isEmpty
@@ -479,6 +481,8 @@ private struct ReviewDetailView: View {
                 + (columnWidth * CGFloat(max(1, copies.count)))
                 + (gap * CGFloat(max(0, copies.count - 1)))
             let contentWidth = max(proxy.size.width - horizontalPadding * 2, gridWidth)
+            let horizontalOverflow = gridWidth + horizontalPadding * 2 > proxy.size.width + 1
+            let horizontalStep = columnWidth + gap
 
             ScrollView([.vertical, .horizontal], showsIndicators: true) {
                 VStack(alignment: .leading, spacing: 18) {
@@ -520,10 +524,52 @@ private struct ReviewDetailView: View {
                 .frame(width: contentWidth, alignment: .leading)
                 .padding(.horizontal, horizontalPadding)
                 .padding(.vertical, 20)
+                .background {
+                    NativeScrollViewResolver { scrollView in
+                        if nativeScrollView !== scrollView {
+                            nativeScrollView = scrollView
+                        }
+                    }
+                }
             }
             .scrollIndicators(.visible, axes: [.vertical, .horizontal])
+            .scrollIndicatorsFlash(onAppear: horizontalOverflow)
+            .contentMargins(.bottom, 12, for: .scrollIndicators)
+            .overlay(alignment: .bottomTrailing) {
+                if horizontalOverflow {
+                    HorizontalColumnNavigation(
+                        copyCount: copies.count,
+                        onPrevious: { scrollHorizontally(by: -horizontalStep) },
+                        onNext: { scrollHorizontally(by: horizontalStep) }
+                    )
+                    .padding(.trailing, 14)
+                    .padding(.bottom, 10)
+                }
+            }
         }
         .background(Color(nsColor: .windowBackgroundColor))
+    }
+
+    private func scrollHorizontally(by delta: CGFloat) {
+        guard let scrollView = nativeScrollView,
+              let documentView = scrollView.documentView
+        else { return }
+
+        let clipView = scrollView.contentView
+        let maximumX = max(0, documentView.bounds.width - clipView.bounds.width)
+        let targetX = min(max(clipView.bounds.origin.x + delta, 0), maximumX)
+        guard abs(targetX - clipView.bounds.origin.x) > 0.5 else { return }
+
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0.16
+            clipView.animator().setBoundsOrigin(
+                NSPoint(x: targetX, y: clipView.bounds.origin.y)
+            )
+        } completionHandler: {
+            Task { @MainActor in
+                scrollView.reflectScrolledClipView(clipView)
+            }
+        }
     }
 
     private var fallbackCopies: [DuplicateReviewPresentationCopy] {
@@ -589,6 +635,70 @@ private struct ReviewDetailView: View {
             return "paired video resource가 byte 단위로 동일합니다. Live Photo occurrence 전체가 동일하거나 완전하다는 뜻은 아닙니다."
         default:
             return "Live Photo 안의 하나 이상의 resource가 byte 단위로 동일합니다. occurrence 전체의 동일성·완전성과는 별개입니다."
+        }
+    }
+}
+
+private struct HorizontalColumnNavigation: View {
+    let copyCount: Int
+    let onPrevious: () -> Void
+    let onNext: () -> Void
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Text("\(copyCount)개 열")
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(.secondary)
+
+            ControlGroup {
+                Button(action: onPrevious) {
+                    Label("이전 열", systemImage: "arrow.left")
+                        .labelStyle(.iconOnly)
+                }
+                .help("왼쪽 비교 열로 이동")
+
+                Button(action: onNext) {
+                    Label("다음 열", systemImage: "arrow.right")
+                        .labelStyle(.iconOnly)
+                }
+                .help("오른쪽 비교 열로 이동")
+            }
+            .controlSize(.small)
+        }
+        .padding(.horizontal, 8)
+        .padding(.vertical, 6)
+        .background(.regularMaterial, in: Capsule())
+        .overlay {
+            Capsule()
+                .strokeBorder(Color.primary.opacity(0.08), lineWidth: 1)
+        }
+        .help("가로 스크롤이 필요한 비교입니다. 스크롤 막대를 드래그하거나 화살표로 한 열씩 이동할 수 있습니다.")
+    }
+}
+
+private struct NativeScrollViewResolver: NSViewRepresentable {
+    let onResolve: (NSScrollView) -> Void
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView(frame: .zero)
+        resolve(from: view)
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        resolve(from: nsView)
+    }
+
+    private func resolve(from view: NSView) {
+        DispatchQueue.main.async {
+            var current: NSView? = view
+            while let candidate = current {
+                if let scrollView = candidate as? NSScrollView {
+                    onResolve(scrollView)
+                    return
+                }
+                current = candidate.superview
+            }
         }
     }
 }
