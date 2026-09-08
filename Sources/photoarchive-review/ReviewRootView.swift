@@ -72,7 +72,7 @@ struct ReviewRootView: View {
                 } label: {
                     Label("비교 위치", systemImage: "folder.badge.gearshape")
                 }
-                .help("registered root를 선택하거나 새 폴더를 역할과 함께 등록합니다")
+                .help("비교할 위치를 선택하거나 새 폴더를 추가합니다")
                 .disabled(store.isScanning)
             }
 
@@ -81,7 +81,7 @@ struct ReviewRootView: View {
                     Label("검토 화면 새로고침", systemImage: "arrow.clockwise")
                 }
                 .disabled(store.isLoading || store.isScanning)
-                .help("디스크를 다시 스캔하지 않고 최신 catalog의 duplicate-review 화면만 다시 읽습니다")
+                .help("파일을 다시 검사하지 않고 최근 검사 결과를 화면에 다시 불러옵니다")
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .photoArchiveReloadReview)) { _ in
@@ -136,7 +136,7 @@ struct ReviewRootView: View {
         let panel = NSOpenPanel()
         panel.title = "비교할 폴더 선택"
         panel.prompt = "선택"
-        panel.message = "PhotoArchiveKit에 registered root로 추가할 폴더를 선택하세요."
+        panel.message = "비교에 추가할 폴더를 선택하세요."
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
@@ -200,7 +200,7 @@ struct ReviewRootView: View {
             ContentUnavailableView(
                 "검토할 중복이 없습니다",
                 systemImage: "checkmark.circle",
-                description: Text("현재 검색에 표시할 automatic exact duplicate group이 없습니다.")
+                description: Text("현재 검색 조건에 맞는 중복 항목이 없습니다.")
             )
         }
     }
@@ -214,7 +214,7 @@ private struct ReviewActionBar: View {
             if store.isScanning {
                 ProgressView()
                     .controlSize(.small)
-                Text("비교 스캔 중")
+                Text("비교하는 중…")
                     .font(.caption.weight(.medium))
                     .foregroundStyle(.secondary)
             }
@@ -235,7 +235,7 @@ private struct ReviewActionBar: View {
                 Task { await store.prepareSelectedCleanup() }
             } label: {
                 if store.isPreparingCleanup {
-                    Label("이동 전 검증 중…", systemImage: "shield.lefthalf.filled")
+                    Label("파일 확인 중…", systemImage: "shield.lefthalf.filled")
                 } else {
                     Label(
                         "\(store.cleanupMoveActionTitle) (\(store.selectedCleanupItemCount))",
@@ -250,7 +250,7 @@ private struct ReviewActionBar: View {
                     || store.isPreparingCleanup
                     || store.isApplyingCleanup
             )
-            .help("현재 빨간색으로 선택한 삭제 대상을 다시 검증한 뒤 실제 목적지로 이동하기 전 최종 확인 화면을 엽니다.")
+            .help("삭제 예정인 사본을 확인하고 이동할 위치를 보여줍니다")
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 9)
@@ -393,7 +393,7 @@ private struct AddComparisonRootSheet: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text("비교 위치 추가")
                     .font(.title2.weight(.semibold))
-                Text("폴더를 먼저 registered root로 등록한 뒤 현재 선택 위치들과 함께 비교 스캔합니다.")
+                Text("이 폴더를 비교 목록에 추가하고 현재 선택한 위치들과 함께 검사합니다.")
                     .foregroundStyle(.secondary)
             }
 
@@ -449,7 +449,7 @@ private struct AddComparisonRootSheet: View {
 
                 GridRow {
                     Color.clear.frame(width: 1, height: 1)
-                    Text("출처는 keeper 품질 점수가 아니라 source-specific 안전·의미 근거로 사용됩니다.")
+                    Text("출처 정보는 파일이 어디서 왔는지 이해하고 안전하게 비교하는 데 사용됩니다.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -460,7 +460,7 @@ private struct AddComparisonRootSheet: View {
                 HStack(spacing: 8) {
                     ProgressView()
                         .controlSize(.small)
-                    Text(statusMessage ?? "등록 및 비교 스캔 중…")
+                    Text(statusMessage ?? "폴더를 추가하고 비교하는 중…")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -476,7 +476,7 @@ private struct AddComparisonRootSheet: View {
                 Button("취소", action: onCancel)
                     .keyboardShortcut(.cancelAction)
                     .disabled(isWorking)
-                Button("등록하고 비교 스캔") {
+                Button("추가하고 비교 시작") {
                     onRegisterAndScan(role, provenance)
                 }
                 .buttonStyle(.borderedProminent)
@@ -505,7 +505,7 @@ private struct ReviewSummaryHeader: View {
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                         .lineLimit(1)
-                        .help("이 검토 snapshot에 포함된 위치")
+                        .help("현재 비교에 포함된 위치")
                 }
             }
         }
@@ -521,20 +521,20 @@ private struct ReviewSidebarRow: View {
                 .font(.system(size: 16, weight: .medium))
                 .frame(width: 24)
                 .foregroundStyle(item.kind == .livePhotoAsset ? .blue : .secondary)
-                .help(item.kind == .livePhotoAsset ? "Live Photo" : "Exact duplicate group")
+                .help(item.kind == .livePhotoAsset ? "Live Photo" : "완전히 같은 파일")
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(primaryName)
                     .font(.body)
                     .lineLimit(1)
                 HStack(spacing: 5) {
-                    Text(item.kind == .livePhotoAsset ? "Exact resource" : "Exact duplicate")
+                    Text(item.kind == .livePhotoAsset ? "사진 파일이 완전히 같음" : "파일 내용이 완전히 같음")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .help(
                             item.kind == .livePhotoAsset
-                                ? "Live Photo 안의 하나 이상의 resource가 byte 단위로 동일하다는 뜻입니다. occurrence 전체가 동일하거나 완전하다는 뜻은 아닙니다."
-                                : "파일 내용이 byte 단위로 완전히 동일한 사본 그룹입니다."
+                                ? "사진 파일 내용이 완전히 같습니다. Live Photo 비디오 포함 여부는 오른쪽에서 따로 확인할 수 있습니다."
+                                : "파일 내용이 완전히 같은 사본들입니다."
                         )
                 }
             }
@@ -648,51 +648,14 @@ private struct ReviewDetailView: View {
             Text("\(index) / \(total)")
                 .font(.callout.monospacedDigit())
                 .foregroundStyle(.secondary)
-            Text(exactBadgeTitle)
-                .font(.caption2.weight(.semibold))
-                .padding(.horizontal, 7)
-                .padding(.vertical, 3)
-                .background(.quaternary, in: Capsule())
-                .help(exactBadgeHelp)
             if item.kind == .livePhotoAsset {
                 Image(systemName: "livephoto")
                     .foregroundStyle(.blue)
-                    .help("Live Photo · still image와 paired video 관계를 하나의 촬영물로 취급합니다.")
+                    .help("Live Photo")
             }
-            Text("추천 근거: \(rationaleTitle(item.rationale))")
-                .font(.caption)
-                .foregroundStyle(.secondary)
             Spacer()
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    private var exactBadgeTitle: String {
-        guard item.kind == .livePhotoAsset else { return "EXACT" }
-        let copies = item.copies.isEmpty ? fallbackCopies : item.copies
-        if !copies.isEmpty && copies.allSatisfy(\.isCompleteLivePhotoOccurrence) {
-            return "EXACT PAIR"
-        }
-        let roles = Set(item.candidateResources.map(\.role))
-        if roles == [.photo] { return "EXACT STILL" }
-        if roles == [.pairedVideo] { return "EXACT VIDEO" }
-        return "EXACT RESOURCE"
-    }
-
-    private var exactBadgeHelp: String {
-        guard item.kind == .livePhotoAsset else {
-            return "각 사본의 파일 내용이 byte 단위로 완전히 동일합니다."
-        }
-        switch exactBadgeTitle {
-        case "EXACT PAIR":
-            return "각 Live Photo occurrence의 still과 paired video가 역할별 exact copy입니다. 완전한 Live Photo 여부는 별도 Live Photo 표시로 확인합니다."
-        case "EXACT STILL":
-            return "still image resource가 byte 단위로 동일합니다. Live Photo occurrence 전체가 동일하거나 완전하다는 뜻은 아닙니다."
-        case "EXACT VIDEO":
-            return "paired video resource가 byte 단위로 동일합니다. Live Photo occurrence 전체가 동일하거나 완전하다는 뜻은 아닙니다."
-        default:
-            return "Live Photo 안의 하나 이상의 resource가 byte 단위로 동일합니다. occurrence 전체의 동일성·완전성과는 별개입니다."
-        }
     }
 }
 
@@ -726,6 +689,7 @@ private struct ReviewComparisonTable: View {
                     CopyHeaderCell(
                         copy: copy,
                         itemKind: item.kind,
+                        recommendationText: copy.isKeeper ? keeperRecommendationText(item.rationale) : nil,
                         columnWidth: columnWidth,
                         isMarkedForCleanup: cleanupCopyIDs.contains(copy.id),
                         onToggleCleanupFromColumn: { onToggleCleanupFromColumn(copy) },
@@ -859,6 +823,7 @@ private struct ReviewColumnBoundsPreferenceKey: PreferenceKey {
 private struct CopyHeaderCell: View {
     let copy: DuplicateReviewPresentationCopy
     let itemKind: ReconciliationItemKind
+    let recommendationText: String?
     let columnWidth: CGFloat
     let isMarkedForCleanup: Bool
     let onToggleCleanupFromColumn: () -> Void
@@ -872,6 +837,9 @@ private struct CopyHeaderCell: View {
             VStack(alignment: .leading, spacing: 8) {
                 statusPrimaryRow
                     .frame(height: 22, alignment: .leading)
+
+                recommendationReasonRow
+                    .frame(height: 32, alignment: .topLeading)
 
                 if itemKind == .livePhotoAsset {
                     statusSecondaryRow
@@ -932,16 +900,24 @@ private struct CopyHeaderCell: View {
                 Label("남기기 추천", systemImage: "checkmark.seal.fill")
                     .font(.caption2.weight(.medium))
                     .foregroundStyle(.green)
-                    .help("PhotoArchiveKit이 남기기를 추천하는 사본")
+                    .help("이 사본을 남기는 것을 추천합니다")
             }
-
-            Spacer(minLength: 4)
-
-            Text("\(copy.resources.count)개 파일")
-                .font(.caption2.monospacedDigit())
-                .foregroundStyle(.tertiary)
         }
         .lineLimit(1)
+    }
+
+    @ViewBuilder
+    private var recommendationReasonRow: some View {
+        if let recommendationText {
+            Text(recommendationText)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .lineLimit(2)
+                .fixedSize(horizontal: false, vertical: true)
+                .help(recommendationText)
+        } else {
+            Color.clear
+        }
     }
 
     private var statusSecondaryRow: some View {
@@ -1172,13 +1148,13 @@ private func comparisonRows(
         comparisonRow("media-kind", "미디어 종류", copies: copies) {
             componentText($0) { mediaKindLabel($0.mediaKind) }
         },
-        comparisonRow("role", "Resource 역할", copies: copies) {
+        comparisonRow("role", "파일 역할", copies: copies) {
             componentText($0) { resourceRoleLabel($0.role) }
         },
-        livePhotoTimeComparisonRow("capture-primary", "대표 촬영 시각", copies: copies, sectionTitle: "원본 촬영 시각 · 가장 중요한 메타데이터", date: { $0.primaryResource?.captureTime?.instant }) {
+        livePhotoTimeComparisonRow("capture-primary", "촬영 시각", copies: copies, sectionTitle: "원본 촬영 시각", date: { $0.primaryResource?.captureTime?.instant }) {
             capturePrimaryLabel($0.captureTime)
         },
-        livePhotoTimeComparisonRow("capture-evidence-agreement", "원본 timestamp 교차검증", copies: copies) { resource in
+        livePhotoTimeComparisonRow("capture-evidence-agreement", "원본 촬영 시각 일치 여부", copies: copies) { resource in
             if resource.role == .pairedVideo {
                 return quickTimeCaptureEvidenceLabel(resource.captureTime)
             }
@@ -1205,19 +1181,19 @@ private func comparisonRows(
         livePhotoTimeComparisonRow("tiff-datetime", "TIFF DateTime", copies: copies, monospaced: true) {
             $0.imageCaptureDateEvidence?.tiffDateTime ?? "—"
         },
-        livePhotoTimeComparisonRow("quicktime-creation", "QuickTime creation date", copies: copies, monospaced: true) {
+        livePhotoTimeComparisonRow("quicktime-creation", "QuickTime 생성 시각", copies: copies, monospaced: true) {
             quickTimeCaptureEvidenceLabel($0.captureTime)
         },
-        livePhotoTimeComparisonRow("capture-instant", "촬영 시각 (절대시각)", copies: copies, date: { $0.primaryResource?.captureTime?.instant }) {
+        livePhotoTimeComparisonRow("capture-instant", "촬영 시각 (시간대 반영)", copies: copies, date: { $0.primaryResource?.captureTime?.instant }) {
             formatDate($0.captureTime?.instant)
         },
-        livePhotoTimeComparisonRow("capture-source", "대표 촬영 시각 source", copies: copies) {
+        livePhotoTimeComparisonRow("capture-source", "촬영 시각 출처", copies: copies) {
             $0.captureTime.map { captureSourceLabel($0.source) } ?? "—"
         },
-        livePhotoTimeComparisonRow("capture-confidence", "대표 촬영 시각 신뢰도", copies: copies) {
+        livePhotoTimeComparisonRow("capture-confidence", "촬영 시각 신뢰도", copies: copies) {
             $0.captureTime.map { captureConfidenceLabel($0.confidence) } ?? "—"
         },
-        livePhotoTimeComparisonRow("date-added", "Finder Date Added", copies: copies, sectionTitle: "파일 · 유입 · 관측 시각", date: { $0.primaryResource?.addedAt }) {
+        livePhotoTimeComparisonRow("date-added", "Finder에 추가된 시각", copies: copies, sectionTitle: "파일 기록 시각", date: { $0.primaryResource?.addedAt }) {
             formatDate($0.addedAt)
         },
         livePhotoTimeComparisonRow("creation-date", "파일시스템 생성 시각", copies: copies, date: { $0.primaryResource?.fileSystemFacts.creationDate }) {
@@ -1226,13 +1202,13 @@ private func comparisonRows(
         livePhotoTimeComparisonRow("filesystem-modified", "파일시스템 수정 시각", copies: copies, date: { $0.primaryResource?.fileSystemFacts.modificationDate }) {
             formatDate($0.fileSystemFacts.modificationDate)
         },
-        livePhotoTimeComparisonRow("catalog-modified", "Catalog에 기록된 파일 수정 시각", copies: copies, date: { $0.primaryResource?.details?.catalogModifiedAt }) {
+        livePhotoTimeComparisonRow("catalog-modified", "이전에 기록된 수정 시각", copies: copies, date: { $0.primaryResource?.details?.catalogModifiedAt }) {
             formatDate($0.details?.catalogModifiedAt)
         },
-        livePhotoTimeComparisonRow("first-seen", "PhotoArchiveKit 최초 관측", copies: copies, date: { $0.primaryResource?.details?.firstSeenAt }) {
+        livePhotoTimeComparisonRow("first-seen", "처음 확인한 시각", copies: copies, date: { $0.primaryResource?.details?.firstSeenAt }) {
             formatDate($0.details?.firstSeenAt)
         },
-        livePhotoTimeComparisonRow("last-seen", "PhotoArchiveKit 최근 관측", copies: copies, date: { $0.primaryResource?.details?.lastSeenAt }) {
+        livePhotoTimeComparisonRow("last-seen", "최근 확인한 시각", copies: copies, date: { $0.primaryResource?.details?.lastSeenAt }) {
             formatDate($0.details?.lastSeenAt)
         },
         comparisonRow("root-label", "위치", copies: copies) {
@@ -1244,93 +1220,93 @@ private func comparisonRows(
         comparisonRow("absolute-path", "전체 경로", copies: copies) {
             componentText($0) { $0.absolutePath }
         },
-        comparisonRow("catalog-total-bytes", "Catalog 총 bytes", copies: copies, sectionTitle: "크기", monospaced: true) {
+        comparisonRow("catalog-total-bytes", "기록된 전체 크기", copies: copies, sectionTitle: "크기", monospaced: true) {
             formatBytes($0.totalByteSize)
         },
-        comparisonRow("catalog-resource-bytes", "Catalog resource bytes", copies: copies, monospaced: true) {
+        comparisonRow("catalog-resource-bytes", "기록된 파일 크기", copies: copies, monospaced: true) {
             componentText($0) { formatBytes($0.byteSize) }
         },
-        comparisonRow("filesystem-resource-bytes", "현재 filesystem bytes", copies: copies, monospaced: true) {
+        comparisonRow("filesystem-resource-bytes", "현재 파일 크기", copies: copies, monospaced: true) {
             componentText($0) { resource in
                 resource.fileSystemFacts.currentByteSize.map(formatBytes) ?? "—"
             }
         },
-        comparisonRow("allocated-bytes", "Allocated bytes", copies: copies, monospaced: true) {
+        comparisonRow("allocated-bytes", "디스크 사용 크기", copies: copies, monospaced: true) {
             componentText($0) { resource in
                 resource.fileSystemFacts.allocatedByteSize.map(formatBytes) ?? "—"
             }
         },
-        comparisonRow("total-allocated-bytes", "Total allocated bytes", copies: copies, monospaced: true) {
+        comparisonRow("total-allocated-bytes", "전체 디스크 사용 크기", copies: copies, monospaced: true) {
             componentText($0) { resource in
                 resource.fileSystemFacts.totalAllocatedByteSize.map(formatBytes) ?? "—"
             }
         },
-        comparisonRow("freshness", "현재 lightweight 상태", copies: copies) {
+        comparisonRow("freshness", "현재 파일 상태", copies: copies) {
             componentText($0) { resourceFreshnessLabel($0) }
         },
-        comparisonRow("exact-sha256", "Catalog exact SHA-256", copies: copies, monospaced: true) {
+        comparisonRow("exact-sha256", "기록된 SHA-256", copies: copies, monospaced: true) {
             componentText($0) { $0.details?.exactSHA256Hex ?? "—" }
         },
-        comparisonRow("fresh-hash", "Fresh SHA-256", copies: copies) {
+        comparisonRow("fresh-hash", "현재 SHA-256", copies: copies) {
             componentText($0) { _ in
-                "미수행 — 실제 mutation 직전에 별도 fresh verification"
+                "아직 확인하지 않음 — 이동 직전에 확인"
             }
         },
-        comparisonRow("live-fingerprint", "Live identifier fingerprint", copies: copies, monospaced: true) {
+        comparisonRow("live-fingerprint", "Live Photo 식별값", copies: copies, monospaced: true) {
             componentText($0) { $0.details?.liveIdentifierFingerprintHex ?? "—" }
         },
-        comparisonRow("live-timed-status", "Live timed metadata", copies: copies) {
+        comparisonRow("live-timed-status", "Live Photo 시간 정보", copies: copies) {
             componentText($0) { $0.details?.liveTimedMetadataStatus?.rawValue ?? "—" }
         },
-        comparisonRow("metadata-probe", "Metadata probe", copies: copies) {
+        comparisonRow("metadata-probe", "메타데이터 읽기", copies: copies) {
             componentText($0) { resource in
                 guard let details = resource.details else { return "—" }
                 return details.metadataProbeFailed ? "실패" : "성공"
             }
         },
-        comparisonRow("metadata-version", "Metadata probe version", copies: copies, monospaced: true) {
+        comparisonRow("metadata-version", "메타데이터 검사 버전", copies: copies, monospaced: true) {
             componentText($0) { $0.details?.metadataProbeVersion.map(String.init) ?? "—" }
         },
-        comparisonRow("resource-id", "Resource ID", copies: copies, monospaced: true) {
+        comparisonRow("resource-id", "파일 식별자", copies: copies, monospaced: true) {
             componentText($0) { $0.id }
         },
-        comparisonRow("asset-id", "Asset ID", copies: copies, monospaced: true) {
+        comparisonRow("asset-id", "사진 묶음 식별자", copies: copies, monospaced: true) {
             componentText($0) { $0.assetID ?? "—" }
         },
-        comparisonRow("root-id", "Root ID", copies: copies, monospaced: true) {
+        comparisonRow("root-id", "위치 식별자", copies: copies, monospaced: true) {
             componentText($0) { $0.rootID }
         },
-        comparisonRow("root-kind", "Root kind", copies: copies) {
-            componentText($0) { $0.rootKind.rawValue }
+        comparisonRow("root-kind", "위치 종류", copies: copies) {
+            componentText($0) { sourceRootKindLabel($0.rootKind) }
         },
-        comparisonRow("usage-role", "Root usage role", copies: copies) {
-            componentText($0) { $0.rootUsageRole.rawValue }
+        comparisonRow("usage-role", "위치 역할", copies: copies) {
+            componentText($0) { rootUsageRoleLabel($0.rootUsageRole) }
         },
-        comparisonRow("provenance", "Provenance", copies: copies) {
-            componentText($0) { $0.rootProvenance.rawValue }
+        comparisonRow("provenance", "출처", copies: copies) {
+            componentText($0) { sourceProvenanceLabel($0.rootProvenance) }
         },
-        comparisonRow("stable-marker", "Stable marker key", copies: copies, monospaced: true) {
+        comparisonRow("stable-marker", "위치 확인 키", copies: copies, monospaced: true) {
             componentText($0) { $0.stableMarkerKey ?? "—" }
         },
-        comparisonRow("catalog-fs-id", "Catalog filesystem ID", copies: copies, monospaced: true) {
+        comparisonRow("catalog-fs-id", "기록된 파일 시스템 식별자", copies: copies, monospaced: true) {
             componentText($0) { $0.details?.catalogFileSystemIdentifier ?? "—" }
         },
-        comparisonRow("current-fs-id", "현재 filesystem ID", copies: copies, monospaced: true) {
+        comparisonRow("current-fs-id", "현재 파일 시스템 식별자", copies: copies, monospaced: true) {
             componentText($0) { $0.fileSystemFacts.fileSystemIdentifier ?? "—" }
         },
         comparisonRow("exists", "현재 파일 존재", copies: copies) {
             componentText($0) { $0.fileSystemFacts.exists ? "예" : "아니오" }
         },
-        comparisonRow("file-type", "Filesystem type", copies: copies) {
+        comparisonRow("file-type", "파일 종류", copies: copies) {
             componentText($0) { $0.fileSystemFacts.fileType ?? "—" }
         },
-        comparisonRow("type-identifier", "UTType identifier", copies: copies, monospaced: true) {
+        comparisonRow("type-identifier", "파일 형식 식별자", copies: copies, monospaced: true) {
             componentText($0) { $0.fileSystemFacts.typeIdentifier ?? "—" }
         },
         comparisonRow("owner", "소유자", copies: copies) {
             componentText($0) { $0.fileSystemFacts.ownerAccountName ?? "—" }
         },
-        comparisonRow("group", "그룹", copies: copies) {
+        comparisonRow("group", "소유 그룹", copies: copies) {
             componentText($0) { $0.fileSystemFacts.groupOwnerAccountName ?? "—" }
         },
         comparisonRow("permissions", "POSIX 권한", copies: copies, monospaced: true) {
@@ -1338,34 +1314,34 @@ private func comparisonRows(
                 resource.fileSystemFacts.posixPermissions.map { String(format: "%04o", $0) } ?? "—"
             }
         },
-        comparisonRow("immutable", "Immutable", copies: copies) {
+        comparisonRow("immutable", "변경 금지", copies: copies) {
             componentText($0) { optionalBool($0.fileSystemFacts.isImmutable) }
         },
-        comparisonRow("append-only", "Append only", copies: copies) {
+        comparisonRow("append-only", "추가만 허용", copies: copies) {
             componentText($0) { optionalBool($0.fileSystemFacts.isAppendOnly) }
         },
-        comparisonRow("hidden", "Hidden", copies: copies) {
+        comparisonRow("hidden", "숨김 파일", copies: copies) {
             componentText($0) { optionalBool($0.fileSystemFacts.isHidden) }
         },
-        comparisonRow("readable", "Readable", copies: copies) {
+        comparisonRow("readable", "읽기 가능", copies: copies) {
             componentText($0) { optionalBool($0.fileSystemFacts.isReadable) }
         },
-        comparisonRow("writable", "Writable", copies: copies) {
+        comparisonRow("writable", "쓰기 가능", copies: copies) {
             componentText($0) { optionalBool($0.fileSystemFacts.isWritable) }
         },
-        comparisonRow("executable", "Executable", copies: copies) {
+        comparisonRow("executable", "실행 가능", copies: copies) {
             componentText($0) { optionalBool($0.fileSystemFacts.isExecutable) }
         },
-        comparisonRow("xattrs", "Extended attributes", copies: copies, monospaced: true) {
+        comparisonRow("xattrs", "확장 속성", copies: copies, monospaced: true) {
             componentText($0) { xattrSummary($0.fileSystemFacts.extendedAttributes) }
         },
-        comparisonRow("location-count", "Location history count", copies: copies, monospaced: true) {
+        comparisonRow("location-count", "위치 변경 기록 수", copies: copies, monospaced: true) {
             componentText($0) { $0.details.map { String($0.locationHistoryCount) } ?? "—" }
         },
-        comparisonRow("last-session", "최근 scan session", copies: copies, monospaced: true) {
+        comparisonRow("last-session", "최근 검사 식별자", copies: copies, monospaced: true) {
             componentText($0) { $0.details?.lastSeenSessionID ?? "—" }
         },
-        comparisonRow("original-name-session", "최초 이름 session", copies: copies, monospaced: true) {
+        comparisonRow("original-name-session", "최초 이름 기록 식별자", copies: copies, monospaced: true) {
             componentText($0) { $0.details?.originalNameFirstSeenSessionID ?? "—" }
         }
     ]
@@ -1539,26 +1515,35 @@ private func rootUsageRoleLabel(_ role: RootUsageRole) -> String {
 private func rootUsageRoleDescription(_ role: RootUsageRole) -> String {
     switch role {
     case .staging:
-        return "아직 장기 보관이 끝나지 않은 작업·임시 위치입니다. 일반적인 Mac 작업 폴더를 비교할 때 기본값으로 적합합니다."
+        return "사진을 정리하거나 옮기기 전에 잠시 두는 작업 폴더입니다."
     case .primaryLibrary:
-        return "계속 유지할 주 라이브러리입니다. 다른 위치에 사본이 있어도 이 root 자체를 일반적인 offload 대상으로 보지 않습니다."
+        return "계속 보관할 주 사진 폴더입니다."
     case .archive:
-        return "장기 보관·보호 위치입니다. 같은 archive 안의 exact duplicate는 정리할 수 있지만 다른 root의 replica 때문에 보존 사본을 없애지 않습니다."
+        return "장기 보관용 폴더입니다. 보관본을 우선 보호합니다."
     case .importSource:
-        return "Takeout·export·camera dump 같은 입수처입니다. source-specific 의미와 보존 조건을 확인한 뒤 cleanup authority를 얻습니다."
+        return "가져오기·내보내기 원본처럼 사진의 출처가 되는 폴더입니다."
     case .reference:
-        return "비교만 하는 read-only 위치입니다. 이 root 자체를 정리하지 않고 다른 root cleanup의 보존 근거로도 사용하지 않습니다."
+        return "비교에만 사용하는 폴더입니다. 이 위치의 파일은 변경하지 않습니다."
     }
 }
 
 private func sourceProvenanceLabel(_ provenance: SourceProvenance) -> String {
     switch provenance {
     case .unknown: return "알 수 없음"
-    case .localLibrary: return "Local library"
-    case .appleDirect: return "Apple direct"
+    case .localLibrary: return "Mac의 기존 사진"
+    case .appleDirect: return "Apple에서 직접 가져옴"
     case .googleTakeout: return "Google Takeout"
-    case .googleWeb: return "Google Photos web"
-    case .googleIOSShare: return "Google Photos iOS share"
+    case .googleWeb: return "Google Photos 웹"
+    case .googleIOSShare: return "Google Photos iPhone 공유"
+    }
+}
+
+private func sourceRootKindLabel(_ kind: SourceRootKind) -> String {
+    switch kind {
+    case .inbox: return "일반 폴더"
+    case .archive: return "보관 폴더"
+    case .importSource: return "가져오기 원본"
+    case .reference: return "비교 전용"
     }
 }
 
@@ -1578,19 +1563,19 @@ private func optionalBool(_ value: Bool?) -> String {
 
 private func resourceFreshnessLabel(_ resource: DuplicateReviewPresentationResource) -> String {
     let facts = resource.fileSystemFacts
-    guard facts.exists else { return "STALE · 파일 없음" }
-    guard facts.currentByteSize == resource.byteSize else { return "STALE · byte size 변경" }
+    guard facts.exists else { return "변경됨 · 파일이 없습니다" }
+    guard facts.currentByteSize == resource.byteSize else { return "변경됨 · 파일 크기가 달라졌습니다" }
     if let catalogModified = resource.details?.catalogModifiedAt,
        let currentModified = facts.modificationDate,
        abs(catalogModified.timeIntervalSince(currentModified)) >= 0.001 {
-        return "STALE · 수정 시각 변경"
+        return "변경됨 · 수정 시각이 달라졌습니다"
     }
     if let catalogID = resource.details?.catalogFileSystemIdentifier,
        let currentID = facts.fileSystemIdentifier,
        catalogID != currentID {
-        return "STALE · filesystem ID 변경"
+        return "변경됨 · 파일 식별자가 달라졌습니다"
     }
-    return "CURRENT · size/mtime/filesystem ID 일치"
+    return "변경 없음 · 파일 상태가 이전 기록과 같습니다"
 }
 
 private func imageCaptureDateAgreementLabel(
@@ -1603,12 +1588,12 @@ private func imageCaptureDateAgreementLabel(
         ("TIFF DateTime", evidence.tiffDateTime ?? "")
     ].filter { !$0.1.isEmpty }
     guard namedValues.count >= 2 else {
-        return "근거 부족 · 원본 timestamp가 1개만 확인됨"
+        return "확인할 원본 촬영 시각이 1개뿐입니다"
     }
     if Set(namedValues.map(\.1)).count == 1 {
-        return "초 단위 일치 · \(namedValues.map(\.0).joined(separator: " = "))"
+        return "서로 일치함 · \(namedValues.map(\.0).joined(separator: " = "))"
     }
-    return "불일치 · " + namedValues.map { "\($0.0)=\($0.1)" }.joined(separator: " · ")
+    return "서로 다름 · " + namedValues.map { "\($0.0)=\($0.1)" }.joined(separator: " · ")
 }
 
 private func quickTimeCaptureEvidenceLabel(_ captureTime: CaptureTime?) -> String {
@@ -1684,28 +1669,28 @@ private enum ThumbnailProvider {
 
 private func mediaKindLabel(_ kind: MediaKind) -> String {
     switch kind {
-    case .image: return "Image"
-    case .video: return "Video"
-    case .sidecar: return "Sidecar"
+    case .image: return "사진"
+    case .video: return "비디오"
+    case .sidecar: return "보조 파일"
     }
 }
 
 private func resourceRoleLabel(_ role: ResourceRole) -> String {
     switch role {
-    case .photo: return "Live Photo still"
-    case .pairedVideo: return "Live Photo paired video"
-    case .standaloneImage: return "Standalone image"
-    case .standaloneVideo: return "Standalone video"
-    case .sidecar: return "Sidecar"
+    case .photo: return "Live Photo 사진"
+    case .pairedVideo: return "Live Photo 비디오"
+    case .standaloneImage: return "일반 사진"
+    case .standaloneVideo: return "일반 비디오"
+    case .sidecar: return "보조 파일"
     }
 }
 
 private func captureSourceLabel(_ source: CaptureTimeSource) -> String {
     switch source {
-    case .exifDateTimeOriginal: return "EXIF DateTimeOriginal"
-    case .quickTimeCreationDate: return "QuickTime creation date"
-    case .googleTakeoutPhotoTakenTime: return "Google Takeout photoTakenTime"
-    case .fileCreationDate: return "파일시스템 생성 시각 fallback"
+    case .exifDateTimeOriginal: return "사진 원본(EXIF DateTimeOriginal)"
+    case .quickTimeCreationDate: return "QuickTime 원본 시각"
+    case .googleTakeoutPhotoTakenTime: return "Google Takeout 촬영 시각"
+    case .fileCreationDate: return "파일 생성 시각(대체값)"
     case .unknown: return "알 수 없음"
     }
 }
@@ -1721,36 +1706,25 @@ private func capturePrimaryLabel(_ captureTime: CaptureTime?) -> String {
 
 private func captureConfidenceLabel(_ confidence: CaptureTimeConfidence) -> String {
     switch confidence {
-    case .trusted: return "Trusted"
-    case .providerSidecar: return "Provider sidecar"
-    case .incompleteTimezone: return "Timezone 불완전"
-    case .fallback: return "Fallback"
+    case .trusted: return "신뢰 높음"
+    case .providerSidecar: return "제공자 정보"
+    case .incompleteTimezone: return "시간대 정보 불완전"
+    case .fallback: return "대체값"
     case .unknown: return "알 수 없음"
     }
 }
 
-private func rationaleTitle(_ rationale: DuplicateReviewPresentationRationale) -> String {
+private func keeperRecommendationText(_ rationale: DuplicateReviewPresentationRationale) -> String {
     switch rationale {
-    case .protectedOrPreferredRoot: return "보존 역할이 더 강한 사본을 남깁니다"
-    case .cleanerFilename: return "복사본 표식이 없는 이름을 남깁니다"
-    case .recognizableFilename: return "더 알아보기 쉬운 원본형 파일명을 남깁니다"
-    case .earlierDateAdded: return "Finder에 더 먼저 추가된 사본을 남깁니다"
-    case .matchingParentFolder: return "폴더 구조가 더 자연스러운 사본을 남깁니다"
-    case .strongerCaptureEvidence: return "촬영시각 근거가 더 강한 사본을 남깁니다"
-    case .shallowerPath: return "더 단순한 위치의 사본을 남깁니다"
-    case .deterministicTieBreak: return "내용은 같고 의미 있는 차이를 찾지 못했습니다"
-    case .completeLivePhotoOccurrence: return "Live Photo의 더 완전한 보존 형태를 남깁니다"
-    case .sourceSemantics: return "보존 가능한 source semantics가 있는 사본을 남깁니다"
-    }
-}
-
-private func rationaleDetail(_ rationale: DuplicateReviewPresentationRationale) -> String {
-    switch rationale {
-    case .deterministicTieBreak:
-        return "현재 PhotoArchiveKit이 비교하는 근거에서는 우열이 크지 않습니다. 이 화면은 읽기 전용이며 파일을 이동하지 않습니다."
-    case .completeLivePhotoOccurrence:
-        return "still image와 paired video 관계를 하나의 asset으로 취급해 더 안전하게 복원 가능한 occurrence를 keeper로 표시합니다."
-    default:
-        return "두 사본은 byte 단위로 동일합니다. 아래 metadata와 실제 미리보기를 함께 보고 keeper 선택이 자연스러운지 확인할 수 있습니다. 이 화면은 파일을 변경하지 않습니다."
+    case .protectedOrPreferredRoot: return "더 안전하게 보관되는 위치에 있습니다"
+    case .cleanerFilename: return "복사본 표시가 없는 파일명입니다"
+    case .recognizableFilename: return "원본에 가까운 파일명입니다"
+    case .earlierDateAdded: return "Mac에 더 먼저 추가된 사본입니다"
+    case .matchingParentFolder: return "폴더 구성이 더 자연스럽습니다"
+    case .strongerCaptureEvidence: return "촬영 시각 정보가 더 확실합니다"
+    case .shallowerPath: return "더 찾기 쉬운 위치에 있습니다"
+    case .deterministicTieBreak: return "뚜렷한 차이가 없어 이 사본을 기본으로 추천합니다"
+    case .completeLivePhotoOccurrence: return "사진과 비디오가 함께 있는 Live Photo입니다"
+    case .sourceSemantics: return "출처 정보가 더 잘 보존되어 있습니다"
     }
 }

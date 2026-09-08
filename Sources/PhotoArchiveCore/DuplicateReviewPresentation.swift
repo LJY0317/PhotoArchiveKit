@@ -9,7 +9,7 @@ public enum DuplicateReviewPresentationError: LocalizedError {
     public var errorDescription: String? {
         switch self {
         case .noReusableSnapshot:
-            return "No reusable exact-duplicate scan snapshot is available for the currently active roots. Refresh the duplicate comparison first."
+            return "현재 선택한 위치와 맞는 최근 검사 결과가 없습니다. 비교 위치를 다시 스캔해 주세요."
         }
     }
 }

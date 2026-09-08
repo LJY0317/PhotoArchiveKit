@@ -20,6 +20,7 @@
 - 공식 Apple framework/API가 충분하면 우선 사용하고, 핵심 차별 영역이 아닌 복잡한 기능은 성숙한 외부 도구 재사용을 먼저 검토한다.
 - Live Photo asset graph, provenance, keeper policy, archive transaction처럼 PhotoArchiveKit이 소유해야 하는 semantic/safety logic은 core에 둔다.
 - optional third-party binary를 별도 license review 없이 vendor하거나 재배포하지 않는다.
+- 사용자에게 보이는 GUI 문구는 소비자용 자연어를 사용한다. internal ID, planner reason, `root`/`resource`/`keeper`/`candidate`/`snapshot` 같은 구현 용어는 기능상 꼭 필요한 고급 정보가 아니면 UI에 노출하지 않는다.
 
 ## 검증과 문서
 - 의미 있는 변경은 최소 `swift build`, `swift run photoarchive-selftest`, `bash scripts/check-public-tree.sh`, `git diff --check`를 통과시킨다.

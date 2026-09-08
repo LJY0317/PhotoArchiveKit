@@ -138,7 +138,7 @@ final class ReviewStore: ObservableObject {
             self.selection = visibleItems.first?.id
         }
         if selectedRootsNeedScan {
-            statusMessage = "현재 snapshot에 없는 위치가 선택되었습니다. ‘선택 위치 스캔’을 실행하면 함께 비교합니다."
+            statusMessage = "아직 검사하지 않은 위치가 선택되었습니다. ‘선택 위치 스캔’을 실행하면 함께 비교합니다."
         }
     }
 
@@ -147,7 +147,7 @@ final class ReviewStore: ObservableObject {
         guard !isScanning else { return false }
         let roots = activeRegisteredRoots.filter { selectedRootIDs.contains($0.rootID) }
         guard !roots.isEmpty else {
-            statusMessage = "비교할 registered root를 하나 이상 선택하세요."
+            statusMessage = "비교할 위치를 하나 이상 선택하세요."
             return false
         }
         let unavailable = roots.filter { !$0.isAvailable }
@@ -159,7 +159,7 @@ final class ReviewStore: ObservableObject {
 
         isScanning = true
         errorMessage = nil
-        statusMessage = "선택한 \(roots.count)개 위치를 비교 스캔하는 중입니다…"
+        statusMessage = "선택한 \(roots.count)개 위치를 비교하는 중입니다…"
         let scanRoots = roots.map {
             ScanRoot(
                 url: URL(fileURLWithPath: $0.canonicalPath, isDirectory: true),
@@ -174,11 +174,11 @@ final class ReviewStore: ObservableObject {
             }.value
             registeredRoots = try RootRegistry.list()
             installPresentation(next, selectAllScopeRoots: true)
-            statusMessage = "비교 스캔 완료 · \(next.items.count)개 duplicate group"
+            statusMessage = "비교가 완료되었습니다 · 중복 항목 \(next.items.count)개"
             isScanning = false
             return true
         } catch {
-            statusMessage = "비교 스캔에 실패했습니다: \(error.localizedDescription)"
+            statusMessage = "비교하지 못했습니다: \(error.localizedDescription)"
             isScanning = false
             return false
         }
@@ -200,9 +200,9 @@ final class ReviewStore: ObservableObject {
             )
             registeredRoots = try RootRegistry.list()
             selectedRootIDs.insert(registered.rootID)
-            statusMessage = "‘\(registered.label)’을 \(role.rawValue) root로 등록했습니다. 비교 스캔을 시작합니다…"
+            statusMessage = "‘\(registered.label)’을 비교에 추가했습니다. 검사를 시작합니다…"
         } catch {
-            statusMessage = "위치 등록에 실패했습니다: \(error.localizedDescription)"
+            statusMessage = "폴더를 추가하지 못했습니다: \(error.localizedDescription)"
             return false
         }
         return await scanSelectedRoots()
@@ -332,7 +332,7 @@ final class ReviewStore: ObservableObject {
 
         isPreparingCleanup = true
         cleanupErrorMessage = nil
-        statusMessage = "현재 파일과 삭제 선택을 다시 검증하는 중입니다…"
+        statusMessage = "선택한 파일을 확인하는 중입니다…"
 
         do {
             let scanner = try ArchiveScanner()
@@ -368,10 +368,10 @@ final class ReviewStore: ObservableObject {
                 preflight: preflight,
                 selectedCopyCount: selectedCleanupCopyCount
             )
-            statusMessage = "이동 전 검증 완료 · 실제 이동 전 최종 확인이 필요합니다."
+            statusMessage = nil
         } catch {
             cleanupErrorMessage = error.localizedDescription
-            statusMessage = "이동 전 검증에 실패했습니다: \(error.localizedDescription)"
+            statusMessage = "선택한 파일을 확인하지 못했습니다: \(error.localizedDescription)"
         }
         isPreparingCleanup = false
     }
@@ -387,7 +387,7 @@ final class ReviewStore: ObservableObject {
         guard !isApplyingCleanup, let preparedCleanup else { return }
         isApplyingCleanup = true
         cleanupErrorMessage = nil
-        statusMessage = "현재 파일을 다시 검증한 뒤 reversible destination으로 이동하는 중입니다…"
+        statusMessage = "선택한 파일을 이동하는 중입니다…"
 
         do {
             try DuplicateReviewDecisionStore.save(
