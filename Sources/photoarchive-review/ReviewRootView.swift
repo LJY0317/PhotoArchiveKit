@@ -1267,22 +1267,25 @@ private func comparisonRows(
                 resource.fileSystemFacts.totalAllocatedByteSize.map(formatBytes) ?? "—"
             }
         },
+        comparisonRow("capture-primary", "촬영 시각 (원본 메타데이터)", copies: copies, date: { $0.primaryResource?.captureTime?.instant }) {
+            componentLines($0) { capturePrimaryLabel($0.captureTime) }
+        },
         comparisonRow("date-added", "Finder Date Added", copies: copies, date: { $0.primaryResource?.addedAt }) {
             componentLines($0) { formatDate($0.addedAt) }
         },
-        comparisonRow("creation-date", "파일 생성 시각", copies: copies, date: { $0.primaryResource?.fileSystemFacts.creationDate }) {
+        comparisonRow("creation-date", "파일시스템 생성 시각", copies: copies, date: { $0.primaryResource?.fileSystemFacts.creationDate }) {
             componentLines($0) { formatDate($0.fileSystemFacts.creationDate) }
         },
         comparisonRow("catalog-modified", "Catalog 수정 시각", copies: copies, date: { $0.primaryResource?.details?.catalogModifiedAt }) {
             componentLines($0) { formatDate($0.details?.catalogModifiedAt) }
         },
-        comparisonRow("filesystem-modified", "현재 수정 시각", copies: copies, date: { $0.primaryResource?.fileSystemFacts.modificationDate }) {
+        comparisonRow("filesystem-modified", "파일시스템 수정 시각", copies: copies, date: { $0.primaryResource?.fileSystemFacts.modificationDate }) {
             componentLines($0) { formatDate($0.fileSystemFacts.modificationDate) }
         },
-        comparisonRow("capture-local", "촬영 local timestamp", copies: copies) {
+        comparisonRow("capture-local", "촬영 메타데이터 local timestamp", copies: copies) {
             componentLines($0) { $0.captureTime?.localTimestamp ?? "—" }
         },
-        comparisonRow("capture-instant", "촬영 absolute time", copies: copies, date: { $0.primaryResource?.captureTime?.instant }) {
+        comparisonRow("capture-instant", "촬영 시각 (절대시각)", copies: copies, date: { $0.primaryResource?.captureTime?.instant }) {
             componentLines($0) { formatDate($0.captureTime?.instant) }
         },
         comparisonRow("capture-offset", "UTC offset", copies: copies) {
@@ -1604,6 +1607,15 @@ private func captureSourceLabel(_ source: CaptureTimeSource) -> String {
     case .fileCreationDate: return "파일시스템 생성 시각 fallback"
     case .unknown: return "알 수 없음"
     }
+}
+
+private func capturePrimaryLabel(_ captureTime: CaptureTime?) -> String {
+    guard let captureTime else { return "—" }
+    let timestamp = captureTime.instant.map(formatDate)
+        ?? captureTime.localTimestamp
+        ?? "—"
+    let offset = captureTime.utcOffset.map { " · \($0)" } ?? ""
+    return "\(timestamp)\(offset) · \(captureSourceLabel(captureTime.source)) · \(captureConfidenceLabel(captureTime.confidence))"
 }
 
 private func captureConfidenceLabel(_ confidence: CaptureTimeConfidence) -> String {
