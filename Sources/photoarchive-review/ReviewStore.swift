@@ -1,6 +1,12 @@
 import Foundation
 import PhotoArchiveCore
 
+struct RemoveAllCleanupConfirmation: Identifiable {
+    let id = UUID()
+    let itemID: String
+    let message: String
+}
+
 @MainActor
 final class ReviewStore: ObservableObject {
     @Published var presentation: DuplicateReviewPresentation?
@@ -14,6 +20,8 @@ final class ReviewStore: ObservableObject {
     @Published var selectedRootIDs = Set<String>()
     @Published private(set) var cleanupCopyIDsByItem: [String: Set<String>] = [:]
     @Published private(set) var approvedItemIDs = Set<String>()
+    @Published var removeAllConfirmation: RemoveAllCleanupConfirmation?
+    @Published private(set) var explicitlyRemoveAllItemIDs = Set<String>()
 
     init() {
         reload()
@@ -208,7 +216,7 @@ final class ReviewStore: ObservableObject {
            item.copies.filter(\.isCompleteLivePhotoOccurrence).count == 1 {
             return "이 사본은 유일한 완전한 Live Photo 페어입니다. 클릭하면 still + paired video 전체를 정리 대상으로 표시합니다."
         }
-        return "클릭하면 이 사본을 정리 대상으로 표시합니다. 마지막 남은 사본을 클릭하면 기존 정리 선택이 이 사본으로 이동합니다."
+        return "클릭하면 이 사본을 정리 대상으로 표시합니다. 마지막 남은 사본이라면 전체 정리 여부를 한 번 더 확인합니다."
     }
 
     func keepOnlyHelp(
@@ -230,33 +238,58 @@ final class ReviewStore: ObservableObject {
     ) {
         statusMessage = nil
         let current = cleanupCopyIDsByItem[item.id, default: []]
-        let wasMarked = current.contains(copy.id)
-        let next = DuplicateReviewSelectionPolicy.toggledCleanupCopyIDs(
+        let result = DuplicateReviewSelectionPolicy.toggleCleanupCopyIDs(
             current: current,
             clickedCopyID: copy.id,
             allCopyIDs: item.copies.map(\.id)
         )
-        let movedSelection = !wasMarked
-            && current.count == max(0, item.copies.count - 1)
-            && next == [copy.id]
-        guard selectionIsSafe(next, for: item) else {
-            statusMessage = "비교할 다른 사본이 없어 정리 대상으로 표시할 수 없습니다."
+
+        switch result {
+        case let .updated(next):
+            cleanupCopyIDsByItem[item.id] = next
+            explicitlyRemoveAllItemIDs.remove(item.id)
+            approvedItemIDs.remove(item.id)
+            if next.contains(copy.id),
+               item.kind == .livePhotoAsset,
+               copy.isCompleteLivePhotoOccurrence,
+               item.copies.filter(\.isCompleteLivePhotoOccurrence).count == 1 {
+                statusMessage = "정리 대상으로 표시했습니다 · 이 사본은 유일한 완전한 Live Photo 페어입니다 · 아직 파일은 이동하지 않았습니다."
+            } else {
+                statusMessage = next.contains(copy.id)
+                    ? "정리 대상으로 표시했습니다. 아직 파일은 이동하지 않았습니다."
+                    : "정리 표시를 취소했습니다."
+            }
+
+        case .requiresRemoveAllConfirmation:
+            let removesOnlyCompletePair = item.kind == .livePhotoAsset
+                && item.copies.filter(\.isCompleteLivePhotoOccurrence).count == 1
+                && item.copies.first(where: \.isCompleteLivePhotoOccurrence).map { current.contains($0.id) || $0.id == copy.id } == true
+            let livePhotoWarning = removesOnlyCompletePair
+                ? " 현재 유일한 완전한 Live Photo 페어도 정리 대상에 포함됩니다."
+                : ""
+            removeAllConfirmation = RemoveAllCleanupConfirmation(
+                itemID: item.id,
+                message: "이 그룹의 \(item.copies.count)개 사본을 모두 정리 대상으로 표시합니다. 이 단계에서는 파일이 이동되지 않습니다.\(livePhotoWarning)"
+            )
+            statusMessage = "마지막 남은 사본입니다 · 전체 정리는 확인이 필요합니다."
+        }
+    }
+
+    func confirmRemoveAll(_ request: RemoveAllCleanupConfirmation) {
+        guard let item = presentation?.items.first(where: { $0.id == request.itemID }) else {
+            removeAllConfirmation = nil
             return
         }
-        cleanupCopyIDsByItem[item.id] = next
+        cleanupCopyIDsByItem[item.id] = Set(item.copies.map(\.id))
+        explicitlyRemoveAllItemIDs.insert(item.id)
         approvedItemIDs.remove(item.id)
-        if movedSelection {
-            statusMessage = "정리 대상을 이 사본으로 옮겼습니다. 아직 파일은 이동하지 않았습니다."
-        } else if next.contains(copy.id),
-           item.kind == .livePhotoAsset,
-           copy.isCompleteLivePhotoOccurrence,
-           item.copies.filter(\.isCompleteLivePhotoOccurrence).count == 1 {
-            statusMessage = "정리 대상으로 표시했습니다 · 이 사본은 유일한 완전한 Live Photo 페어입니다 · 아직 파일은 이동하지 않았습니다."
-        } else {
-            statusMessage = next.contains(copy.id)
-                ? "정리 대상으로 표시했습니다. 아직 파일은 이동하지 않았습니다."
-                : "정리 표시를 취소했습니다."
-        }
+        removeAllConfirmation = nil
+        statusMessage = "이 그룹의 모든 사본을 정리 대상으로 표시했습니다 · 파일은 아직 이동하지 않았습니다."
+    }
+
+    func cancelRemoveAll() {
+        removeAllConfirmation = nil
+        statusMessage = "전체 정리 선택을 취소했습니다."
     }
 
     func keepOnly(
@@ -267,6 +300,7 @@ final class ReviewStore: ObservableObject {
         let next = Set(item.copies.filter { $0.id != copy.id }.map(\.id))
         guard selectionIsSafe(next, for: item) else { return }
         cleanupCopyIDsByItem[item.id] = next
+        explicitlyRemoveAllItemIDs.remove(item.id)
         approvedItemIDs.remove(item.id)
         statusMessage = item.kind == .livePhotoAsset && !copy.isCompleteLivePhotoOccurrence
             ? "이 occurrence만 남기도록 선택했습니다 · 완전한 Live Photo 페어는 남지 않습니다 · 아직 파일은 이동하지 않았습니다."
@@ -275,7 +309,8 @@ final class ReviewStore: ObservableObject {
 
     func approve(_ item: DuplicateReviewPresentationItem) {
         let selected = cleanupCopyIDsByItem[item.id, default: []]
-        guard selectionIsSafe(selected, for: item) else {
+        let removesAll = selected.count == item.copies.count && !item.copies.isEmpty
+        guard !removesAll || explicitlyRemoveAllItemIDs.contains(item.id) else {
             statusMessage = "현재 선택은 보존 안전 조건을 만족하지 않습니다."
             return
         }
@@ -364,6 +399,8 @@ final class ReviewStore: ObservableObject {
             let suggested = Set(item.copies.filter { !$0.isKeeper }.map(\.id))
             return (item.id, suggested)
         })
+        explicitlyRemoveAllItemIDs.removeAll()
+        removeAllConfirmation = nil
         approvedItemIDs.removeAll()
         if let previousSelection,
            next.items.contains(where: { $0.id == previousSelection }) {

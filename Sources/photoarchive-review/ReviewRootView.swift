@@ -108,6 +108,18 @@ struct ReviewRootView: View {
                 }
             )
         }
+        .alert(item: $store.removeAllConfirmation) { request in
+            Alert(
+                title: Text("모든 사본을 정리 대상으로 표시할까요?"),
+                message: Text(request.message),
+                primaryButton: .destructive(Text("모두 정리 대상으로 표시")) {
+                    store.confirmRemoveAll(request)
+                },
+                secondaryButton: .cancel(Text("취소")) {
+                    store.cancelRemoveAll()
+                }
+            )
+        }
     }
 
     private func chooseComparisonFolder() {
@@ -143,6 +155,9 @@ struct ReviewRootView: View {
             }
             .listStyle(.sidebar)
             .searchable(text: $store.searchText, prompt: "파일명 또는 위치 검색")
+            .safeAreaInset(edge: .bottom) {
+                Color.clear.frame(height: 36)
+            }
         }
     }
 
@@ -621,6 +636,12 @@ private struct ReviewComparisonTable: View {
                         canKeepOnly: canKeepOnly(copy),
                         keepOnlyHelp: keepOnlyHelp(copy)
                     )
+                    .anchorPreference(
+                        key: ReviewColumnBoundsPreferenceKey.self,
+                        value: .bounds
+                    ) { anchor in
+                        [copy.id: ReviewColumnBounds(top: anchor, bottom: nil)]
+                    }
                 }
             }
 
@@ -644,6 +665,14 @@ private struct ReviewComparisonTable: View {
                             canToggleCleanup: canToggleCleanup(copy),
                             cleanupToggleHelp: cleanupToggleHelp(copy)
                         )
+                        .anchorPreference(
+                            key: ReviewColumnBoundsPreferenceKey.self,
+                            value: .bounds
+                        ) { anchor in
+                            row.id == rows.last?.id
+                                ? [copy.id: ReviewColumnBounds(top: nil, bottom: anchor)]
+                                : [:]
+                        }
                     }
                 }
 
@@ -654,33 +683,49 @@ private struct ReviewComparisonTable: View {
         }
         .padding(16)
         .background(.background.secondary, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
-        .background(alignment: .topLeading) {
-            HStack(spacing: gap) {
-                Color.clear
-                    .frame(width: labelWidth)
-                    .allowsHitTesting(false)
-
+        .overlayPreferenceValue(ReviewColumnBoundsPreferenceKey.self) { bounds in
+            GeometryReader { proxy in
                 ForEach(copies) { copy in
-                    let isCleanup = cleanupCopyIDs.contains(copy.id)
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .fill(isCleanup ? Color.red.opacity(0.035) : Color.green.opacity(0.015))
-                        .overlay {
-                            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                                .strokeBorder(
-                                    isCleanup ? Color.red.opacity(0.52) : Color.green.opacity(0.24),
-                                    lineWidth: 1
-                                )
-                        }
-                        .frame(width: columnWidth)
-                        .frame(maxHeight: .infinity)
-                        .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
-                        .onTapGesture {
-                            if canToggleCleanup(copy) { onToggleCleanup(copy) }
-                        }
-                        .help(cleanupToggleHelp(copy))
+                    if let pair = bounds[copy.id],
+                       let topAnchor = pair.top,
+                       let bottomAnchor = pair.bottom {
+                        let top = proxy[topAnchor]
+                        let bottom = proxy[bottomAnchor]
+                        let height = max(0, bottom.maxY - top.minY)
+                        let isCleanup = cleanupCopyIDs.contains(copy.id)
+
+                        RoundedRectangle(cornerRadius: 14, style: .continuous)
+                            .strokeBorder(
+                                isCleanup ? Color.red.opacity(0.62) : Color.green.opacity(0.28),
+                                lineWidth: isCleanup ? 1.5 : 1
+                            )
+                            .frame(width: top.width, height: height)
+                            .position(x: top.midX, y: top.minY + height / 2)
+                            .allowsHitTesting(false)
+                    }
                 }
             }
-            .padding(16)
+        }
+    }
+}
+
+private struct ReviewColumnBounds {
+    var top: Anchor<CGRect>?
+    var bottom: Anchor<CGRect>?
+}
+
+private struct ReviewColumnBoundsPreferenceKey: PreferenceKey {
+    static let defaultValue: [String: ReviewColumnBounds] = [:]
+
+    static func reduce(
+        value: inout [String: ReviewColumnBounds],
+        nextValue: () -> [String: ReviewColumnBounds]
+    ) {
+        for (id, incoming) in nextValue() {
+            var merged = value[id] ?? ReviewColumnBounds(top: nil, bottom: nil)
+            if let top = incoming.top { merged.top = top }
+            if let bottom = incoming.bottom { merged.bottom = bottom }
+            value[id] = merged
         }
     }
 }

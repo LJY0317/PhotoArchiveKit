@@ -1,23 +1,28 @@
 import Foundation
 
 public enum DuplicateReviewSelectionPolicy {
-    public static func toggledCleanupCopyIDs(
+    public enum ToggleResult: Equatable, Sendable {
+        case updated(Set<String>)
+        case requiresRemoveAllConfirmation
+    }
+
+    public static func toggleCleanupCopyIDs(
         current: Set<String>,
         clickedCopyID: String,
         allCopyIDs: [String]
-    ) -> Set<String> {
+    ) -> ToggleResult {
         var next = current
         if next.contains(clickedCopyID) {
             next.remove(clickedCopyID)
-            return next
+            return .updated(next)
         }
 
         next.insert(clickedCopyID)
         let all = Set(allCopyIDs)
-        if all.count > 1, all.isSubset(of: next) {
-            return [clickedCopyID]
+        if !all.isEmpty, all.isSubset(of: next) {
+            return .requiresRemoveAllConfirmation
         }
-        return next
+        return .updated(next)
     }
 }
 

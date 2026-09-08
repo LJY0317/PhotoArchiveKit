@@ -1977,20 +1977,20 @@ struct PhotoArchiveSelfTest {
         let reviewCopyA = "copy-a"
         let reviewCopyB = "copy-b"
         try require(
-            DuplicateReviewSelectionPolicy.toggledCleanupCopyIDs(
+            DuplicateReviewSelectionPolicy.toggleCleanupCopyIDs(
                 current: [reviewCopyB],
                 clickedCopyID: reviewCopyB,
                 allCopyIDs: [reviewCopyA, reviewCopyB]
-            ).isEmpty,
+            ) == .updated([]),
             "clicking an already selected duplicate-review column should immediately cancel its cleanup mark"
         )
         try require(
-            DuplicateReviewSelectionPolicy.toggledCleanupCopyIDs(
+            DuplicateReviewSelectionPolicy.toggleCleanupCopyIDs(
                 current: [reviewCopyA],
                 clickedCopyID: reviewCopyB,
                 allCopyIDs: [reviewCopyA, reviewCopyB]
-            ) == [reviewCopyB],
-            "clicking the last unmarked two-copy column should move cleanup selection instead of disabling the column"
+            ) == .requiresRemoveAllConfirmation,
+            "clicking the last unmarked duplicate-review column should require explicit confirmation before all copies are marked for cleanup"
         )
 
         let trashCleanupRoot = temporary.appendingPathComponent("TrashCleanup", isDirectory: true)
