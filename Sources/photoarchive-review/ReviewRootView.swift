@@ -500,6 +500,7 @@ private struct ReviewDetailView: View {
                         canKeepOnly: canKeepOnly,
                         keepOnlyHelp: keepOnlyHelp
                     )
+                    .frame(width: gridWidth, alignment: .topLeading)
 
                     HStack {
                         if isApproved {
