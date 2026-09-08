@@ -181,6 +181,59 @@ final class ReviewStore: ObservableObject {
         cleanupCopyIDsByItem[item.id, default: []].contains(copy.id)
     }
 
+    func canToggleCleanup(
+        _ copy: DuplicateReviewPresentationCopy,
+        item: DuplicateReviewPresentationItem
+    ) -> Bool {
+        var next = cleanupCopyIDsByItem[item.id, default: []]
+        if next.contains(copy.id) {
+            next.remove(copy.id)
+            return selectionIsSafe(next, for: item)
+        }
+        next.insert(copy.id)
+        return selectionIsSafe(next, for: item)
+    }
+
+    func canKeepOnly(
+        _ copy: DuplicateReviewPresentationCopy,
+        item: DuplicateReviewPresentationItem
+    ) -> Bool {
+        if item.kind == .livePhotoAsset && !copy.isCompleteLivePhotoOccurrence {
+            return false
+        }
+        let next = Set(item.copies.filter { $0.id != copy.id }.map(\.id))
+        return selectionIsSafe(next, for: item)
+    }
+
+    func cleanupToggleHelp(
+        _ copy: DuplicateReviewPresentationCopy,
+        item: DuplicateReviewPresentationItem
+    ) -> String {
+        if isMarkedForCleanup(copy, item: item) {
+            return "클릭하면 이 사본의 정리 표시를 취소합니다."
+        }
+        if canToggleCleanup(copy, item: item) {
+            return "클릭하면 이 사본을 정리 대상으로 표시합니다. 아직 파일은 이동하지 않습니다."
+        }
+        if item.kind == .livePhotoAsset && copy.isCompleteLivePhotoOccurrence {
+            return "이 사본은 현재 유일하게 온전한 Live Photo입니다. still + paired video를 최소 한 세트 남겨야 하므로 정리 대상으로 지정할 수 없습니다."
+        }
+        return "최소 한 사본은 남겨야 하므로 이 사본을 정리 대상으로 지정할 수 없습니다."
+    }
+
+    func keepOnlyHelp(
+        _ copy: DuplicateReviewPresentationCopy,
+        item: DuplicateReviewPresentationItem
+    ) -> String {
+        if canKeepOnly(copy, item: item) {
+            return "이 열의 사본을 남기고 나머지 사본을 정리 대상으로 표시합니다. 아직 파일은 이동하지 않습니다."
+        }
+        if item.kind == .livePhotoAsset && !copy.isCompleteLivePhotoOccurrence {
+            return "이 occurrence는 still + paired video가 모두 없어 단독 keeper로 선택할 수 없습니다."
+        }
+        return "현재 보존 안전 조건 때문에 이 사본만 남길 수 없습니다."
+    }
+
     func toggleCleanup(
         _ copy: DuplicateReviewPresentationCopy,
         item: DuplicateReviewPresentationItem
@@ -200,6 +253,9 @@ final class ReviewStore: ObservableObject {
         }
         cleanupCopyIDsByItem[item.id] = next
         approvedItemIDs.remove(item.id)
+        statusMessage = next.contains(copy.id)
+            ? "정리 대상으로 표시했습니다. 아직 파일은 이동하지 않았습니다."
+            : "정리 표시를 취소했습니다."
     }
 
     func keepOnly(
@@ -215,6 +271,7 @@ final class ReviewStore: ObservableObject {
         guard selectionIsSafe(next, for: item) else { return }
         cleanupCopyIDsByItem[item.id] = next
         approvedItemIDs.remove(item.id)
+        statusMessage = "이 사본을 남기고 나머지 사본을 정리 대상으로 표시했습니다."
     }
 
     func approve(_ item: DuplicateReviewPresentationItem) {
@@ -271,7 +328,7 @@ final class ReviewStore: ObservableObject {
                     decisions: decisions
                 )
             )
-            statusMessage = "검토 \(decisions.count)개 그룹을 제출했습니다. 파일은 아직 이동하지 않았습니다."
+            statusMessage = "검토 결과 \(decisions.count)개 그룹을 저장했습니다 · 파일 변경 없음 · 실제 정리는 별도 fresh verification 후 수행됩니다."
         } catch {
             statusMessage = "검토 제출에 실패했습니다: \(error.localizedDescription)"
         }

@@ -187,6 +187,10 @@ struct ReviewRootView: View {
                 cleanupCopyIDs: store.cleanupCopyIDsByItem[item.id, default: []],
                 onToggleCleanup: { store.toggleCleanup($0, item: item) },
                 onKeepOnly: { store.keepOnly($0, item: item) },
+                canToggleCleanup: { store.canToggleCleanup($0, item: item) },
+                cleanupToggleHelp: { store.cleanupToggleHelp($0, item: item) },
+                canKeepOnly: { store.canKeepOnly($0, item: item) },
+                keepOnlyHelp: { store.keepOnlyHelp($0, item: item) },
                 onApproveAndNext: { store.approveAndNext(item) },
                 onUnapprove: { store.unapprove(item) }
             )
@@ -232,11 +236,11 @@ private struct ReviewActionBar: View {
             Button {
                 store.submitApproved()
             } label: {
-                Label("검토 제출 (\(store.approvedCount))", systemImage: "tray.and.arrow.down.fill")
+                Label("검토 결과 제출 (\(store.approvedCount))", systemImage: "tray.and.arrow.down.fill")
             }
             .buttonStyle(.borderedProminent)
             .disabled(store.approvedCount == 0 || store.isScanning)
-            .help("검토 결정을 로컬에 저장합니다. 파일은 아직 이동하지 않습니다.")
+            .help("검토 완료한 선택을 opaque ID 기반 로컬 decision bundle로 저장합니다. 이 버튼만으로 파일을 이동하거나 삭제하지 않습니다.")
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 9)
@@ -394,15 +398,21 @@ private struct ReviewSidebarRow: View {
                 .font(.system(size: 16, weight: .medium))
                 .frame(width: 24)
                 .foregroundStyle(item.kind == .livePhotoAsset ? .blue : .secondary)
+                .help(item.kind == .livePhotoAsset ? "Live Photo" : "Exact duplicate group")
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(primaryName)
                     .font(.body)
                     .lineLimit(1)
                 HStack(spacing: 5) {
-                    Text("Exact duplicate")
+                    Text(item.kind == .livePhotoAsset ? "Exact resource" : "Exact duplicate")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .help(
+                            item.kind == .livePhotoAsset
+                                ? "Live Photo 안의 하나 이상의 resource가 byte 단위로 동일하다는 뜻입니다. occurrence 전체가 동일하거나 완전하다는 뜻은 아닙니다."
+                                : "파일 내용이 byte 단위로 완전히 동일한 사본 그룹입니다."
+                        )
                 }
             }
 
@@ -412,14 +422,14 @@ private struct ReviewSidebarRow: View {
                     .foregroundStyle(.green)
                     .help("검토 완료")
             }
-            Label("\(candidateCopyCount)", systemImage: "minus.circle")
+            Label("\(copyCount)", systemImage: "doc.on.doc")
                 .labelStyle(.titleAndIcon)
                 .font(.caption.monospacedDigit())
                 .foregroundStyle(.secondary)
                 .padding(.horizontal, 6)
                 .padding(.vertical, 2)
                 .background(.quaternary, in: Capsule())
-                .help("현재 추천 정리 후보 \(candidateCopyCount)개")
+                .help("이 중복 그룹에 존재하는 사본 \(copyCount)개")
         }
         .padding(.vertical, 3)
     }
@@ -430,9 +440,9 @@ private struct ReviewSidebarRow: View {
             ?? item.id
     }
 
-    private var candidateCopyCount: Int {
-        let count = item.copies.filter { !$0.isKeeper }.count
-        return count > 0 ? count : item.candidateResources.count
+    private var copyCount: Int {
+        if !item.copies.isEmpty { return item.copies.count }
+        return item.preferredResources.count + item.candidateResources.count
     }
 }
 
@@ -444,6 +454,10 @@ private struct ReviewDetailView: View {
     let cleanupCopyIDs: Set<String>
     let onToggleCleanup: (DuplicateReviewPresentationCopy) -> Void
     let onKeepOnly: (DuplicateReviewPresentationCopy) -> Void
+    let canToggleCleanup: (DuplicateReviewPresentationCopy) -> Bool
+    let cleanupToggleHelp: (DuplicateReviewPresentationCopy) -> String
+    let canKeepOnly: (DuplicateReviewPresentationCopy) -> Bool
+    let keepOnlyHelp: (DuplicateReviewPresentationCopy) -> String
     let onApproveAndNext: () -> Void
     let onUnapprove: () -> Void
 
@@ -484,7 +498,11 @@ private struct ReviewDetailView: View {
                         cleanupCopyIDs: cleanupCopyIDs,
                         isApproved: isApproved,
                         onToggleCleanup: onToggleCleanup,
-                        onKeepOnly: onKeepOnly
+                        onKeepOnly: onKeepOnly,
+                        canToggleCleanup: canToggleCleanup,
+                        cleanupToggleHelp: cleanupToggleHelp,
+                        canKeepOnly: canKeepOnly,
+                        keepOnlyHelp: keepOnlyHelp
                     )
 
                     HStack {
@@ -523,15 +541,16 @@ private struct ReviewDetailView: View {
             Text("\(index) / \(total)")
                 .font(.callout.monospacedDigit())
                 .foregroundStyle(.secondary)
-            Text("EXACT")
+            Text(exactBadgeTitle)
                 .font(.caption2.weight(.semibold))
                 .padding(.horizontal, 7)
                 .padding(.vertical, 3)
                 .background(.quaternary, in: Capsule())
+                .help(exactBadgeHelp)
             if item.kind == .livePhotoAsset {
                 Image(systemName: "livephoto")
                     .foregroundStyle(.blue)
-                    .help("Live Photo")
+                    .help("Live Photo · still image와 paired video 관계를 하나의 촬영물로 취급합니다.")
             }
             Text("추천 근거: \(rationaleTitle(item.rationale))")
                 .font(.caption)
@@ -546,6 +565,34 @@ private struct ReviewDetailView: View {
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
+
+    private var exactBadgeTitle: String {
+        guard item.kind == .livePhotoAsset else { return "EXACT" }
+        let copies = item.copies.isEmpty ? fallbackCopies : item.copies
+        if !copies.isEmpty && copies.allSatisfy(\.isCompleteLivePhotoOccurrence) {
+            return "EXACT PAIR"
+        }
+        let roles = Set(item.candidateResources.map(\.role))
+        if roles == [.photo] { return "EXACT STILL" }
+        if roles == [.pairedVideo] { return "EXACT VIDEO" }
+        return "EXACT RESOURCE"
+    }
+
+    private var exactBadgeHelp: String {
+        guard item.kind == .livePhotoAsset else {
+            return "각 사본의 파일 내용이 byte 단위로 완전히 동일합니다."
+        }
+        switch exactBadgeTitle {
+        case "EXACT PAIR":
+            return "각 Live Photo occurrence의 still과 paired video가 역할별 exact copy입니다. Live Photo completeness는 별도 Still + Paired Video 표시로 확인합니다."
+        case "EXACT STILL":
+            return "still image resource가 byte 단위로 동일합니다. Live Photo occurrence 전체가 동일하거나 완전하다는 뜻은 아닙니다."
+        case "EXACT VIDEO":
+            return "paired video resource가 byte 단위로 동일합니다. Live Photo occurrence 전체가 동일하거나 완전하다는 뜻은 아닙니다."
+        default:
+            return "Live Photo 안의 하나 이상의 resource가 byte 단위로 동일합니다. occurrence 전체의 동일성·완전성과는 별개입니다."
+        }
+    }
 }
 
 private struct ReviewComparisonTable: View {
@@ -558,6 +605,10 @@ private struct ReviewComparisonTable: View {
     let isApproved: Bool
     let onToggleCleanup: (DuplicateReviewPresentationCopy) -> Void
     let onKeepOnly: (DuplicateReviewPresentationCopy) -> Void
+    let canToggleCleanup: (DuplicateReviewPresentationCopy) -> Bool
+    let cleanupToggleHelp: (DuplicateReviewPresentationCopy) -> String
+    let canKeepOnly: (DuplicateReviewPresentationCopy) -> Bool
+    let keepOnlyHelp: (DuplicateReviewPresentationCopy) -> String
 
     private var rows: [ComparisonRowSpec] {
         comparisonRows(for: copies)
@@ -579,7 +630,11 @@ private struct ReviewComparisonTable: View {
                         isMarkedForCleanup: cleanupCopyIDs.contains(copy.id),
                         isApproved: isApproved,
                         onToggleCleanup: { onToggleCleanup(copy) },
-                        onKeepOnly: { onKeepOnly(copy) }
+                        onKeepOnly: { onKeepOnly(copy) },
+                        canToggleCleanup: canToggleCleanup(copy),
+                        cleanupToggleHelp: cleanupToggleHelp(copy),
+                        canKeepOnly: canKeepOnly(copy),
+                        keepOnlyHelp: keepOnlyHelp(copy)
                     )
                         .frame(width: columnWidth, alignment: .top)
                 }
@@ -593,7 +648,12 @@ private struct ReviewComparisonTable: View {
                     row: row,
                     labelWidth: labelWidth,
                     columnWidth: columnWidth,
-                    gap: gap
+                    gap: gap,
+                    copies: copies,
+                    cleanupCopyIDs: cleanupCopyIDs,
+                    onKeepOnly: onKeepOnly,
+                    canKeepOnly: canKeepOnly,
+                    keepOnlyHelp: keepOnlyHelp
                 )
                 Divider()
             }
@@ -610,67 +670,75 @@ private struct CopyHeaderCell: View {
     let isApproved: Bool
     let onToggleCleanup: () -> Void
     let onKeepOnly: () -> Void
+    let canToggleCleanup: Bool
+    let cleanupToggleHelp: String
+    let canKeepOnly: Bool
+    let keepOnlyHelp: String
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            HStack(spacing: 7) {
-                Label(
-                    isMarkedForCleanup ? "정리" : "남김",
-                    systemImage: isMarkedForCleanup ? "trash.circle.fill" : "checkmark.circle.fill"
-                )
-                .font(.caption.weight(.semibold))
-                .foregroundStyle(isMarkedForCleanup ? .red : .green)
+            VStack(alignment: .leading, spacing: 10) {
+                HStack(spacing: 7) {
+                    Label(
+                        isMarkedForCleanup ? "정리" : "남김",
+                        systemImage: isMarkedForCleanup ? "trash.circle.fill" : "checkmark.circle.fill"
+                    )
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(isMarkedForCleanup ? .red : .green)
 
-                Text(copy.isKeeper ? "추천 keeper" : "추천 candidate")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                    Text(copy.isKeeper ? "추천 keeper" : "추천 candidate")
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
 
-                if itemKind == .livePhotoAsset {
-                    livePhotoIntegrityBadge
+                    if itemKind == .livePhotoAsset {
+                        livePhotoIntegrityBadge
+                    }
+
+                    Spacer(minLength: 4)
+                    Text("\(copy.resources.count) resource")
+                        .font(.caption2.monospacedDigit())
+                        .foregroundStyle(.tertiary)
                 }
 
-                Spacer(minLength: 4)
-                Text("\(copy.resources.count) resource")
-                    .font(.caption2.monospacedDigit())
-                    .foregroundStyle(.tertiary)
-            }
+                if let primary = copy.primaryResource {
+                    ReviewThumbnail(url: primary.fileURL)
+                        .frame(height: 260)
+                        .overlay(alignment: .topTrailing) {
+                            Image(systemName: isMarkedForCleanup ? "trash.circle.fill" : "checkmark.circle.fill")
+                                .font(.title2)
+                                .symbolRenderingMode(.hierarchical)
+                                .foregroundStyle(isMarkedForCleanup ? .red : .green)
+                                .padding(9)
+                        }
 
-            if let primary = copy.primaryResource {
-                ReviewThumbnail(url: primary.fileURL)
-                    .frame(height: 260)
-                    .overlay(alignment: .topTrailing) {
-                        Image(systemName: isMarkedForCleanup ? "trash.circle.fill" : "checkmark.circle.fill")
-                            .font(.title2)
-                            .symbolRenderingMode(.hierarchical)
-                            .foregroundStyle(isMarkedForCleanup ? .red : .green)
-                            .padding(9)
-                    }
-                    .contentShape(Rectangle())
-                    .onTapGesture(perform: onToggleCleanup)
-                    .help(isMarkedForCleanup ? "클릭하면 정리 표시를 취소합니다" : "클릭하면 정리 대상으로 표시합니다")
+                    Text(primary.fileName)
+                        .font(.headline)
+                        .lineLimit(2)
 
-                Text(primary.fileName)
-                    .font(.headline)
-                    .lineLimit(2)
-
-                if copy.resources.count > 1 {
-                    VStack(alignment: .leading, spacing: 3) {
-                        ForEach(copy.resources) { resource in
-                            HStack(spacing: 6) {
-                                Image(systemName: resource.role == .pairedVideo ? "checkmark.seal.fill" : (resource.mediaKind == .video ? "film" : "photo"))
-                                    .foregroundStyle(resource.role == .pairedVideo ? .green : .secondary)
-                                Text(resourceRoleLabel(resource.role))
-                                    .fontWeight(resource.role == .pairedVideo ? .semibold : .regular)
-                                Spacer(minLength: 4)
-                                Text(ByteCountFormatter.string(fromByteCount: resource.byteSize, countStyle: .file))
-                                    .monospacedDigit()
+                    if copy.resources.count > 1 {
+                        VStack(alignment: .leading, spacing: 3) {
+                            ForEach(copy.resources) { resource in
+                                HStack(spacing: 6) {
+                                    Image(systemName: resource.role == .pairedVideo ? "checkmark.seal.fill" : (resource.mediaKind == .video ? "film" : "photo"))
+                                        .foregroundStyle(resource.role == .pairedVideo ? .green : .secondary)
+                                    Text(resourceRoleLabel(resource.role))
+                                        .fontWeight(resource.role == .pairedVideo ? .semibold : .regular)
+                                    Spacer(minLength: 4)
+                                    Text(ByteCountFormatter.string(fromByteCount: resource.byteSize, countStyle: .file))
+                                        .monospacedDigit()
+                                }
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
                             }
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
                         }
                     }
                 }
             }
+            .contentShape(Rectangle())
+            .onTapGesture {
+                if canKeepOnly { onKeepOnly() }
+            }
+            .help(keepOnlyHelp)
 
             if !copy.resources.isEmpty {
                 HStack {
@@ -681,19 +749,21 @@ private struct CopyHeaderCell: View {
 
                     Spacer()
 
-                    if itemKind != .livePhotoAsset || copy.isCompleteLivePhotoOccurrence {
-                        Button("이 사본만 남기기", action: onKeepOnly)
-                            .buttonStyle(.borderless)
-                    }
+                    Button("이 사본 남기기", action: onKeepOnly)
+                        .buttonStyle(.borderless)
+                        .disabled(!canKeepOnly)
+                        .help(keepOnlyHelp)
 
                     Button(isMarkedForCleanup ? "정리 취소" : "정리 대상으로 표시", action: onToggleCleanup)
                         .buttonStyle(.bordered)
+                        .disabled(!canToggleCleanup)
+                        .help(cleanupToggleHelp)
                 }
             }
         }
         .padding(12)
         .background(
-            isMarkedForCleanup ? Color.red.opacity(0.055) : Color(nsColor: .controlBackgroundColor),
+            isMarkedForCleanup ? Color.red.opacity(0.055) : Color.green.opacity(0.025),
             in: RoundedRectangle(cornerRadius: 12, style: .continuous)
         )
         .overlay {
@@ -701,7 +771,7 @@ private struct CopyHeaderCell: View {
                 .strokeBorder(
                     isApproved
                         ? (isMarkedForCleanup ? Color.red.opacity(0.4) : Color.green.opacity(0.4))
-                        : Color.primary.opacity(0.06),
+                        : (isMarkedForCleanup ? Color.red.opacity(0.18) : Color.green.opacity(0.18)),
                     lineWidth: 1
                 )
         }
@@ -762,6 +832,11 @@ private struct ComparisonMetadataRow: View {
     let labelWidth: CGFloat
     let columnWidth: CGFloat
     let gap: CGFloat
+    let copies: [DuplicateReviewPresentationCopy]
+    let cleanupCopyIDs: Set<String>
+    let onKeepOnly: (DuplicateReviewPresentationCopy) -> Void
+    let canKeepOnly: (DuplicateReviewPresentationCopy) -> Bool
+    let keepOnlyHelp: (DuplicateReviewPresentationCopy) -> String
 
     var body: some View {
         HStack(alignment: .top, spacing: gap) {
@@ -777,7 +852,8 @@ private struct ComparisonMetadataRow: View {
             }
             .frame(width: labelWidth, alignment: .leading)
 
-            ForEach(Array(row.values.enumerated()), id: \.offset) { _, value in
+            ForEach(Array(row.values.enumerated()), id: \.offset) { index, value in
+                let copy = copies[index]
                 VStack(alignment: .leading, spacing: 6) {
                     Text(value.text)
                         .font(row.monospaced ? .caption.monospaced() : .caption)
@@ -804,12 +880,30 @@ private struct ComparisonMetadataRow: View {
                 .padding(.vertical, 9)
                 .padding(.horizontal, 8)
                 .background(
-                    row.isDifferent ? Color.orange.opacity(0.055) : Color.clear,
+                    metadataCellBackground(
+                        isDifferent: row.isDifferent,
+                        isMarkedForCleanup: cleanupCopyIDs.contains(copy.id)
+                    ),
                     in: RoundedRectangle(cornerRadius: 8, style: .continuous)
                 )
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    if canKeepOnly(copy) { onKeepOnly(copy) }
+                }
+                .help(keepOnlyHelp(copy))
             }
         }
         .padding(.vertical, 3)
+    }
+
+    private func metadataCellBackground(
+        isDifferent: Bool,
+        isMarkedForCleanup: Bool
+    ) -> Color {
+        if isMarkedForCleanup {
+            return isDifferent ? Color.orange.opacity(0.075) : Color.red.opacity(0.035)
+        }
+        return isDifferent ? Color.orange.opacity(0.055) : Color.green.opacity(0.018)
     }
 }
 
