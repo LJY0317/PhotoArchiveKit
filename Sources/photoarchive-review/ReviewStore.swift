@@ -198,9 +198,6 @@ final class ReviewStore: ObservableObject {
         _ copy: DuplicateReviewPresentationCopy,
         item: DuplicateReviewPresentationItem
     ) -> Bool {
-        if item.kind == .livePhotoAsset && !copy.isCompleteLivePhotoOccurrence {
-            return false
-        }
         let next = Set(item.copies.filter { $0.id != copy.id }.map(\.id))
         return selectionIsSafe(next, for: item)
     }
@@ -213,10 +210,12 @@ final class ReviewStore: ObservableObject {
             return "클릭하면 이 사본의 정리 표시를 취소합니다."
         }
         if canToggleCleanup(copy, item: item) {
+            if item.kind == .livePhotoAsset,
+               copy.isCompleteLivePhotoOccurrence,
+               item.copies.filter(\.isCompleteLivePhotoOccurrence).count == 1 {
+                return "이 사본은 유일한 완전한 Live Photo 페어입니다. 클릭하면 still + paired video 전체를 정리 대상으로 표시합니다."
+            }
             return "클릭하면 이 사본을 정리 대상으로 표시합니다. 아직 파일은 이동하지 않습니다."
-        }
-        if item.kind == .livePhotoAsset && copy.isCompleteLivePhotoOccurrence {
-            return "이 사본은 현재 유일하게 온전한 Live Photo입니다. still + paired video를 최소 한 세트 남겨야 하므로 정리 대상으로 지정할 수 없습니다."
         }
         return "최소 한 사본은 남겨야 하므로 이 사본을 정리 대상으로 지정할 수 없습니다."
     }
@@ -226,10 +225,10 @@ final class ReviewStore: ObservableObject {
         item: DuplicateReviewPresentationItem
     ) -> String {
         if canKeepOnly(copy, item: item) {
+            if item.kind == .livePhotoAsset && !copy.isCompleteLivePhotoOccurrence {
+                return "이 occurrence만 남기면 완전한 still + paired video 페어가 남지 않을 수 있습니다. 선택은 허용되며 실제 정리는 별도 검증 단계입니다."
+            }
             return "이 열의 사본을 남기고 나머지 사본을 정리 대상으로 표시합니다. 아직 파일은 이동하지 않습니다."
-        }
-        if item.kind == .livePhotoAsset && !copy.isCompleteLivePhotoOccurrence {
-            return "이 occurrence는 still + paired video가 모두 없어 단독 keeper로 선택할 수 없습니다."
         }
         return "현재 보존 안전 조건 때문에 이 사본만 남길 수 없습니다."
     }
@@ -246,16 +245,21 @@ final class ReviewStore: ObservableObject {
             next.insert(copy.id)
         }
         guard selectionIsSafe(next, for: item) else {
-            statusMessage = item.kind == .livePhotoAsset
-                ? "Live Photo는 최소 하나의 온전한 still + paired video occurrence를 남겨야 합니다."
-                : "모든 사본을 정리 대상으로 선택할 수는 없습니다."
+            statusMessage = "모든 사본을 정리 대상으로 선택할 수는 없습니다. 최소 한 사본은 남겨야 합니다."
             return
         }
         cleanupCopyIDsByItem[item.id] = next
         approvedItemIDs.remove(item.id)
-        statusMessage = next.contains(copy.id)
-            ? "정리 대상으로 표시했습니다. 아직 파일은 이동하지 않았습니다."
-            : "정리 표시를 취소했습니다."
+        if next.contains(copy.id),
+           item.kind == .livePhotoAsset,
+           copy.isCompleteLivePhotoOccurrence,
+           item.copies.filter(\.isCompleteLivePhotoOccurrence).count == 1 {
+            statusMessage = "정리 대상으로 표시했습니다 · 이 사본은 유일한 완전한 Live Photo 페어입니다 · 아직 파일은 이동하지 않았습니다."
+        } else {
+            statusMessage = next.contains(copy.id)
+                ? "정리 대상으로 표시했습니다. 아직 파일은 이동하지 않았습니다."
+                : "정리 표시를 취소했습니다."
+        }
     }
 
     func keepOnly(
@@ -263,15 +267,13 @@ final class ReviewStore: ObservableObject {
         item: DuplicateReviewPresentationItem
     ) {
         statusMessage = nil
-        if item.kind == .livePhotoAsset && !copy.isCompleteLivePhotoOccurrence {
-            statusMessage = "온전한 Live Photo occurrence만 단독 keeper로 지정할 수 있습니다."
-            return
-        }
         let next = Set(item.copies.filter { $0.id != copy.id }.map(\.id))
         guard selectionIsSafe(next, for: item) else { return }
         cleanupCopyIDsByItem[item.id] = next
         approvedItemIDs.remove(item.id)
-        statusMessage = "이 사본을 남기고 나머지 사본을 정리 대상으로 표시했습니다."
+        statusMessage = item.kind == .livePhotoAsset && !copy.isCompleteLivePhotoOccurrence
+            ? "이 occurrence만 남기도록 선택했습니다 · 완전한 Live Photo 페어는 남지 않습니다 · 아직 파일은 이동하지 않았습니다."
+            : "이 사본을 남기고 나머지 사본을 정리 대상으로 표시했습니다."
     }
 
     func approve(_ item: DuplicateReviewPresentationItem) {
@@ -339,11 +341,7 @@ final class ReviewStore: ObservableObject {
         for item: DuplicateReviewPresentationItem
     ) -> Bool {
         let remaining = item.copies.filter { !cleanupIDs.contains($0.id) }
-        guard !remaining.isEmpty else { return false }
-        if item.kind == .livePhotoAsset {
-            return remaining.contains(where: \.isCompleteLivePhotoOccurrence)
-        }
-        return true
+        return !remaining.isEmpty
     }
 
     func selectPrevious() {

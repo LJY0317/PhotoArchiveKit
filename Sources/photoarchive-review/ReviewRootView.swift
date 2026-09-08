@@ -615,47 +615,73 @@ private struct ReviewComparisonTable: View {
     }
 
     var body: some View {
-        VStack(spacing: 0) {
-            HStack(alignment: .top, spacing: gap) {
-                Text("미리보기")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
-                    .frame(width: labelWidth, alignment: .leading)
-                    .padding(.top, 8)
-
+        ZStack(alignment: .topLeading) {
+            HStack(spacing: gap) {
+                Color.clear
+                    .frame(width: labelWidth)
                 ForEach(copies) { copy in
-                    CopyHeaderCell(
-                        copy: copy,
-                        itemKind: item.kind,
-                        isMarkedForCleanup: cleanupCopyIDs.contains(copy.id),
-                        isApproved: isApproved,
-                        onToggleCleanup: { onToggleCleanup(copy) },
-                        onKeepOnly: { onKeepOnly(copy) },
-                        canToggleCleanup: canToggleCleanup(copy),
-                        cleanupToggleHelp: cleanupToggleHelp(copy),
-                        canKeepOnly: canKeepOnly(copy),
-                        keepOnlyHelp: keepOnlyHelp(copy)
-                    )
-                        .frame(width: columnWidth, alignment: .top)
+                    let isCleanup = cleanupCopyIDs.contains(copy.id)
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .fill(isCleanup ? Color.red.opacity(0.025) : Color.green.opacity(0.012))
+                        .overlay {
+                            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                .strokeBorder(
+                                    isCleanup ? Color.red.opacity(0.42) : Color.green.opacity(0.18),
+                                    lineWidth: isCleanup ? 1.5 : 1
+                                )
+                        }
+                        .frame(width: columnWidth)
+                        .frame(maxHeight: .infinity)
                 }
             }
-            .padding(.bottom, 14)
+            .frame(maxHeight: .infinity)
+            .allowsHitTesting(false)
 
-            Divider()
+            VStack(spacing: 0) {
+                HStack(alignment: .top, spacing: gap) {
+                    Text("미리보기")
+                        .font(.caption.weight(.semibold))
+                        .foregroundStyle(.secondary)
+                        .frame(width: labelWidth, alignment: .leading)
+                        .padding(.top, 8)
 
-            ForEach(rows) { row in
-                ComparisonMetadataRow(
-                    row: row,
-                    labelWidth: labelWidth,
-                    columnWidth: columnWidth,
-                    gap: gap,
-                    copies: copies,
-                    cleanupCopyIDs: cleanupCopyIDs,
-                    onKeepOnly: onKeepOnly,
-                    canKeepOnly: canKeepOnly,
-                    keepOnlyHelp: keepOnlyHelp
-                )
+                    ForEach(copies) { copy in
+                        CopyHeaderCell(
+                            copy: copy,
+                            itemKind: item.kind,
+                            isMarkedForCleanup: cleanupCopyIDs.contains(copy.id),
+                            isApproved: isApproved,
+                            isOnlyCompleteLivePhotoOccurrence: item.kind == .livePhotoAsset
+                                && copy.isCompleteLivePhotoOccurrence
+                                && copies.filter(\.isCompleteLivePhotoOccurrence).count == 1,
+                            onToggleCleanup: { onToggleCleanup(copy) },
+                            onKeepOnly: { onKeepOnly(copy) },
+                            canToggleCleanup: canToggleCleanup(copy),
+                            cleanupToggleHelp: cleanupToggleHelp(copy),
+                            canKeepOnly: canKeepOnly(copy),
+                            keepOnlyHelp: keepOnlyHelp(copy)
+                        )
+                        .frame(width: columnWidth, alignment: .top)
+                    }
+                }
+                .padding(.bottom, 14)
+
                 Divider()
+
+                ForEach(rows) { row in
+                    ComparisonMetadataRow(
+                        row: row,
+                        labelWidth: labelWidth,
+                        columnWidth: columnWidth,
+                        gap: gap,
+                        copies: copies,
+                        cleanupCopyIDs: cleanupCopyIDs,
+                        onToggleCleanup: onToggleCleanup,
+                        canToggleCleanup: canToggleCleanup,
+                        cleanupToggleHelp: cleanupToggleHelp
+                    )
+                    Divider()
+                }
             }
         }
         .padding(16)
@@ -668,6 +694,7 @@ private struct CopyHeaderCell: View {
     let itemKind: ReconciliationItemKind
     let isMarkedForCleanup: Bool
     let isApproved: Bool
+    let isOnlyCompleteLivePhotoOccurrence: Bool
     let onToggleCleanup: () -> Void
     let onKeepOnly: () -> Void
     let canToggleCleanup: Bool
@@ -692,6 +719,16 @@ private struct CopyHeaderCell: View {
 
                     if itemKind == .livePhotoAsset {
                         livePhotoIntegrityBadge
+                    }
+
+                    if isOnlyCompleteLivePhotoOccurrence {
+                        Text("유일한 페어")
+                            .font(.caption2.weight(.semibold))
+                            .foregroundStyle(.orange)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(Color.orange.opacity(0.10), in: Capsule())
+                            .help("이 사본은 현재 유일한 완전한 Live Photo 페어입니다")
                     }
 
                     Spacer(minLength: 4)
@@ -735,10 +772,8 @@ private struct CopyHeaderCell: View {
                 }
             }
             .contentShape(Rectangle())
-            .onTapGesture {
-                if canKeepOnly { onKeepOnly() }
-            }
-            .help(keepOnlyHelp)
+            .onTapGesture(perform: onToggleCleanup)
+            .help(cleanupToggleHelp)
 
             if !copy.resources.isEmpty {
                 HStack {
@@ -834,9 +869,9 @@ private struct ComparisonMetadataRow: View {
     let gap: CGFloat
     let copies: [DuplicateReviewPresentationCopy]
     let cleanupCopyIDs: Set<String>
-    let onKeepOnly: (DuplicateReviewPresentationCopy) -> Void
-    let canKeepOnly: (DuplicateReviewPresentationCopy) -> Bool
-    let keepOnlyHelp: (DuplicateReviewPresentationCopy) -> String
+    let onToggleCleanup: (DuplicateReviewPresentationCopy) -> Void
+    let canToggleCleanup: (DuplicateReviewPresentationCopy) -> Bool
+    let cleanupToggleHelp: (DuplicateReviewPresentationCopy) -> String
 
     var body: some View {
         HStack(alignment: .top, spacing: gap) {
@@ -888,9 +923,9 @@ private struct ComparisonMetadataRow: View {
                 )
                 .contentShape(Rectangle())
                 .onTapGesture {
-                    if canKeepOnly(copy) { onKeepOnly(copy) }
+                    if canToggleCleanup(copy) { onToggleCleanup(copy) }
                 }
-                .help(keepOnlyHelp(copy))
+                .help(cleanupToggleHelp(copy))
             }
         }
         .padding(.vertical, 3)
