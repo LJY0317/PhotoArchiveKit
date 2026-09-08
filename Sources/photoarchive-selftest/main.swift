@@ -497,6 +497,21 @@ struct PhotoArchiveSelfTest {
                 },
             "duplicate-review GUI should expose one comparison column per standalone copy with rich local-only catalog/filesystem facts"
         )
+        let expandedReviewScan = try await reviewSubsetScanner.scan(roots: [
+            ScanRoot(url: reviewSubsetA, kind: .inbox, provenance: .unknown),
+            ScanRoot(url: reviewSubsetB, kind: .inbox, provenance: .unknown),
+            ScanRoot(url: reviewSubsetC, kind: .inbox, provenance: .unknown)
+        ])
+        let expandedReviewPresentation = DuplicateReviewPresentationBuilder.makePresentation(
+            report: expandedReviewScan,
+            plan: ReconciliationPlanner.makePlan(from: expandedReviewScan)
+        )
+        try require(
+            expandedReviewPresentation.scopeRoots.count == 3
+                && expandedReviewPresentation.items.count == 1
+                && expandedReviewPresentation.candidateResourceCount == 1,
+            "adding a comparison root and rescanning the selected registered roots should expand the GUI scope without changing unrelated duplicate decisions"
+        )
 
         let takeoutSidecarRoot = temporary.appendingPathComponent("TakeoutSidecar", isDirectory: true)
         try fileManager.createDirectory(at: takeoutSidecarRoot, withIntermediateDirectories: true)

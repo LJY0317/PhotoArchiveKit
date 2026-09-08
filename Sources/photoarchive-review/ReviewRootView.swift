@@ -5,6 +5,7 @@ import SwiftUI
 
 struct ReviewRootView: View {
     @StateObject private var store = ReviewStore()
+    @State private var addRootRequest: AddComparisonRootRequest?
 
     var body: some View {
         NavigationSplitView {
@@ -31,31 +32,73 @@ struct ReviewRootView: View {
 
             ToolbarItem {
                 Menu {
-                    if let presentation = store.presentation {
-                        ForEach(presentation.scopeRoots) { root in
+                    if store.activeRegisteredRoots.isEmpty {
+                        Text("등록된 위치가 없습니다")
+                    } else {
+                        ForEach(store.activeRegisteredRoots, id: \.rootID) { root in
                             Button {
-                                store.toggleRoot(root.id)
+                                store.toggleRoot(root.rootID)
                             } label: {
                                 Label(
-                                    root.label,
-                                    systemImage: store.selectedRootIDs.contains(root.id)
+                                    rootMenuTitle(root),
+                                    systemImage: store.selectedRootIDs.contains(root.rootID)
                                         ? "checkmark.circle.fill"
                                         : "circle"
                                 )
                             }
+                            .disabled(!root.isAvailable && !store.selectedRootIDs.contains(root.rootID))
                         }
                     }
+
+                    Divider()
+
+                    Button {
+                        chooseComparisonFolder()
+                    } label: {
+                        Label("폴더 추가…", systemImage: "folder.badge.plus")
+                    }
+
+                    Button {
+                        Task { await store.scanSelectedRoots() }
+                    } label: {
+                        Label(
+                            store.selectedRootsNeedScan ? "선택 위치 스캔 필요" : "선택 위치 다시 스캔",
+                            systemImage: "arrow.triangle.2.circlepath"
+                        )
+                    }
+                    .disabled(store.selectedRootIDs.isEmpty || store.isScanning)
                 } label: {
                     Label("비교 위치", systemImage: "folder.badge.gearshape")
                 }
-                .help("현재 duplicate snapshot에서 비교할 registered root를 선택합니다")
+                .help("registered root를 선택하거나 새 폴더를 역할과 함께 등록합니다")
+                .disabled(store.isScanning)
+            }
+
+            ToolbarItem {
+                Button {
+                    Task { await store.scanSelectedRoots() }
+                } label: {
+                    if store.isScanning {
+                        ProgressView()
+                            .controlSize(.small)
+                    } else {
+                        Label(
+                            "선택 위치 스캔",
+                            systemImage: store.selectedRootsNeedScan
+                                ? "arrow.triangle.2.circlepath.circle.fill"
+                                : "arrow.triangle.2.circlepath"
+                        )
+                    }
+                }
+                .disabled(store.selectedRootIDs.isEmpty || store.isScanning)
+                .help("선택한 registered root를 한 scan session으로 비교합니다")
             }
 
             ToolbarItem(placement: .primaryAction) {
                 Button(action: store.reload) {
                     Label("다시 불러오기", systemImage: "arrow.clockwise")
                 }
-                .disabled(store.isLoading)
+                .disabled(store.isLoading || store.isScanning)
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .photoArchiveReloadReview)) { _ in
@@ -64,6 +107,44 @@ struct ReviewRootView: View {
         .safeAreaInset(edge: .bottom) {
             ReviewActionBar(store: store)
         }
+        .sheet(item: $addRootRequest) { request in
+            AddComparisonRootSheet(
+                request: request,
+                isWorking: store.isScanning,
+                statusMessage: store.statusMessage,
+                onCancel: { addRootRequest = nil },
+                onRegisterAndScan: { role, provenance in
+                    Task {
+                        let succeeded = await store.registerAndScan(
+                            url: request.url,
+                            role: role,
+                            provenance: provenance
+                        )
+                        if succeeded {
+                            addRootRequest = nil
+                        }
+                    }
+                }
+            )
+        }
+    }
+
+    private func chooseComparisonFolder() {
+        let panel = NSOpenPanel()
+        panel.title = "비교할 폴더 선택"
+        panel.prompt = "선택"
+        panel.message = "PhotoArchiveKit에 registered root로 추가할 폴더를 선택하세요."
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.canCreateDirectories = false
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        addRootRequest = AddComparisonRootRequest(url: url.standardizedFileURL)
+    }
+
+    private func rootMenuTitle(_ root: RegisteredRootReport) -> String {
+        let availability = root.isAvailable ? "" : " · 오프라인"
+        return "\(root.label) · \(rootUsageRoleLabel(root.usageRole))\(availability)"
     }
 
     private var sidebar: some View {
@@ -124,6 +205,15 @@ private struct ReviewActionBar: View {
 
     var body: some View {
         HStack(spacing: 12) {
+            if store.isScanning {
+                ProgressView()
+                    .controlSize(.small)
+                Text("비교 스캔 중")
+                    .font(.caption.weight(.medium))
+                    .foregroundStyle(.secondary)
+                Divider().frame(height: 16)
+            }
+
             Label("검토 완료 \(store.approvedCount)", systemImage: "checkmark.circle.fill")
                 .foregroundStyle(store.approvedCount > 0 ? .green : .secondary)
             Text("남음 \(store.pendingCount)")
@@ -145,13 +235,129 @@ private struct ReviewActionBar: View {
                 Label("검토 제출 (\(store.approvedCount))", systemImage: "tray.and.arrow.down.fill")
             }
             .buttonStyle(.borderedProminent)
-            .disabled(store.approvedCount == 0)
+            .disabled(store.approvedCount == 0 || store.isScanning)
             .help("검토 결정을 로컬에 저장합니다. 파일은 아직 이동하지 않습니다.")
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 9)
         .background(.bar)
         .overlay(alignment: .top) { Divider() }
+    }
+}
+
+private struct AddComparisonRootRequest: Identifiable {
+    let id = UUID()
+    let url: URL
+}
+
+private struct AddComparisonRootSheet: View {
+    let request: AddComparisonRootRequest
+    let isWorking: Bool
+    let statusMessage: String?
+    let onCancel: () -> Void
+    let onRegisterAndScan: (RootUsageRole, SourceProvenance) -> Void
+
+    @State private var role: RootUsageRole = .staging
+    @State private var provenance: SourceProvenance = .unknown
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 20) {
+            VStack(alignment: .leading, spacing: 6) {
+                Text("비교 위치 추가")
+                    .font(.title2.weight(.semibold))
+                Text("폴더를 먼저 registered root로 등록한 뒤 현재 선택 위치들과 함께 비교 스캔합니다.")
+                    .foregroundStyle(.secondary)
+            }
+
+            HStack(spacing: 12) {
+                Image(systemName: "folder.fill")
+                    .font(.system(size: 28))
+                    .foregroundStyle(.secondary)
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(request.url.lastPathComponent)
+                        .font(.headline)
+                    Text(request.url.path)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .textSelection(.enabled)
+                        .lineLimit(2)
+                }
+            }
+            .padding(12)
+            .background(.background.secondary, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+
+            Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 12) {
+                GridRow {
+                    Text("역할")
+                        .foregroundStyle(.secondary)
+                    Picker("역할", selection: $role) {
+                        ForEach(RootUsageRole.allCases, id: \.self) { value in
+                            Text(rootUsageRoleLabel(value)).tag(value)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(maxWidth: .infinity)
+                }
+
+                GridRow {
+                    Color.clear.frame(width: 1, height: 1)
+                    Text(rootUsageRoleDescription(role))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                GridRow {
+                    Text("출처")
+                        .foregroundStyle(.secondary)
+                    Picker("출처", selection: $provenance) {
+                        ForEach(SourceProvenance.allCases, id: \.self) { value in
+                            Text(sourceProvenanceLabel(value)).tag(value)
+                        }
+                    }
+                    .labelsHidden()
+                    .frame(maxWidth: .infinity)
+                }
+
+                GridRow {
+                    Color.clear.frame(width: 1, height: 1)
+                    Text("출처는 keeper 품질 점수가 아니라 source-specific 안전·의미 근거로 사용됩니다.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+
+            if isWorking {
+                HStack(spacing: 8) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text(statusMessage ?? "등록 및 비교 스캔 중…")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+            } else if let statusMessage,
+                      statusMessage.contains("실패") {
+                Label(statusMessage, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+            }
+
+            HStack {
+                Spacer()
+                Button("취소", action: onCancel)
+                    .keyboardShortcut(.cancelAction)
+                    .disabled(isWorking)
+                Button("등록하고 비교 스캔") {
+                    onRegisterAndScan(role, provenance)
+                }
+                .buttonStyle(.borderedProminent)
+                .keyboardShortcut(.defaultAction)
+                .disabled(isWorking)
+            }
+        }
+        .padding(22)
+        .frame(width: 560)
     }
 }
 
@@ -846,6 +1052,42 @@ private func shortRoleLabel(_ role: ResourceRole) -> String {
     case .standaloneImage: return "image"
     case .standaloneVideo: return "video"
     case .sidecar: return "sidecar"
+    }
+}
+
+private func rootUsageRoleLabel(_ role: RootUsageRole) -> String {
+    switch role {
+    case .staging: return "작업 위치"
+    case .primaryLibrary: return "주 라이브러리"
+    case .archive: return "장기 보관"
+    case .importSource: return "가져오기 원본"
+    case .reference: return "비교 전용"
+    }
+}
+
+private func rootUsageRoleDescription(_ role: RootUsageRole) -> String {
+    switch role {
+    case .staging:
+        return "아직 장기 보관이 끝나지 않은 작업·임시 위치입니다. 일반적인 Mac 작업 폴더를 비교할 때 기본값으로 적합합니다."
+    case .primaryLibrary:
+        return "계속 유지할 주 라이브러리입니다. 다른 위치에 사본이 있어도 이 root 자체를 일반적인 offload 대상으로 보지 않습니다."
+    case .archive:
+        return "장기 보관·보호 위치입니다. 같은 archive 안의 exact duplicate는 정리할 수 있지만 다른 root의 replica 때문에 보존 사본을 없애지 않습니다."
+    case .importSource:
+        return "Takeout·export·camera dump 같은 입수처입니다. source-specific 의미와 보존 조건을 확인한 뒤 cleanup authority를 얻습니다."
+    case .reference:
+        return "비교만 하는 read-only 위치입니다. 이 root 자체를 정리하지 않고 다른 root cleanup의 보존 근거로도 사용하지 않습니다."
+    }
+}
+
+private func sourceProvenanceLabel(_ provenance: SourceProvenance) -> String {
+    switch provenance {
+    case .unknown: return "알 수 없음"
+    case .localLibrary: return "Local library"
+    case .appleDirect: return "Apple direct"
+    case .googleTakeout: return "Google Takeout"
+    case .googleWeb: return "Google Photos web"
+    case .googleIOSShare: return "Google Photos iOS share"
     }
 }
 

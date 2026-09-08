@@ -9,6 +9,8 @@ final class ReviewStore: ObservableObject {
     @Published var errorMessage: String?
     @Published var statusMessage: String?
     @Published var isLoading = false
+    @Published var isScanning = false
+    @Published private(set) var registeredRoots: [RegisteredRootReport] = []
     @Published var selectedRootIDs = Set<String>()
     @Published private(set) var cleanupCopyIDsByItem: [String: Set<String>] = [:]
     @Published private(set) var approvedItemIDs = Set<String>()
@@ -37,6 +39,23 @@ final class ReviewStore: ObservableObject {
 
     var approvedCount: Int { approvedItemIDs.count }
 
+    var activeRegisteredRoots: [RegisteredRootReport] {
+        registeredRoots
+            .filter { $0.state == .active }
+            .sorted {
+                if $0.label != $1.label { return $0.label.localizedStandardCompare($1.label) == .orderedAscending }
+                return $0.canonicalPath < $1.canonicalPath
+            }
+    }
+
+    var currentSnapshotRootIDs: Set<String> {
+        Set(presentation?.scopeRoots.map(\.id) ?? [])
+    }
+
+    var selectedRootsNeedScan: Bool {
+        !selectedRootIDs.isEmpty && !selectedRootIDs.isSubset(of: currentSnapshotRootIDs)
+    }
+
     var pendingCount: Int {
         max(0, (presentation?.items.count ?? 0) - approvedItemIDs.count)
     }
@@ -56,19 +75,9 @@ final class ReviewStore: ObservableObject {
         errorMessage = nil
         statusMessage = nil
         do {
+            registeredRoots = try RootRegistry.list()
             let next = try DuplicateReviewPresentationBuilder.latest()
-            presentation = next
-            selectedRootIDs = Set(next.scopeRoots.map(\.id))
-            cleanupCopyIDsByItem = Dictionary(uniqueKeysWithValues: next.items.map { item in
-                let suggested = Set(item.copies.filter { !$0.isKeeper }.map(\.id))
-                return (item.id, suggested)
-            })
-            approvedItemIDs.removeAll()
-            if let selection, next.items.contains(where: { $0.id == selection }) {
-                self.selection = selection
-            } else {
-                selection = next.items.first?.id
-            }
+            installPresentation(next, selectAllScopeRoots: true)
         } catch {
             presentation = nil
             selection = nil
@@ -85,9 +94,80 @@ final class ReviewStore: ObservableObject {
         } else {
             selectedRootIDs.insert(rootID)
         }
+        approvedItemIDs.removeAll()
         if let selection, !visibleItems.contains(where: { $0.id == selection }) {
             self.selection = visibleItems.first?.id
         }
+        if selectedRootsNeedScan {
+            statusMessage = "현재 snapshot에 없는 위치가 선택되었습니다. ‘선택 위치 스캔’을 실행하면 함께 비교합니다."
+        }
+    }
+
+    @discardableResult
+    func scanSelectedRoots() async -> Bool {
+        guard !isScanning else { return false }
+        let roots = activeRegisteredRoots.filter { selectedRootIDs.contains($0.rootID) }
+        guard !roots.isEmpty else {
+            statusMessage = "비교할 registered root를 하나 이상 선택하세요."
+            return false
+        }
+        let unavailable = roots.filter { !$0.isAvailable }
+        guard unavailable.isEmpty else {
+            let names = unavailable.map(\.label).joined(separator: ", ")
+            statusMessage = "현재 사용할 수 없는 위치가 있습니다: \(names)"
+            return false
+        }
+
+        isScanning = true
+        errorMessage = nil
+        statusMessage = "선택한 \(roots.count)개 위치를 비교 스캔하는 중입니다…"
+        let scanRoots = roots.map {
+            ScanRoot(
+                url: URL(fileURLWithPath: $0.canonicalPath, isDirectory: true),
+                kind: $0.kind,
+                provenance: $0.provenance
+            )
+        }
+
+        do {
+            let next = try await Task.detached(priority: .userInitiated) {
+                try await Self.scanPresentation(roots: scanRoots)
+            }.value
+            registeredRoots = try RootRegistry.list()
+            installPresentation(next, selectAllScopeRoots: true)
+            statusMessage = "비교 스캔 완료 · \(next.items.count)개 duplicate group"
+            isScanning = false
+            return true
+        } catch {
+            statusMessage = "비교 스캔에 실패했습니다: \(error.localizedDescription)"
+            isScanning = false
+            return false
+        }
+    }
+
+    @discardableResult
+    func registerAndScan(
+        url: URL,
+        role: RootUsageRole,
+        provenance: SourceProvenance
+    ) async -> Bool {
+        guard !isScanning else { return false }
+        do {
+            let registered = try RootRegistry.add(
+                url: url,
+                kind: role.sourceKind,
+                provenance: provenance,
+                usageRole: role
+            )
+            registeredRoots = try RootRegistry.list()
+            selectedRootIDs.insert(registered.rootID)
+            approvedItemIDs.removeAll()
+            statusMessage = "‘\(registered.label)’을 \(role.rawValue) root로 등록했습니다. 비교 스캔을 시작합니다…"
+        } catch {
+            statusMessage = "위치 등록에 실패했습니다: \(error.localizedDescription)"
+            return false
+        }
+        return await scanSelectedRoots()
     }
 
     func isApproved(_ item: DuplicateReviewPresentationItem) -> Bool {
@@ -217,5 +297,50 @@ final class ReviewStore: ObservableObject {
     func selectNext() {
         guard let index = selectedIndex, index + 1 < visibleItems.count else { return }
         selection = visibleItems[index + 1].id
+    }
+
+    private func installPresentation(
+        _ next: DuplicateReviewPresentation,
+        selectAllScopeRoots: Bool
+    ) {
+        let previousSelection = selection
+        presentation = next
+        if selectAllScopeRoots {
+            selectedRootIDs = Set(next.scopeRoots.map(\.id))
+        }
+        cleanupCopyIDsByItem = Dictionary(uniqueKeysWithValues: next.items.map { item in
+            let suggested = Set(item.copies.filter { !$0.isKeeper }.map(\.id))
+            return (item.id, suggested)
+        })
+        approvedItemIDs.removeAll()
+        if let previousSelection,
+           next.items.contains(where: { $0.id == previousSelection }) {
+            selection = previousSelection
+        } else {
+            selection = next.items.first?.id
+        }
+    }
+
+    nonisolated private static func scanPresentation(
+        roots: [ScanRoot]
+    ) async throws -> DuplicateReviewPresentation {
+        let scanner = try ArchiveScanner()
+        let report = try await scanner.scan(roots: roots)
+        let plan = ReconciliationPlanner.makePlan(from: report)
+        let referenceKeys = Set(plan.items.flatMap { item in
+            (item.preferredResources + item.candidateResources).map {
+                "\($0.rootID)\u{0}\($0.relativePath)"
+            }
+        })
+        let resourceIDs = report.resources.compactMap { resource -> String? in
+            let key = "\(resource.rootID)\u{0}\(resource.relativePath)"
+            return referenceKeys.contains(key) ? resource.resourceID : nil
+        }
+        let details = try scanner.duplicateReviewResourceDetails(resourceIDs: resourceIDs)
+        return DuplicateReviewPresentationBuilder.makePresentation(
+            report: report,
+            plan: plan,
+            detailsByResourceID: details
+        )
     }
 }
