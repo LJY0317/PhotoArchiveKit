@@ -120,9 +120,9 @@ struct ReviewRootView: View {
         }
         .alert(item: $store.removeAllConfirmation) { request in
             Alert(
-                title: Text("모든 사본을 정리 대상으로 표시할까요?"),
+                title: Text("모든 사본을 삭제 대상으로 선택할까요?"),
                 message: Text(request.message),
-                primaryButton: .destructive(Text("모두 정리 대상으로 표시")) {
+                primaryButton: .destructive(Text("모두 삭제 대상으로 선택")) {
                     store.confirmRemoveAll(request)
                 },
                 secondaryButton: .cancel(Text("취소")) {
@@ -192,12 +192,9 @@ struct ReviewRootView: View {
                 cleanupCopyIDs: store.cleanupCopyIDsByItem[item.id, default: []],
                 onToggleCleanupFromColumn: { store.toggleCleanupFromColumn($0, item: item) },
                 onToggleCleanupFromButton: { store.toggleCleanupFromButton($0, item: item) },
-                onKeepOnly: { store.keepOnly($0, item: item) },
                 canToggleCleanup: { store.canToggleCleanup($0, item: item) },
                 columnToggleHelp: { store.columnToggleHelp($0, item: item) },
-                cleanupToggleHelp: { store.cleanupToggleHelp($0, item: item) },
-                canKeepOnly: { store.canKeepOnly($0, item: item) },
-                keepOnlyHelp: { store.keepOnlyHelp($0, item: item) }
+                cleanupToggleHelp: { store.cleanupToggleHelp($0, item: item) }
             )
         } else {
             ContentUnavailableView(
@@ -224,7 +221,7 @@ private struct ReviewActionBar: View {
             }
 
             Label(
-                "정리 선택 \(store.selectedCleanupItemCount)개 그룹 · \(store.selectedCleanupCopyCount)개 사본",
+                "삭제 선택 \(store.selectedCleanupItemCount)개 그룹 · \(store.selectedCleanupCopyCount)개 사본",
                 systemImage: "trash"
             )
             .foregroundStyle(store.selectedCleanupItemCount > 0 ? .primary : .secondary)
@@ -243,10 +240,10 @@ private struct ReviewActionBar: View {
                 Task { await store.prepareSelectedCleanup() }
             } label: {
                 if store.isPreparingCleanup {
-                    Label("정리 전 검증 중…", systemImage: "shield.lefthalf.filled")
+                    Label("이동 전 검증 중…", systemImage: "shield.lefthalf.filled")
                 } else {
                     Label(
-                        "정리 전 확인 (\(store.selectedCleanupItemCount))",
+                        "\(store.cleanupMoveActionTitle) (\(store.selectedCleanupItemCount))",
                         systemImage: "trash"
                     )
                 }
@@ -258,7 +255,7 @@ private struct ReviewActionBar: View {
                     || store.isPreparingCleanup
                     || store.isApplyingCleanup
             )
-            .help("현재 빨간색으로 선택한 정리 대상을 다시 검증한 뒤 실제 reversible destination으로 이동하기 전 최종 확인 화면을 엽니다.")
+            .help("현재 빨간색으로 선택한 삭제 대상을 다시 검증한 뒤 실제 목적지로 이동하기 전 최종 확인 화면을 엽니다.")
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 9)
@@ -279,9 +276,9 @@ private struct ReviewCleanupConfirmationSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
             VStack(alignment: .leading, spacing: 6) {
-                Text("정리 전 확인")
+                Text(destinationActionTitle)
                     .font(.title2.weight(.semibold))
-                Text("현재 빨간색으로 선택한 정리 대상만 적용합니다. 실제 이동 직전에 같은 안전 검증을 다시 수행합니다.")
+                Text("현재 빨간색으로 선택한 삭제 대상만 적용합니다. 실제 이동 직전에 같은 안전 검증을 다시 수행합니다.")
                     .foregroundStyle(.secondary)
             }
 
@@ -312,7 +309,7 @@ private struct ReviewCleanupConfirmationSheet: View {
 
                 if report.onlyCompleteLivePhotoPairRemovalCount > 0 {
                     Label(
-                        "\(report.onlyCompleteLivePhotoPairRemovalCount)개 그룹에서는 유일한 완전한 Live Photo 페어가 정리 대상에 포함됩니다.",
+                        "\(report.onlyCompleteLivePhotoPairRemovalCount)개 그룹에서는 유일한 완전한 Live Photo 페어가 삭제 대상에 포함됩니다.",
                         systemImage: "livephoto.badge.exclamationmark"
                     )
                     .foregroundStyle(.orange)
@@ -320,7 +317,7 @@ private struct ReviewCleanupConfirmationSheet: View {
 
                 if report.removeAllItemCount > 0 {
                     Label(
-                        "\(report.removeAllItemCount)개 그룹은 남기는 사본 없이 그룹 전체를 정리합니다.",
+                        "\(report.removeAllItemCount)개 그룹은 남기는 사본 없이 그룹 전체를 삭제 대상으로 선택했습니다.",
                         systemImage: "exclamationmark.octagon.fill"
                     )
                     .foregroundStyle(.red)
@@ -382,9 +379,18 @@ private struct ReviewCleanupConfirmationSheet: View {
     private var applyButtonTitle: String {
         switch report.destinationKind {
         case .systemTrash:
-            return "다시 검증하고 휴지통으로 이동"
+            return "휴지통으로 이동"
         case .customQuarantine:
-            return "다시 검증하고 격리 폴더로 이동"
+            return "격리 폴더로 이동"
+        }
+    }
+
+    private var destinationActionTitle: String {
+        switch report.destinationKind {
+        case .systemTrash:
+            return "휴지통으로 이동"
+        case .customQuarantine:
+            return "격리 폴더로 이동"
         }
     }
 }
@@ -587,12 +593,9 @@ private struct ReviewDetailView: View {
     let cleanupCopyIDs: Set<String>
     let onToggleCleanupFromColumn: (DuplicateReviewPresentationCopy) -> Void
     let onToggleCleanupFromButton: (DuplicateReviewPresentationCopy) -> Void
-    let onKeepOnly: (DuplicateReviewPresentationCopy) -> Void
     let canToggleCleanup: (DuplicateReviewPresentationCopy) -> Bool
     let columnToggleHelp: (DuplicateReviewPresentationCopy) -> String
     let cleanupToggleHelp: (DuplicateReviewPresentationCopy) -> String
-    let canKeepOnly: (DuplicateReviewPresentationCopy) -> Bool
-    let keepOnlyHelp: (DuplicateReviewPresentationCopy) -> String
 
     var body: some View {
         GeometryReader { proxy in
@@ -636,12 +639,9 @@ private struct ReviewDetailView: View {
                         cleanupCopyIDs: cleanupCopyIDs,
                         onToggleCleanupFromColumn: onToggleCleanupFromColumn,
                         onToggleCleanupFromButton: onToggleCleanupFromButton,
-                        onKeepOnly: onKeepOnly,
                         canToggleCleanup: canToggleCleanup,
                         columnToggleHelp: columnToggleHelp,
-                        cleanupToggleHelp: cleanupToggleHelp,
-                        canKeepOnly: canKeepOnly,
-                        keepOnlyHelp: keepOnlyHelp
+                        cleanupToggleHelp: cleanupToggleHelp
                     )
                     .frame(width: gridWidth, alignment: .topLeading)
                 }
@@ -733,12 +733,9 @@ private struct ReviewComparisonTable: View {
     let cleanupCopyIDs: Set<String>
     let onToggleCleanupFromColumn: (DuplicateReviewPresentationCopy) -> Void
     let onToggleCleanupFromButton: (DuplicateReviewPresentationCopy) -> Void
-    let onKeepOnly: (DuplicateReviewPresentationCopy) -> Void
     let canToggleCleanup: (DuplicateReviewPresentationCopy) -> Bool
     let columnToggleHelp: (DuplicateReviewPresentationCopy) -> String
     let cleanupToggleHelp: (DuplicateReviewPresentationCopy) -> String
-    let canKeepOnly: (DuplicateReviewPresentationCopy) -> Bool
-    let keepOnlyHelp: (DuplicateReviewPresentationCopy) -> String
 
     @State private var hoveredCopyID: String?
 
@@ -761,12 +758,9 @@ private struct ReviewComparisonTable: View {
                         isMarkedForCleanup: cleanupCopyIDs.contains(copy.id),
                         onToggleCleanupFromColumn: { onToggleCleanupFromColumn(copy) },
                         onToggleCleanupFromButton: { onToggleCleanupFromButton(copy) },
-                        onKeepOnly: { onKeepOnly(copy) },
                         canToggleCleanup: canToggleCleanup(copy),
                         columnToggleHelp: columnToggleHelp(copy),
-                        cleanupToggleHelp: cleanupToggleHelp(copy),
-                        canKeepOnly: canKeepOnly(copy),
-                        keepOnlyHelp: keepOnlyHelp(copy)
+                        cleanupToggleHelp: cleanupToggleHelp(copy)
                     )
                     .onHover { hovering in
                         if hovering {
@@ -897,12 +891,9 @@ private struct CopyHeaderCell: View {
     let isMarkedForCleanup: Bool
     let onToggleCleanupFromColumn: () -> Void
     let onToggleCleanupFromButton: () -> Void
-    let onKeepOnly: () -> Void
     let canToggleCleanup: Bool
     let columnToggleHelp: String
     let cleanupToggleHelp: String
-    let canKeepOnly: Bool
-    let keepOnlyHelp: String
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -950,7 +941,7 @@ private struct CopyHeaderCell: View {
             .help(columnToggleHelp)
 
             actionRows
-                .frame(height: 46, alignment: .topLeading)
+                .frame(height: 28, alignment: .topLeading)
         }
         .padding(12)
         .frame(width: columnWidth, alignment: .topLeading)
@@ -960,7 +951,7 @@ private struct CopyHeaderCell: View {
     private var statusPrimaryRow: some View {
         HStack(spacing: 7) {
             if isMarkedForCleanup {
-                Label("정리", systemImage: "trash.circle.fill")
+                Label("삭제 예정", systemImage: "trash.circle.fill")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.red)
             } else {
@@ -1015,17 +1006,10 @@ private struct CopyHeaderCell: View {
     }
 
     private var actionRows: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack {
-                finderButton
-                Spacer()
-            }
-
-            HStack(spacing: 8) {
-                Spacer()
-                keepButton
-                cleanupButton
-            }
+        HStack(spacing: 8) {
+            finderButton
+            Spacer()
+            cleanupButton
         }
     }
 
@@ -1036,15 +1020,8 @@ private struct CopyHeaderCell: View {
         .buttonStyle(.borderless)
     }
 
-    private var keepButton: some View {
-        Button("이 사본 남기기", action: onKeepOnly)
-            .buttonStyle(.borderless)
-            .disabled(!canKeepOnly)
-            .help(keepOnlyHelp)
-    }
-
     private var cleanupButton: some View {
-        Button(isMarkedForCleanup ? "정리 취소" : "정리 대상으로 표시", action: onToggleCleanupFromButton)
+        Button(isMarkedForCleanup ? "삭제 선택 취소" : "삭제 대상으로 선택", action: onToggleCleanupFromButton)
             .buttonStyle(.bordered)
             .disabled(!canToggleCleanup)
             .help(cleanupToggleHelp)

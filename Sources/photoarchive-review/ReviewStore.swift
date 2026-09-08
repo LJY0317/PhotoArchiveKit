@@ -34,6 +34,7 @@ final class ReviewStore: ObservableObject {
     @Published private(set) var registeredRoots: [RegisteredRootReport] = []
     @Published var selectedRootIDs = Set<String>()
     @Published private(set) var cleanupCopyIDsByItem: [String: Set<String>] = [:]
+    @Published private(set) var cleanupDestinationSetting = DuplicateCleanupDestinationSetting.systemTrash
     @Published var removeAllConfirmation: RemoveAllCleanupConfirmation?
     @Published private(set) var explicitlyRemoveAllItemIDs = Set<String>()
 
@@ -67,6 +68,15 @@ final class ReviewStore: ObservableObject {
         cleanupCopyIDsByItem.values.reduce(0) { $0 + $1.count }
     }
 
+    var cleanupMoveActionTitle: String {
+        switch cleanupDestinationSetting.kind {
+        case .systemTrash:
+            return "휴지통으로 이동…"
+        case .customQuarantine:
+            return "격리 폴더로 이동…"
+        }
+    }
+
     var activeRegisteredRoots: [RegisteredRootReport] {
         registeredRoots
             .filter { $0.state == .active }
@@ -98,6 +108,8 @@ final class ReviewStore: ObservableObject {
         isLoading = true
         errorMessage = nil
         statusMessage = nil
+        cleanupDestinationSetting = (try? PhotoArchiveSettingsStore.load())?.duplicateCleanupDestination
+            ?? .systemTrash
         do {
             registeredRoots = try RootRegistry.list()
             let next = try DuplicateReviewPresentationBuilder.latest()
@@ -210,27 +222,19 @@ final class ReviewStore: ObservableObject {
         item.copies.count > 1 || isMarkedForCleanup(copy, item: item)
     }
 
-    func canKeepOnly(
-        _ copy: DuplicateReviewPresentationCopy,
-        item: DuplicateReviewPresentationItem
-    ) -> Bool {
-        let next = Set(item.copies.filter { $0.id != copy.id }.map(\.id))
-        return selectionIsSafe(next, for: item)
-    }
-
     func cleanupToggleHelp(
         _ copy: DuplicateReviewPresentationCopy,
         item: DuplicateReviewPresentationItem
     ) -> String {
         if isMarkedForCleanup(copy, item: item) {
-            return "클릭하면 이 사본의 정리 표시를 취소합니다."
+            return "클릭하면 이 사본의 삭제 선택을 취소합니다."
         }
         if item.kind == .livePhotoAsset,
            copy.isCompleteLivePhotoOccurrence,
            item.copies.filter(\.isCompleteLivePhotoOccurrence).count == 1 {
-            return "이 사본은 유일한 완전한 Live Photo 페어입니다. 클릭하면 still + paired video 전체를 정리 대상으로 표시합니다."
+            return "이 사본은 유일한 완전한 Live Photo 페어입니다. 클릭하면 still + paired video 전체를 삭제 대상으로 선택합니다."
         }
-        return "클릭하면 이 사본을 정리 대상으로 표시합니다. 마지막 남은 사본이라면 전체 정리 여부를 한 번 더 확인합니다."
+        return "클릭하면 이 사본을 삭제 대상으로 선택합니다. 마지막 남은 사본이라면 전체 삭제 선택 여부를 한 번 더 확인합니다."
     }
 
     func columnToggleHelp(
@@ -239,30 +243,17 @@ final class ReviewStore: ObservableObject {
     ) -> String {
         let current = cleanupCopyIDsByItem[item.id, default: []]
         if current.contains(copy.id) {
-            return "클릭하면 이 사본의 정리 표시를 취소합니다."
+            return "클릭하면 이 사본의 삭제 선택을 취소합니다."
         }
         let wouldSelectAll = !item.copies.isEmpty
             && current.union([copy.id]).count == item.copies.count
         if wouldSelectAll, item.copies.count == 2 {
-            return "클릭하면 정리 대상을 이 사본으로 바꾸고 반대쪽 사본은 남깁니다."
+            return "클릭하면 삭제 대상을 이 사본으로 바꾸고 반대쪽 사본은 남깁니다."
         }
         if wouldSelectAll {
-            return "모든 사본을 정리하려면 미리보기의 ‘정리 대상으로 표시’ 버튼을 사용하세요."
+            return "모든 사본을 삭제 대상으로 선택하려면 미리보기의 ‘삭제 대상으로 선택’ 버튼을 사용하세요."
         }
-        return "클릭하면 이 사본을 정리 대상으로 표시합니다."
-    }
-
-    func keepOnlyHelp(
-        _ copy: DuplicateReviewPresentationCopy,
-        item: DuplicateReviewPresentationItem
-    ) -> String {
-        if canKeepOnly(copy, item: item) {
-            if item.kind == .livePhotoAsset && !copy.isCompleteLivePhotoOccurrence {
-                return "이 occurrence만 남기면 완전한 still + paired video 페어가 남지 않을 수 있습니다. 선택은 허용되며 실제 정리는 별도 검증 단계입니다."
-            }
-            return "이 열의 사본을 남기고 나머지 사본을 정리 대상으로 표시합니다. 아직 파일은 이동하지 않습니다."
-        }
-        return "현재 보존 안전 조건 때문에 이 사본만 남길 수 없습니다."
+        return "클릭하면 이 사본을 삭제 대상으로 선택합니다."
     }
 
     func toggleCleanupFromColumn(
@@ -278,15 +269,15 @@ final class ReviewStore: ObservableObject {
         )
 
         guard next != current else {
-            statusMessage = "모든 사본을 정리하려면 미리보기의 ‘정리 대상으로 표시’ 버튼을 사용하세요."
+            statusMessage = "모든 사본을 삭제 대상으로 선택하려면 미리보기의 ‘삭제 대상으로 선택’ 버튼을 사용하세요."
             return
         }
 
         cleanupCopyIDsByItem[item.id] = next
         explicitlyRemoveAllItemIDs.remove(item.id)
         statusMessage = next.contains(copy.id)
-            ? "정리 대상으로 표시했습니다. 아직 파일은 이동하지 않았습니다."
-            : "정리 표시를 취소했습니다."
+            ? "삭제 대상으로 선택했습니다. 아직 파일은 이동하지 않았습니다."
+            : "삭제 선택을 취소했습니다."
     }
 
     func toggleCleanupFromButton(
@@ -309,11 +300,11 @@ final class ReviewStore: ObservableObject {
                item.kind == .livePhotoAsset,
                copy.isCompleteLivePhotoOccurrence,
                item.copies.filter(\.isCompleteLivePhotoOccurrence).count == 1 {
-                statusMessage = "정리 대상으로 표시했습니다 · 이 사본은 유일한 완전한 Live Photo 페어입니다 · 아직 파일은 이동하지 않았습니다."
+                statusMessage = "삭제 대상으로 선택했습니다 · 이 사본은 유일한 완전한 Live Photo 페어입니다 · 아직 파일은 이동하지 않았습니다."
             } else {
                 statusMessage = next.contains(copy.id)
-                    ? "정리 대상으로 표시했습니다. 아직 파일은 이동하지 않았습니다."
-                    : "정리 표시를 취소했습니다."
+                    ? "삭제 대상으로 선택했습니다. 아직 파일은 이동하지 않았습니다."
+                    : "삭제 선택을 취소했습니다."
             }
 
         case .requiresRemoveAllConfirmation:
@@ -321,13 +312,13 @@ final class ReviewStore: ObservableObject {
                 && item.copies.filter(\.isCompleteLivePhotoOccurrence).count == 1
                 && item.copies.first(where: \.isCompleteLivePhotoOccurrence).map { current.contains($0.id) || $0.id == copy.id } == true
             let livePhotoWarning = removesOnlyCompletePair
-                ? " 현재 유일한 완전한 Live Photo 페어도 정리 대상에 포함됩니다."
+                ? " 현재 유일한 완전한 Live Photo 페어도 삭제 대상에 포함됩니다."
                 : ""
             removeAllConfirmation = RemoveAllCleanupConfirmation(
                 itemID: item.id,
-                message: "이 그룹의 \(item.copies.count)개 사본을 모두 정리 대상으로 표시합니다. 이 단계에서는 파일이 이동되지 않습니다.\(livePhotoWarning)"
+                message: "이 그룹의 \(item.copies.count)개 사본을 모두 삭제 대상으로 선택합니다. 이 단계에서는 파일이 이동되지 않습니다.\(livePhotoWarning)"
             )
-            statusMessage = "마지막 남은 사본입니다 · 전체 정리는 확인이 필요합니다."
+            statusMessage = "마지막 남은 사본입니다 · 전체 삭제 선택은 확인이 필요합니다."
         }
     }
 
@@ -339,26 +330,12 @@ final class ReviewStore: ObservableObject {
         cleanupCopyIDsByItem[item.id] = Set(item.copies.map(\.id))
         explicitlyRemoveAllItemIDs.insert(item.id)
         removeAllConfirmation = nil
-        statusMessage = "이 그룹의 모든 사본을 정리 대상으로 표시했습니다 · 파일은 아직 이동하지 않았습니다."
+        statusMessage = "이 그룹의 모든 사본을 삭제 대상으로 선택했습니다 · 파일은 아직 이동하지 않았습니다."
     }
 
     func cancelRemoveAll() {
         removeAllConfirmation = nil
-        statusMessage = "전체 정리 선택을 취소했습니다."
-    }
-
-    func keepOnly(
-        _ copy: DuplicateReviewPresentationCopy,
-        item: DuplicateReviewPresentationItem
-    ) {
-        statusMessage = nil
-        let next = Set(item.copies.filter { $0.id != copy.id }.map(\.id))
-        guard selectionIsSafe(next, for: item) else { return }
-        cleanupCopyIDsByItem[item.id] = next
-        explicitlyRemoveAllItemIDs.remove(item.id)
-        statusMessage = item.kind == .livePhotoAsset && !copy.isCompleteLivePhotoOccurrence
-            ? "이 occurrence만 남기도록 선택했습니다 · 완전한 Live Photo 페어는 남지 않습니다 · 아직 파일은 이동하지 않았습니다."
-            : "이 사본을 남기고 나머지 사본을 정리 대상으로 표시했습니다."
+        statusMessage = "전체 삭제 선택을 취소했습니다."
     }
 
     func prepareSelectedCleanup() async {
@@ -366,13 +343,13 @@ final class ReviewStore: ObservableObject {
         guard let presentation else { return }
         let decisions = selectedCleanupDecisions(in: presentation)
         guard !decisions.isEmpty else {
-            statusMessage = "먼저 정리할 사본을 하나 이상 선택하세요."
+            statusMessage = "먼저 삭제할 사본을 하나 이상 선택하세요."
             return
         }
 
         isPreparingCleanup = true
         cleanupErrorMessage = nil
-        statusMessage = "현재 파일과 정리 선택을 다시 검증하는 중입니다…"
+        statusMessage = "현재 파일과 삭제 선택을 다시 검증하는 중입니다…"
 
         do {
             let scanner = try ArchiveScanner()
@@ -383,6 +360,7 @@ final class ReviewStore: ObservableObject {
             }
             let plan = ReconciliationPlanner.makePlan(from: report)
             let settings = try PhotoArchiveSettingsStore.load()
+            cleanupDestinationSetting = settings.duplicateCleanupDestination
             let destination = try PhotoArchiveSettingsStore.resolvedDestination(
                 settings.duplicateCleanupDestination
             )
@@ -407,10 +385,10 @@ final class ReviewStore: ObservableObject {
                 preflight: preflight,
                 selectedCopyCount: selectedCleanupCopyCount
             )
-            statusMessage = "정리 전 검증 완료 · 실제 이동 전 최종 확인이 필요합니다."
+            statusMessage = "이동 전 검증 완료 · 실제 이동 전 최종 확인이 필요합니다."
         } catch {
             cleanupErrorMessage = error.localizedDescription
-            statusMessage = "정리 전 검증에 실패했습니다: \(error.localizedDescription)"
+            statusMessage = "이동 전 검증에 실패했습니다: \(error.localizedDescription)"
         }
         isPreparingCleanup = false
     }
@@ -419,7 +397,7 @@ final class ReviewStore: ObservableObject {
         guard !isApplyingCleanup else { return }
         preparedCleanup = nil
         cleanupErrorMessage = nil
-        statusMessage = "정리 전 확인을 취소했습니다."
+        statusMessage = "이동을 취소했습니다."
     }
 
     func applyPreparedCleanup() async {
@@ -459,7 +437,7 @@ final class ReviewStore: ObservableObject {
                 : movedSummary
         } catch {
             cleanupErrorMessage = error.localizedDescription
-            statusMessage = "정리를 적용하지 못했습니다: \(error.localizedDescription)"
+            statusMessage = "이동을 적용하지 못했습니다: \(error.localizedDescription)"
             isApplyingCleanup = false
         }
     }
@@ -485,14 +463,6 @@ final class ReviewStore: ObservableObject {
                 cleanupResourceIDs: cleanupResources
             )
         }
-    }
-
-    private func selectionIsSafe(
-        _ cleanupIDs: Set<String>,
-        for item: DuplicateReviewPresentationItem
-    ) -> Bool {
-        let remaining = item.copies.filter { !cleanupIDs.contains($0.id) }
-        return !remaining.isEmpty
     }
 
     func selectPrevious() {
