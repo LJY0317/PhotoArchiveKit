@@ -495,9 +495,9 @@ private struct ReviewSummaryHeader: View {
     var body: some View {
         HStack(alignment: .firstTextBaseline) {
             VStack(alignment: .leading, spacing: 2) {
-                Text("Duplicate Review")
+                Text("중복 사진 검토")
                     .font(.headline)
-                Text("\(presentation.items.count)개 그룹 · \(presentation.candidateResourceCount)개 candidate resource")
+                Text("중복 항목 \(presentation.items.count)개")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 if !presentation.scopeRootLabels.isEmpty {
@@ -663,12 +663,6 @@ private struct ReviewDetailView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
             Spacer()
-            Text(
-                "item \(item.id) · \(item.reason.rawValue)"
-            )
-            .font(.caption2.monospaced())
-            .foregroundStyle(.tertiary)
-            .textSelection(.enabled)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -691,7 +685,7 @@ private struct ReviewDetailView: View {
         }
         switch exactBadgeTitle {
         case "EXACT PAIR":
-            return "각 Live Photo occurrence의 still과 paired video가 역할별 exact copy입니다. Live Photo completeness는 별도 Still + Paired Video 표시로 확인합니다."
+            return "각 Live Photo occurrence의 still과 paired video가 역할별 exact copy입니다. 완전한 Live Photo 여부는 별도 Live Photo 표시로 확인합니다."
         case "EXACT STILL":
             return "still image resource가 byte 단위로 동일합니다. Live Photo occurrence 전체가 동일하거나 완전하다는 뜻은 아닙니다."
         case "EXACT VIDEO":
@@ -932,25 +926,18 @@ private struct CopyHeaderCell: View {
                 Label("삭제 예정", systemImage: "trash.circle.fill")
                     .font(.caption.weight(.semibold))
                     .foregroundStyle(.red)
-            } else {
-                Label("남김", systemImage: "circle")
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
             }
 
             if copy.isKeeper {
-                Label("추천 keeper", systemImage: "checkmark.seal.fill")
+                Label("남기기 추천", systemImage: "checkmark.seal.fill")
                     .font(.caption2.weight(.medium))
                     .foregroundStyle(.green)
-            } else {
-                Text("추천 candidate")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                    .help("PhotoArchiveKit이 남기기를 추천하는 사본")
             }
 
             Spacer(minLength: 4)
 
-            Text("\(copy.resources.count) resource")
+            Text("\(copy.resources.count)개 파일")
                 .font(.caption2.monospacedDigit())
                 .foregroundStyle(.tertiary)
         }
@@ -1008,22 +995,10 @@ private struct CopyHeaderCell: View {
     @ViewBuilder
     private var livePhotoIntegrityBadge: some View {
         if copy.isCompleteLivePhotoOccurrence {
-            Label("Still + Paired Video", systemImage: "livephoto")
+            Label("Live Photo", systemImage: "livephoto")
                 .font(.caption2.weight(.semibold))
                 .foregroundStyle(.green)
-                .help("온전한 Live Photo occurrence")
-        } else if copy.hasLivePhotoStill {
-            Label("Still only", systemImage: "exclamationmark.triangle.fill")
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(.orange)
-                .help("paired video가 없는 occurrence")
-        } else if copy.hasPairedVideo {
-            Label("Paired video only", systemImage: "exclamationmark.triangle.fill")
-                .font(.caption2.weight(.semibold))
-                .foregroundStyle(.orange)
-        } else {
-            Image(systemName: "livephoto")
-                .foregroundStyle(.secondary)
+                .help("사진과 비디오가 함께 있는 완전한 Live Photo")
         }
     }
 }
