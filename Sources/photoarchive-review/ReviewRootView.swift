@@ -1108,6 +1108,7 @@ private struct CopyHeaderCell: View {
 private struct ComparisonRowSpec: Identifiable {
     let id: String
     let label: String
+    let sectionTitle: String?
     let values: [ComparisonCellValue]
     let monospaced: Bool
 
@@ -1138,6 +1139,12 @@ private struct ComparisonMetadataLabel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
+            if let sectionTitle = row.sectionTitle {
+                Text(sectionTitle)
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.primary)
+                    .padding(.bottom, 4)
+            }
             Text(row.label)
                 .font(.caption.weight(.medium))
                 .foregroundStyle(.secondary)
@@ -1165,6 +1172,9 @@ private struct ComparisonMetadataCell: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
+            if row.sectionTitle != nil {
+                Color.clear.frame(height: 20)
+            }
             Text(value.text)
                 .font(row.monospaced ? .caption.monospaced() : .caption)
                 .fixedSize(horizontal: false, vertical: true)
@@ -1237,6 +1247,63 @@ private func comparisonRows(
         comparisonRow("role", "Resource 역할", copies: copies) {
             componentLines($0) { resourceRoleLabel($0.role) }
         },
+        comparisonRow("capture-primary", "대표 촬영 시각", copies: copies, sectionTitle: "원본 촬영 시각 · 가장 중요한 메타데이터", date: { $0.primaryResource?.captureTime?.instant }) {
+            componentLines($0) { capturePrimaryLabel($0.captureTime) }
+        },
+        comparisonRow("capture-evidence-agreement", "원본 timestamp 교차검증", copies: copies) {
+            componentLines($0) { imageCaptureDateAgreementLabel($0.imageCaptureDateEvidence) }
+        },
+        comparisonRow("exif-original", "EXIF DateTimeOriginal", copies: copies, monospaced: true) {
+            componentLines($0) { $0.imageCaptureDateEvidence?.exifDateTimeOriginal ?? "—" }
+        },
+        comparisonRow("exif-offset-original", "EXIF OffsetTimeOriginal", copies: copies, monospaced: true) {
+            componentLines($0) { $0.imageCaptureDateEvidence?.exifOffsetTimeOriginal ?? "—" }
+        },
+        comparisonRow("exif-subsec-original", "EXIF SubSecTimeOriginal", copies: copies, monospaced: true) {
+            componentLines($0) { $0.imageCaptureDateEvidence?.exifSubsecTimeOriginal ?? "—" }
+        },
+        comparisonRow("exif-digitized", "EXIF DateTimeDigitized", copies: copies, monospaced: true) {
+            componentLines($0) { $0.imageCaptureDateEvidence?.exifDateTimeDigitized ?? "—" }
+        },
+        comparisonRow("exif-offset-digitized", "EXIF OffsetTimeDigitized", copies: copies, monospaced: true) {
+            componentLines($0) { $0.imageCaptureDateEvidence?.exifOffsetTimeDigitized ?? "—" }
+        },
+        comparisonRow("exif-subsec-digitized", "EXIF SubSecTimeDigitized", copies: copies, monospaced: true) {
+            componentLines($0) { $0.imageCaptureDateEvidence?.exifSubsecTimeDigitized ?? "—" }
+        },
+        comparisonRow("tiff-datetime", "TIFF DateTime", copies: copies, monospaced: true) {
+            componentLines($0) { $0.imageCaptureDateEvidence?.tiffDateTime ?? "—" }
+        },
+        comparisonRow("quicktime-creation", "QuickTime creation date", copies: copies, monospaced: true) {
+            componentLines($0) { quickTimeCaptureEvidenceLabel($0.captureTime) }
+        },
+        comparisonRow("capture-instant", "촬영 시각 (절대시각)", copies: copies, date: { $0.primaryResource?.captureTime?.instant }) {
+            componentLines($0) { formatDate($0.captureTime?.instant) }
+        },
+        comparisonRow("capture-source", "대표 촬영 시각 source", copies: copies) {
+            componentLines($0) { $0.captureTime.map { captureSourceLabel($0.source) } ?? "—" }
+        },
+        comparisonRow("capture-confidence", "대표 촬영 시각 신뢰도", copies: copies) {
+            componentLines($0) { $0.captureTime.map { captureConfidenceLabel($0.confidence) } ?? "—" }
+        },
+        comparisonRow("date-added", "Finder Date Added", copies: copies, sectionTitle: "파일 · 유입 · 관측 시각", date: { $0.primaryResource?.addedAt }) {
+            componentLines($0) { formatDate($0.addedAt) }
+        },
+        comparisonRow("creation-date", "파일시스템 생성 시각", copies: copies, date: { $0.primaryResource?.fileSystemFacts.creationDate }) {
+            componentLines($0) { formatDate($0.fileSystemFacts.creationDate) }
+        },
+        comparisonRow("filesystem-modified", "파일시스템 수정 시각", copies: copies, date: { $0.primaryResource?.fileSystemFacts.modificationDate }) {
+            componentLines($0) { formatDate($0.fileSystemFacts.modificationDate) }
+        },
+        comparisonRow("catalog-modified", "Catalog에 기록된 파일 수정 시각", copies: copies, date: { $0.primaryResource?.details?.catalogModifiedAt }) {
+            componentLines($0) { formatDate($0.details?.catalogModifiedAt) }
+        },
+        comparisonRow("first-seen", "PhotoArchiveKit 최초 관측", copies: copies, date: { $0.primaryResource?.details?.firstSeenAt }) {
+            componentLines($0) { formatDate($0.details?.firstSeenAt) }
+        },
+        comparisonRow("last-seen", "PhotoArchiveKit 최근 관측", copies: copies, date: { $0.primaryResource?.details?.lastSeenAt }) {
+            componentLines($0) { formatDate($0.details?.lastSeenAt) }
+        },
         comparisonRow("root-label", "위치", copies: copies) {
             componentLines($0) { $0.rootLabel }
         },
@@ -1246,7 +1313,7 @@ private func comparisonRows(
         comparisonRow("absolute-path", "전체 경로", copies: copies) {
             componentLines($0) { $0.absolutePath }
         },
-        comparisonRow("catalog-total-bytes", "Catalog 총 bytes", copies: copies, monospaced: true) {
+        comparisonRow("catalog-total-bytes", "Catalog 총 bytes", copies: copies, sectionTitle: "크기", monospaced: true) {
             formatBytes($0.totalByteSize)
         },
         comparisonRow("catalog-resource-bytes", "Catalog resource bytes", copies: copies, monospaced: true) {
@@ -1266,36 +1333,6 @@ private func comparisonRows(
             componentLines($0) { resource in
                 resource.fileSystemFacts.totalAllocatedByteSize.map(formatBytes) ?? "—"
             }
-        },
-        comparisonRow("capture-primary", "촬영 시각 (원본 메타데이터)", copies: copies, date: { $0.primaryResource?.captureTime?.instant }) {
-            componentLines($0) { capturePrimaryLabel($0.captureTime) }
-        },
-        comparisonRow("date-added", "Finder Date Added", copies: copies, date: { $0.primaryResource?.addedAt }) {
-            componentLines($0) { formatDate($0.addedAt) }
-        },
-        comparisonRow("creation-date", "파일시스템 생성 시각", copies: copies, date: { $0.primaryResource?.fileSystemFacts.creationDate }) {
-            componentLines($0) { formatDate($0.fileSystemFacts.creationDate) }
-        },
-        comparisonRow("catalog-modified", "Catalog 수정 시각", copies: copies, date: { $0.primaryResource?.details?.catalogModifiedAt }) {
-            componentLines($0) { formatDate($0.details?.catalogModifiedAt) }
-        },
-        comparisonRow("filesystem-modified", "파일시스템 수정 시각", copies: copies, date: { $0.primaryResource?.fileSystemFacts.modificationDate }) {
-            componentLines($0) { formatDate($0.fileSystemFacts.modificationDate) }
-        },
-        comparisonRow("capture-local", "촬영 메타데이터 local timestamp", copies: copies) {
-            componentLines($0) { $0.captureTime?.localTimestamp ?? "—" }
-        },
-        comparisonRow("capture-instant", "촬영 시각 (절대시각)", copies: copies, date: { $0.primaryResource?.captureTime?.instant }) {
-            componentLines($0) { formatDate($0.captureTime?.instant) }
-        },
-        comparisonRow("capture-offset", "UTC offset", copies: copies) {
-            componentLines($0) { $0.captureTime?.utcOffset ?? "—" }
-        },
-        comparisonRow("capture-source", "촬영 시각 source", copies: copies) {
-            componentLines($0) { $0.captureTime.map { captureSourceLabel($0.source) } ?? "—" }
-        },
-        comparisonRow("capture-confidence", "촬영 시각 신뢰도", copies: copies) {
-            componentLines($0) { $0.captureTime.map { captureConfidenceLabel($0.confidence) } ?? "—" }
         },
         comparisonRow("freshness", "현재 lightweight 상태", copies: copies) {
             componentLines($0) { resourceFreshnessLabel($0) }
@@ -1392,12 +1429,6 @@ private func comparisonRows(
         comparisonRow("location-count", "Location history count", copies: copies, monospaced: true) {
             componentLines($0) { $0.details.map { String($0.locationHistoryCount) } ?? "—" }
         },
-        comparisonRow("first-seen", "최초 관측", copies: copies, date: { $0.primaryResource?.details?.firstSeenAt }) {
-            componentLines($0) { formatDate($0.details?.firstSeenAt) }
-        },
-        comparisonRow("last-seen", "최근 관측", copies: copies, date: { $0.primaryResource?.details?.lastSeenAt }) {
-            componentLines($0) { formatDate($0.details?.lastSeenAt) }
-        },
         comparisonRow("last-session", "최근 scan session", copies: copies, monospaced: true) {
             componentLines($0) { $0.details?.lastSeenSessionID ?? "—" }
         },
@@ -1411,6 +1442,7 @@ private func comparisonRow(
     _ id: String,
     _ label: String,
     copies: [DuplicateReviewPresentationCopy],
+    sectionTitle: String? = nil,
     monospaced: Bool = false,
     date: ((DuplicateReviewPresentationCopy) -> Date?)? = nil,
     value: (DuplicateReviewPresentationCopy) -> String
@@ -1418,6 +1450,7 @@ private func comparisonRow(
     ComparisonRowSpec(
         id: id,
         label: label,
+        sectionTitle: sectionTitle,
         values: copies.map { copy in
             let text = value(copy)
             return ComparisonCellValue(
@@ -1517,6 +1550,33 @@ private func resourceFreshnessLabel(_ resource: DuplicateReviewPresentationResou
         return "STALE · filesystem ID 변경"
     }
     return "CURRENT · size/mtime/filesystem ID 일치"
+}
+
+private func imageCaptureDateAgreementLabel(
+    _ evidence: DuplicateReviewImageCaptureDateEvidence?
+) -> String {
+    guard let evidence else { return "—" }
+    let namedValues: [(String, String)] = [
+        ("DateTimeOriginal", evidence.exifDateTimeOriginal ?? ""),
+        ("DateTimeDigitized", evidence.exifDateTimeDigitized ?? ""),
+        ("TIFF DateTime", evidence.tiffDateTime ?? "")
+    ].filter { !$0.1.isEmpty }
+    guard namedValues.count >= 2 else {
+        return "근거 부족 · 원본 timestamp가 1개만 확인됨"
+    }
+    if Set(namedValues.map(\.1)).count == 1 {
+        return "초 단위 일치 · \(namedValues.map(\.0).joined(separator: " = "))"
+    }
+    return "불일치 · " + namedValues.map { "\($0.0)=\($0.1)" }.joined(separator: " · ")
+}
+
+private func quickTimeCaptureEvidenceLabel(_ captureTime: CaptureTime?) -> String {
+    guard let captureTime, captureTime.source == .quickTimeCreationDate else { return "—" }
+    let timestamp = captureTime.localTimestamp
+        ?? captureTime.instant.map(formatDate)
+        ?? "—"
+    let offset = captureTime.utcOffset.map { " · \($0)" } ?? ""
+    return "\(timestamp)\(offset)"
 }
 
 private func xattrSummary(_ attributes: [DuplicateReviewExtendedAttribute]) -> String {

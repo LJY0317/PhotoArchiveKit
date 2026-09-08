@@ -1,6 +1,7 @@
 import Darwin
 import CryptoKit
 import Foundation
+import ImageIO
 
 public enum DuplicateReviewPresentationError: LocalizedError {
     case noReusableSnapshot
@@ -72,6 +73,34 @@ public struct DuplicateReviewFileSystemFacts: Sendable, Equatable {
     public let extendedAttributes: [DuplicateReviewExtendedAttribute]
 }
 
+public struct DuplicateReviewImageCaptureDateEvidence: Sendable, Equatable {
+    public let exifDateTimeOriginal: String?
+    public let exifDateTimeDigitized: String?
+    public let exifOffsetTimeOriginal: String?
+    public let exifOffsetTimeDigitized: String?
+    public let exifSubsecTimeOriginal: String?
+    public let exifSubsecTimeDigitized: String?
+    public let tiffDateTime: String?
+
+    public init(
+        exifDateTimeOriginal: String?,
+        exifDateTimeDigitized: String?,
+        exifOffsetTimeOriginal: String?,
+        exifOffsetTimeDigitized: String?,
+        exifSubsecTimeOriginal: String?,
+        exifSubsecTimeDigitized: String?,
+        tiffDateTime: String?
+    ) {
+        self.exifDateTimeOriginal = exifDateTimeOriginal
+        self.exifDateTimeDigitized = exifDateTimeDigitized
+        self.exifOffsetTimeOriginal = exifOffsetTimeOriginal
+        self.exifOffsetTimeDigitized = exifOffsetTimeDigitized
+        self.exifSubsecTimeOriginal = exifSubsecTimeOriginal
+        self.exifSubsecTimeDigitized = exifSubsecTimeDigitized
+        self.tiffDateTime = tiffDateTime
+    }
+}
+
 public struct DuplicateReviewPresentationResource: Identifiable, Sendable, Equatable {
     public let id: String
     public let assetID: String?
@@ -92,6 +121,7 @@ public struct DuplicateReviewPresentationResource: Identifiable, Sendable, Equat
     public let captureTime: CaptureTime?
     public let details: DuplicateReviewResourceDetails?
     public let fileSystemFacts: DuplicateReviewFileSystemFacts
+    public let imageCaptureDateEvidence: DuplicateReviewImageCaptureDateEvidence?
 
     public var fileURL: URL { URL(fileURLWithPath: absolutePath) }
 }
@@ -301,8 +331,40 @@ public enum DuplicateReviewPresentationBuilder {
             addedAt: scanned?.addedAt,
             captureTime: scanned?.captureTime,
             details: scanned.flatMap { detailsByResourceID[$0.resourceID] },
-            fileSystemFacts: fileSystemFacts(at: url, fileManager: fileManager)
+            fileSystemFacts: fileSystemFacts(at: url, fileManager: fileManager),
+            imageCaptureDateEvidence: imageCaptureDateEvidence(at: url)
         )
+    }
+
+    private static func imageCaptureDateEvidence(
+        at url: URL
+    ) -> DuplicateReviewImageCaptureDateEvidence? {
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, nil),
+              let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as NSDictionary?
+        else {
+            return nil
+        }
+
+        let exif = properties[kCGImagePropertyExifDictionary] as? NSDictionary
+        let tiff = properties[kCGImagePropertyTIFFDictionary] as? NSDictionary
+        let evidence = DuplicateReviewImageCaptureDateEvidence(
+            exifDateTimeOriginal: exif?[kCGImagePropertyExifDateTimeOriginal] as? String,
+            exifDateTimeDigitized: exif?[kCGImagePropertyExifDateTimeDigitized] as? String,
+            exifOffsetTimeOriginal: exif?[kCGImagePropertyExifOffsetTimeOriginal] as? String,
+            exifOffsetTimeDigitized: exif?[kCGImagePropertyExifOffsetTimeDigitized] as? String,
+            exifSubsecTimeOriginal: exif?[kCGImagePropertyExifSubsecTimeOriginal] as? String,
+            exifSubsecTimeDigitized: exif?[kCGImagePropertyExifSubsecTimeDigitized] as? String,
+            tiffDateTime: tiff?[kCGImagePropertyTIFFDateTime] as? String
+        )
+        guard evidence.exifDateTimeOriginal != nil
+                || evidence.exifDateTimeDigitized != nil
+                || evidence.tiffDateTime != nil
+                || evidence.exifOffsetTimeOriginal != nil
+                || evidence.exifOffsetTimeDigitized != nil
+        else {
+            return nil
+        }
+        return evidence
     }
 
     private static func presentationCopies(
