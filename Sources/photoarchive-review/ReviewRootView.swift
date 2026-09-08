@@ -217,17 +217,12 @@ private struct ReviewActionBar: View {
                 Text("비교 스캔 중")
                     .font(.caption.weight(.medium))
                     .foregroundStyle(.secondary)
-                Divider().frame(height: 16)
             }
 
-            Label(
-                "삭제 선택 \(store.selectedCleanupItemCount)개 그룹 · \(store.selectedCleanupCopyCount)개 사본",
-                systemImage: "trash"
-            )
-            .foregroundStyle(store.selectedCleanupItemCount > 0 ? .primary : .secondary)
-
             if let status = store.statusMessage {
-                Divider().frame(height: 16)
+                if store.isScanning {
+                    Divider().frame(height: 16)
+                }
                 Text(status)
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -278,30 +273,19 @@ private struct ReviewCleanupConfirmationSheet: View {
             VStack(alignment: .leading, spacing: 6) {
                 Text(destinationActionTitle)
                     .font(.title2.weight(.semibold))
-                Text("현재 빨간색으로 선택한 삭제 대상만 적용합니다. 실제 이동 직전에 같은 안전 검증을 다시 수행합니다.")
+                Text(summaryTitle)
                     .foregroundStyle(.secondary)
+                if report.destinationKind == .customQuarantine {
+                    Text(destinationTitle)
+                        .font(.caption)
+                        .foregroundStyle(.tertiary)
+                }
             }
-
-            Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 12) {
-                summaryRow("그룹", "\(report.itemCount)개")
-                summaryRow("사본", "\(prepared.selectedCopyCount)개")
-                summaryRow("파일", "\(report.resourceCount)개")
-                summaryRow("용량", ByteCountFormatter.string(fromByteCount: report.totalBytes, countStyle: .file))
-                summaryRow("목적지", destinationTitle)
-            }
-            .padding(14)
-            .background(.background.secondary, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
 
             VStack(alignment: .leading, spacing: 9) {
-                Label(
-                    "선택된 파일의 현재 경로·크기·파일 identity와 가능한 catalog SHA-256을 다시 확인합니다.",
-                    systemImage: "checkmark.shield.fill"
-                )
-                .foregroundStyle(.secondary)
-
                 if report.nonRedundantResourceCount > 0 {
                     Label(
-                        "\(report.nonRedundantResourceCount)개 resource는 남아 있는 exact counterpart가 없습니다. 사용자가 명시적으로 선택한 staging/primary-library 항목으로서 reversible destination으로 이동합니다.",
+                        "\(report.nonRedundantResourceCount)개 파일은 동일한 사본이 남지 않습니다.",
                         systemImage: "exclamationmark.triangle.fill"
                     )
                     .foregroundStyle(.orange)
@@ -309,7 +293,7 @@ private struct ReviewCleanupConfirmationSheet: View {
 
                 if report.onlyCompleteLivePhotoPairRemovalCount > 0 {
                     Label(
-                        "\(report.onlyCompleteLivePhotoPairRemovalCount)개 그룹에서는 유일한 완전한 Live Photo 페어가 삭제 대상에 포함됩니다.",
+                        "\(report.onlyCompleteLivePhotoPairRemovalCount)개 그룹에서는 완전한 Live Photo가 남지 않습니다.",
                         systemImage: "livephoto.badge.exclamationmark"
                     )
                     .foregroundStyle(.orange)
@@ -317,7 +301,7 @@ private struct ReviewCleanupConfirmationSheet: View {
 
                 if report.removeAllItemCount > 0 {
                     Label(
-                        "\(report.removeAllItemCount)개 그룹은 남기는 사본 없이 그룹 전체를 삭제 대상으로 선택했습니다.",
+                        "\(report.removeAllItemCount)개 그룹의 모든 사본이 선택되어 있습니다.",
                         systemImage: "exclamationmark.octagon.fill"
                     )
                     .foregroundStyle(.red)
@@ -336,7 +320,7 @@ private struct ReviewCleanupConfirmationSheet: View {
                 if isApplying {
                     ProgressView()
                         .controlSize(.small)
-                    Text("다시 검증하고 이동하는 중…")
+                    Text("이동하는 중…")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
@@ -355,15 +339,9 @@ private struct ReviewCleanupConfirmationSheet: View {
         .frame(width: 620)
     }
 
-    @ViewBuilder
-    private func summaryRow(_ label: String, _ value: String) -> some View {
-        GridRow {
-            Text(label)
-                .foregroundStyle(.secondary)
-            Text(value)
-                .fontWeight(.medium)
-                .textSelection(.enabled)
-        }
+    private var summaryTitle: String {
+        let size = ByteCountFormatter.string(fromByteCount: report.totalBytes, countStyle: .file)
+        return "\(prepared.selectedCopyCount)개 사본 · \(report.resourceCount)개 파일 · \(size)"
     }
 
     private var destinationTitle: String {
@@ -1198,21 +1176,29 @@ private extension View {
 private func comparisonRows(
     for copies: [DuplicateReviewPresentationCopy]
 ) -> [ComparisonRowSpec] {
-    [
+    let usesLivePhotoSlots = copies.contains { $0.hasLivePhotoStill || $0.hasPairedVideo }
+    func componentText(
+        _ copy: DuplicateReviewPresentationCopy,
+        value: (DuplicateReviewPresentationResource) -> String
+    ) -> String {
+        componentLines(copy, forceLivePhotoSlots: usesLivePhotoSlots, value: value)
+    }
+
+    return [
         comparisonRow("file-name", "파일명", copies: copies) {
-            componentLines($0) { $0.fileName }
+            componentText($0) { $0.fileName }
         },
         comparisonRow("original-name", "최초 파일명", copies: copies) {
-            componentLines($0) { $0.details?.originalFileName ?? "—" }
+            componentText($0) { $0.details?.originalFileName ?? "—" }
         },
         comparisonRow("extension", "확장자", copies: copies) {
-            componentLines($0) { $0.fileExtension.isEmpty ? "—" : $0.fileExtension }
+            componentText($0) { $0.fileExtension.isEmpty ? "—" : $0.fileExtension }
         },
         comparisonRow("media-kind", "미디어 종류", copies: copies) {
-            componentLines($0) { mediaKindLabel($0.mediaKind) }
+            componentText($0) { mediaKindLabel($0.mediaKind) }
         },
         comparisonRow("role", "Resource 역할", copies: copies) {
-            componentLines($0) { resourceRoleLabel($0.role) }
+            componentText($0) { resourceRoleLabel($0.role) }
         },
         livePhotoTimeComparisonRow("capture-primary", "대표 촬영 시각", copies: copies, sectionTitle: "원본 촬영 시각 · 가장 중요한 메타데이터", date: { $0.primaryResource?.captureTime?.instant }) {
             capturePrimaryLabel($0.captureTime)
@@ -1275,135 +1261,137 @@ private func comparisonRows(
             formatDate($0.details?.lastSeenAt)
         },
         comparisonRow("root-label", "위치", copies: copies) {
-            componentLines($0) { $0.rootLabel }
+            componentText($0) { $0.rootLabel }
         },
         comparisonRow("relative-path", "상대 경로", copies: copies) {
-            componentLines($0) { $0.relativePath }
+            componentText($0) { $0.relativePath }
         },
         comparisonRow("absolute-path", "전체 경로", copies: copies) {
-            componentLines($0) { $0.absolutePath }
+            componentText($0) { $0.absolutePath }
         },
         comparisonRow("catalog-total-bytes", "Catalog 총 bytes", copies: copies, sectionTitle: "크기", monospaced: true) {
             formatBytes($0.totalByteSize)
         },
         comparisonRow("catalog-resource-bytes", "Catalog resource bytes", copies: copies, monospaced: true) {
-            componentLines($0) { formatBytes($0.byteSize) }
+            componentText($0) { formatBytes($0.byteSize) }
         },
         comparisonRow("filesystem-resource-bytes", "현재 filesystem bytes", copies: copies, monospaced: true) {
-            componentLines($0) { resource in
+            componentText($0) { resource in
                 resource.fileSystemFacts.currentByteSize.map(formatBytes) ?? "—"
             }
         },
         comparisonRow("allocated-bytes", "Allocated bytes", copies: copies, monospaced: true) {
-            componentLines($0) { resource in
+            componentText($0) { resource in
                 resource.fileSystemFacts.allocatedByteSize.map(formatBytes) ?? "—"
             }
         },
         comparisonRow("total-allocated-bytes", "Total allocated bytes", copies: copies, monospaced: true) {
-            componentLines($0) { resource in
+            componentText($0) { resource in
                 resource.fileSystemFacts.totalAllocatedByteSize.map(formatBytes) ?? "—"
             }
         },
         comparisonRow("freshness", "현재 lightweight 상태", copies: copies) {
-            componentLines($0) { resourceFreshnessLabel($0) }
+            componentText($0) { resourceFreshnessLabel($0) }
         },
         comparisonRow("exact-sha256", "Catalog exact SHA-256", copies: copies, monospaced: true) {
-            componentLines($0) { $0.details?.exactSHA256Hex ?? "—" }
+            componentText($0) { $0.details?.exactSHA256Hex ?? "—" }
         },
-        comparisonRow("fresh-hash", "Fresh SHA-256", copies: copies) { _ in
-            "미수행 — 실제 mutation 직전에 별도 fresh verification"
+        comparisonRow("fresh-hash", "Fresh SHA-256", copies: copies) {
+            componentText($0) { _ in
+                "미수행 — 실제 mutation 직전에 별도 fresh verification"
+            }
         },
         comparisonRow("live-fingerprint", "Live identifier fingerprint", copies: copies, monospaced: true) {
-            componentLines($0) { $0.details?.liveIdentifierFingerprintHex ?? "—" }
+            componentText($0) { $0.details?.liveIdentifierFingerprintHex ?? "—" }
         },
         comparisonRow("live-timed-status", "Live timed metadata", copies: copies) {
-            componentLines($0) { $0.details?.liveTimedMetadataStatus?.rawValue ?? "—" }
+            componentText($0) { $0.details?.liveTimedMetadataStatus?.rawValue ?? "—" }
         },
         comparisonRow("metadata-probe", "Metadata probe", copies: copies) {
-            componentLines($0) { resource in
+            componentText($0) { resource in
                 guard let details = resource.details else { return "—" }
                 return details.metadataProbeFailed ? "실패" : "성공"
             }
         },
         comparisonRow("metadata-version", "Metadata probe version", copies: copies, monospaced: true) {
-            componentLines($0) { $0.details?.metadataProbeVersion.map(String.init) ?? "—" }
+            componentText($0) { $0.details?.metadataProbeVersion.map(String.init) ?? "—" }
         },
         comparisonRow("resource-id", "Resource ID", copies: copies, monospaced: true) {
-            componentLines($0) { $0.id }
+            componentText($0) { $0.id }
         },
         comparisonRow("asset-id", "Asset ID", copies: copies, monospaced: true) {
-            componentLines($0) { $0.assetID ?? "—" }
+            componentText($0) { $0.assetID ?? "—" }
         },
         comparisonRow("root-id", "Root ID", copies: copies, monospaced: true) {
-            componentLines($0) { $0.rootID }
+            componentText($0) { $0.rootID }
         },
         comparisonRow("root-kind", "Root kind", copies: copies) {
-            componentLines($0) { $0.rootKind.rawValue }
+            componentText($0) { $0.rootKind.rawValue }
         },
         comparisonRow("usage-role", "Root usage role", copies: copies) {
-            componentLines($0) { $0.rootUsageRole.rawValue }
+            componentText($0) { $0.rootUsageRole.rawValue }
         },
         comparisonRow("provenance", "Provenance", copies: copies) {
-            componentLines($0) { $0.rootProvenance.rawValue }
+            componentText($0) { $0.rootProvenance.rawValue }
         },
         comparisonRow("stable-marker", "Stable marker key", copies: copies, monospaced: true) {
-            componentLines($0) { $0.stableMarkerKey ?? "—" }
+            componentText($0) { $0.stableMarkerKey ?? "—" }
         },
         comparisonRow("catalog-fs-id", "Catalog filesystem ID", copies: copies, monospaced: true) {
-            componentLines($0) { $0.details?.catalogFileSystemIdentifier ?? "—" }
+            componentText($0) { $0.details?.catalogFileSystemIdentifier ?? "—" }
         },
         comparisonRow("current-fs-id", "현재 filesystem ID", copies: copies, monospaced: true) {
-            componentLines($0) { $0.fileSystemFacts.fileSystemIdentifier ?? "—" }
+            componentText($0) { $0.fileSystemFacts.fileSystemIdentifier ?? "—" }
         },
         comparisonRow("exists", "현재 파일 존재", copies: copies) {
-            componentLines($0) { $0.fileSystemFacts.exists ? "예" : "아니오" }
+            componentText($0) { $0.fileSystemFacts.exists ? "예" : "아니오" }
         },
         comparisonRow("file-type", "Filesystem type", copies: copies) {
-            componentLines($0) { $0.fileSystemFacts.fileType ?? "—" }
+            componentText($0) { $0.fileSystemFacts.fileType ?? "—" }
         },
         comparisonRow("type-identifier", "UTType identifier", copies: copies, monospaced: true) {
-            componentLines($0) { $0.fileSystemFacts.typeIdentifier ?? "—" }
+            componentText($0) { $0.fileSystemFacts.typeIdentifier ?? "—" }
         },
         comparisonRow("owner", "소유자", copies: copies) {
-            componentLines($0) { $0.fileSystemFacts.ownerAccountName ?? "—" }
+            componentText($0) { $0.fileSystemFacts.ownerAccountName ?? "—" }
         },
         comparisonRow("group", "그룹", copies: copies) {
-            componentLines($0) { $0.fileSystemFacts.groupOwnerAccountName ?? "—" }
+            componentText($0) { $0.fileSystemFacts.groupOwnerAccountName ?? "—" }
         },
         comparisonRow("permissions", "POSIX 권한", copies: copies, monospaced: true) {
-            componentLines($0) { resource in
+            componentText($0) { resource in
                 resource.fileSystemFacts.posixPermissions.map { String(format: "%04o", $0) } ?? "—"
             }
         },
         comparisonRow("immutable", "Immutable", copies: copies) {
-            componentLines($0) { optionalBool($0.fileSystemFacts.isImmutable) }
+            componentText($0) { optionalBool($0.fileSystemFacts.isImmutable) }
         },
         comparisonRow("append-only", "Append only", copies: copies) {
-            componentLines($0) { optionalBool($0.fileSystemFacts.isAppendOnly) }
+            componentText($0) { optionalBool($0.fileSystemFacts.isAppendOnly) }
         },
         comparisonRow("hidden", "Hidden", copies: copies) {
-            componentLines($0) { optionalBool($0.fileSystemFacts.isHidden) }
+            componentText($0) { optionalBool($0.fileSystemFacts.isHidden) }
         },
         comparisonRow("readable", "Readable", copies: copies) {
-            componentLines($0) { optionalBool($0.fileSystemFacts.isReadable) }
+            componentText($0) { optionalBool($0.fileSystemFacts.isReadable) }
         },
         comparisonRow("writable", "Writable", copies: copies) {
-            componentLines($0) { optionalBool($0.fileSystemFacts.isWritable) }
+            componentText($0) { optionalBool($0.fileSystemFacts.isWritable) }
         },
         comparisonRow("executable", "Executable", copies: copies) {
-            componentLines($0) { optionalBool($0.fileSystemFacts.isExecutable) }
+            componentText($0) { optionalBool($0.fileSystemFacts.isExecutable) }
         },
         comparisonRow("xattrs", "Extended attributes", copies: copies, monospaced: true) {
-            componentLines($0) { xattrSummary($0.fileSystemFacts.extendedAttributes) }
+            componentText($0) { xattrSummary($0.fileSystemFacts.extendedAttributes) }
         },
         comparisonRow("location-count", "Location history count", copies: copies, monospaced: true) {
-            componentLines($0) { $0.details.map { String($0.locationHistoryCount) } ?? "—" }
+            componentText($0) { $0.details.map { String($0.locationHistoryCount) } ?? "—" }
         },
         comparisonRow("last-session", "최근 scan session", copies: copies, monospaced: true) {
-            componentLines($0) { $0.details?.lastSeenSessionID ?? "—" }
+            componentText($0) { $0.details?.lastSeenSessionID ?? "—" }
         },
         comparisonRow("original-name-session", "최초 이름 session", copies: copies, monospaced: true) {
-            componentLines($0) { $0.details?.originalNameFirstSeenSessionID ?? "—" }
+            componentText($0) { $0.details?.originalNameFirstSeenSessionID ?? "—" }
         }
     ]
 }
@@ -1464,7 +1452,9 @@ private func livePhotoTimeComparisonRow(
 
     let slotPairs: [(still: LivePhotoTimeSlotValue, video: LivePhotoTimeSlotValue)] = copies.map { copy in
         let stillResource = copy.resources.first { $0.role == .photo }
+            ?? copy.resources.first { $0.role == .standaloneImage }
         let videoResource = copy.resources.first { $0.role == .pairedVideo }
+            ?? copy.resources.first { $0.role == .standaloneVideo }
         return (
             still: LivePhotoTimeSlotValue(
                 isPresent: stillResource != nil,
@@ -1526,8 +1516,23 @@ private func livePhotoTimeDifferenceKind(
 
 private func componentLines(
     _ copy: DuplicateReviewPresentationCopy,
+    forceLivePhotoSlots: Bool = false,
     value: (DuplicateReviewPresentationResource) -> String
 ) -> String {
+    if forceLivePhotoSlots || copy.hasLivePhotoStill || copy.hasPairedVideo {
+        let still = copy.resources.first { $0.role == .photo }
+            ?? copy.resources.first { $0.role == .standaloneImage }
+        let video = copy.resources.first { $0.role == .pairedVideo }
+            ?? copy.resources.first { $0.role == .standaloneVideo }
+        var lines = [
+            "[still] \(still.map(value) ?? "—")",
+            "[video] \(video.map(value) ?? "—")",
+        ]
+        lines.append(contentsOf: copy.resources
+            .filter { $0.role == .sidecar }
+            .map { "[sidecar] \(value($0))" })
+        return lines.joined(separator: "\n")
+    }
     if copy.resources.count == 1, let resource = copy.resources.first {
         return value(resource)
     }

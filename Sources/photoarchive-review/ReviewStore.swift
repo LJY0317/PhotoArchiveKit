@@ -269,15 +269,11 @@ final class ReviewStore: ObservableObject {
         )
 
         guard next != current else {
-            statusMessage = "모든 사본을 삭제 대상으로 선택하려면 미리보기의 ‘삭제 대상으로 선택’ 버튼을 사용하세요."
             return
         }
 
         cleanupCopyIDsByItem[item.id] = next
         explicitlyRemoveAllItemIDs.remove(item.id)
-        statusMessage = next.contains(copy.id)
-            ? "삭제 대상으로 선택했습니다. 아직 파일은 이동하지 않았습니다."
-            : "삭제 선택을 취소했습니다."
     }
 
     func toggleCleanupFromButton(
@@ -296,16 +292,6 @@ final class ReviewStore: ObservableObject {
         case let .updated(next):
             cleanupCopyIDsByItem[item.id] = next
             explicitlyRemoveAllItemIDs.remove(item.id)
-            if next.contains(copy.id),
-               item.kind == .livePhotoAsset,
-               copy.isCompleteLivePhotoOccurrence,
-               item.copies.filter(\.isCompleteLivePhotoOccurrence).count == 1 {
-                statusMessage = "삭제 대상으로 선택했습니다 · 이 사본은 유일한 완전한 Live Photo 페어입니다 · 아직 파일은 이동하지 않았습니다."
-            } else {
-                statusMessage = next.contains(copy.id)
-                    ? "삭제 대상으로 선택했습니다. 아직 파일은 이동하지 않았습니다."
-                    : "삭제 선택을 취소했습니다."
-            }
 
         case .requiresRemoveAllConfirmation:
             let removesOnlyCompletePair = item.kind == .livePhotoAsset
@@ -318,7 +304,6 @@ final class ReviewStore: ObservableObject {
                 itemID: item.id,
                 message: "이 그룹의 \(item.copies.count)개 사본을 모두 삭제 대상으로 선택합니다. 이 단계에서는 파일이 이동되지 않습니다.\(livePhotoWarning)"
             )
-            statusMessage = "마지막 남은 사본입니다 · 전체 삭제 선택은 확인이 필요합니다."
         }
     }
 
@@ -330,12 +315,10 @@ final class ReviewStore: ObservableObject {
         cleanupCopyIDsByItem[item.id] = Set(item.copies.map(\.id))
         explicitlyRemoveAllItemIDs.insert(item.id)
         removeAllConfirmation = nil
-        statusMessage = "이 그룹의 모든 사본을 삭제 대상으로 선택했습니다 · 파일은 아직 이동하지 않았습니다."
     }
 
     func cancelRemoveAll() {
         removeAllConfirmation = nil
-        statusMessage = "전체 삭제 선택을 취소했습니다."
     }
 
     func prepareSelectedCleanup() async {
