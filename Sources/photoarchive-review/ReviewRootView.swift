@@ -606,6 +606,8 @@ private struct ReviewComparisonTable: View {
     let canKeepOnly: (DuplicateReviewPresentationCopy) -> Bool
     let keepOnlyHelp: (DuplicateReviewPresentationCopy) -> String
 
+    @State private var hoveredCopyID: String?
+
     private var rows: [ComparisonRowSpec] {
         comparisonRows(for: copies)
     }
@@ -636,6 +638,13 @@ private struct ReviewComparisonTable: View {
                         canKeepOnly: canKeepOnly(copy),
                         keepOnlyHelp: keepOnlyHelp(copy)
                     )
+                    .onHover { hovering in
+                        if hovering {
+                            hoveredCopyID = copy.id
+                        } else if hoveredCopyID == copy.id {
+                            hoveredCopyID = nil
+                        }
+                    }
                     .anchorPreference(
                         key: ReviewColumnBoundsPreferenceKey.self,
                         value: .bounds
@@ -665,6 +674,13 @@ private struct ReviewComparisonTable: View {
                             canToggleCleanup: canToggleCleanup(copy),
                             cleanupToggleHelp: cleanupToggleHelp(copy)
                         )
+                        .onHover { hovering in
+                            if hovering {
+                                hoveredCopyID = copy.id
+                            } else if hoveredCopyID == copy.id {
+                                hoveredCopyID = nil
+                            }
+                        }
                         .anchorPreference(
                             key: ReviewColumnBoundsPreferenceKey.self,
                             value: .bounds
@@ -693,12 +709,20 @@ private struct ReviewComparisonTable: View {
                         let bottom = proxy[bottomAnchor]
                         let height = max(0, bottom.maxY - top.minY)
                         let isCleanup = cleanupCopyIDs.contains(copy.id)
+                        let isHovered = hoveredCopyID == copy.id
 
                         RoundedRectangle(cornerRadius: 14, style: .continuous)
-                            .strokeBorder(
-                                isCleanup ? Color.red.opacity(0.62) : Color.green.opacity(0.28),
-                                lineWidth: isCleanup ? 1.5 : 1
-                            )
+                            .fill(isCleanup ? Color.red.opacity(0.018) : Color.clear)
+                            .overlay {
+                                RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                    .strokeBorder(
+                                        columnStrokeColor(
+                                            isCleanup: isCleanup,
+                                            isHovered: isHovered
+                                        ),
+                                        lineWidth: isCleanup ? 1.5 : 1
+                                    )
+                            }
                             .frame(width: top.width, height: height)
                             .position(x: top.midX, y: top.minY + height / 2)
                             .allowsHitTesting(false)
@@ -706,6 +730,12 @@ private struct ReviewComparisonTable: View {
                 }
             }
         }
+    }
+
+    private func columnStrokeColor(isCleanup: Bool, isHovered: Bool) -> Color {
+        if isCleanup { return Color.red.opacity(0.68) }
+        if isHovered { return Color.accentColor.opacity(0.38) }
+        return Color.primary.opacity(0.08)
     }
 }
 
@@ -748,16 +778,25 @@ private struct CopyHeaderCell: View {
         VStack(alignment: .leading, spacing: 10) {
             VStack(alignment: .leading, spacing: 10) {
                 HStack(spacing: 7) {
-                    Label(
-                        isMarkedForCleanup ? "정리" : "남김",
-                        systemImage: isMarkedForCleanup ? "trash.circle.fill" : "checkmark.circle.fill"
-                    )
-                    .font(.caption.weight(.semibold))
-                    .foregroundStyle(isMarkedForCleanup ? .red : .green)
+                    if isMarkedForCleanup {
+                        Label("정리", systemImage: "trash.circle.fill")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.red)
+                    } else {
+                        Label("남김", systemImage: "circle")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                    }
 
-                    Text(copy.isKeeper ? "추천 keeper" : "추천 candidate")
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
+                    if copy.isKeeper {
+                        Label("추천 keeper", systemImage: "checkmark.seal.fill")
+                            .font(.caption2.weight(.medium))
+                            .foregroundStyle(.green)
+                    } else {
+                        Text("추천 candidate")
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
 
                     if itemKind == .livePhotoAsset {
                         livePhotoIntegrityBadge
@@ -784,11 +823,13 @@ private struct CopyHeaderCell: View {
                         .frame(maxWidth: .infinity)
                         .frame(height: 260)
                         .overlay(alignment: .topTrailing) {
-                            Image(systemName: isMarkedForCleanup ? "trash.circle.fill" : "checkmark.circle.fill")
-                                .font(.title2)
-                                .symbolRenderingMode(.hierarchical)
-                                .foregroundStyle(isMarkedForCleanup ? .red : .green)
-                                .padding(9)
+                            if isMarkedForCleanup {
+                                Image(systemName: "trash.circle.fill")
+                                    .font(.title2)
+                                    .symbolRenderingMode(.hierarchical)
+                                    .foregroundStyle(.red)
+                                    .padding(9)
+                            }
                         }
 
                     Text(primary.fileName)
