@@ -484,58 +484,63 @@ private struct ReviewDetailView: View {
             let horizontalOverflow = gridWidth + horizontalPadding * 2 > proxy.size.width + 1
             let horizontalStep = columnWidth + gap
 
-            ScrollView([.vertical, .horizontal], showsIndicators: true) {
-                VStack(alignment: .leading, spacing: 18) {
-                    header
-                        .frame(width: contentWidth, alignment: .leading)
+            ZStack(alignment: .bottomTrailing) {
+                ScrollView([.vertical, .horizontal], showsIndicators: true) {
+                    VStack(alignment: .leading, spacing: 18) {
+                        header
+                            .frame(width: contentWidth, alignment: .leading)
 
-                    ReviewComparisonTable(
-                        item: item,
-                        copies: copies,
-                        labelWidth: labelWidth,
-                        columnWidth: columnWidth,
-                        gap: gap,
-                        cleanupCopyIDs: cleanupCopyIDs,
-                        isApproved: isApproved,
-                        onToggleCleanup: onToggleCleanup,
-                        onKeepOnly: onKeepOnly,
-                        canToggleCleanup: canToggleCleanup,
-                        cleanupToggleHelp: cleanupToggleHelp,
-                        canKeepOnly: canKeepOnly,
-                        keepOnlyHelp: keepOnlyHelp
-                    )
-                    .frame(width: gridWidth, alignment: .topLeading)
+                        ReviewComparisonTable(
+                            item: item,
+                            copies: copies,
+                            labelWidth: labelWidth,
+                            columnWidth: columnWidth,
+                            gap: gap,
+                            cleanupCopyIDs: cleanupCopyIDs,
+                            isApproved: isApproved,
+                            onToggleCleanup: onToggleCleanup,
+                            onKeepOnly: onKeepOnly,
+                            canToggleCleanup: canToggleCleanup,
+                            cleanupToggleHelp: cleanupToggleHelp,
+                            canKeepOnly: canKeepOnly,
+                            keepOnlyHelp: keepOnlyHelp
+                        )
+                        .frame(width: gridWidth, alignment: .topLeading)
 
-                    HStack {
-                        if isApproved {
-                            Label("이 그룹은 검토 완료 상태입니다", systemImage: "checkmark.circle.fill")
-                                .foregroundStyle(.green)
-                            Button("검토 완료 취소", action: onUnapprove)
-                        } else {
-                            Text("현재 표시된 남김/정리 선택을 확인한 뒤 승인하세요.")
-                                .foregroundStyle(.secondary)
-                            Button("현재 선택 승인하고 다음", action: onApproveAndNext)
-                                .buttonStyle(.borderedProminent)
+                        HStack {
+                            if isApproved {
+                                Label("이 그룹은 검토 완료 상태입니다", systemImage: "checkmark.circle.fill")
+                                    .foregroundStyle(.green)
+                                Button("검토 완료 취소", action: onUnapprove)
+                            } else {
+                                Text("현재 표시된 남김/정리 선택을 확인한 뒤 승인하세요.")
+                                    .foregroundStyle(.secondary)
+                                Button("현재 선택 승인하고 다음", action: onApproveAndNext)
+                                    .buttonStyle(.borderedProminent)
+                            }
+                            Spacer()
                         }
-                        Spacer()
+                        .frame(width: contentWidth)
                     }
-                    .frame(width: contentWidth)
-                }
-                .frame(width: contentWidth, alignment: .leading)
-                .padding(.horizontal, horizontalPadding)
-                .padding(.vertical, 20)
-                .background {
-                    NativeScrollViewResolver { scrollView in
-                        if nativeScrollView !== scrollView {
-                            nativeScrollView = scrollView
+                    .frame(width: contentWidth, alignment: .leading)
+                    .padding(.horizontal, horizontalPadding)
+                    .padding(.vertical, 20)
+                    .background {
+                        NativeScrollViewResolver { scrollView in
+                            if nativeScrollView !== scrollView {
+                                nativeScrollView = scrollView
+                            }
+                            configureNativeScrollView(
+                                scrollView,
+                                horizontalOverflow: horizontalOverflow
+                            )
                         }
                     }
                 }
-            }
-            .scrollIndicators(.visible, axes: [.vertical, .horizontal])
-            .scrollIndicatorsFlash(onAppear: horizontalOverflow)
-            .contentMargins(.bottom, 12, for: .scrollIndicators)
-            .overlay(alignment: .bottomTrailing) {
+                .scrollIndicators(.visible, axes: [.vertical, .horizontal])
+                .scrollIndicatorsFlash(onAppear: horizontalOverflow)
+                .contentMargins(.bottom, 12, for: .scrollIndicators)
+
                 if horizontalOverflow {
                     HorizontalColumnNavigation(
                         copyCount: copies.count,
@@ -543,7 +548,7 @@ private struct ReviewDetailView: View {
                         onNext: { scrollHorizontally(by: horizontalStep) }
                     )
                     .padding(.trailing, 14)
-                    .padding(.bottom, 10)
+                    .padding(.bottom, 18)
                 }
             }
         }
@@ -570,6 +575,18 @@ private struct ReviewDetailView: View {
                 scrollView.reflectScrolledClipView(clipView)
             }
         }
+    }
+
+    private func configureNativeScrollView(
+        _ scrollView: NSScrollView,
+        horizontalOverflow: Bool
+    ) {
+        scrollView.hasVerticalScroller = true
+        scrollView.hasHorizontalScroller = horizontalOverflow
+        scrollView.horizontalScroller?.isHidden = !horizontalOverflow
+        scrollView.scrollerStyle = NSScroller.preferredScrollerStyle
+        scrollView.scrollerInsets = NSEdgeInsets(top: 0, left: 0, bottom: 12, right: 0)
+        scrollView.tile()
     }
 
     private var fallbackCopies: [DuplicateReviewPresentationCopy] {
