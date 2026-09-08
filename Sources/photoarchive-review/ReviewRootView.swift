@@ -1111,6 +1111,7 @@ private struct ComparisonRowSpec: Identifiable {
     let sectionTitle: String?
     let values: [ComparisonCellValue]
     let monospaced: Bool
+    let differenceKind: ComparisonDifferenceKind
 
     var isDifferent: Bool {
         Set(values.map(\.comparisonKey)).count > 1
@@ -1125,6 +1126,27 @@ private struct ComparisonRowSpec: Identifiable {
         guard isDifferent else { return nil }
         return values.compactMap(\.dateValue).max()
     }
+
+    var differenceLabel: String? {
+        guard isDifferent else { return nil }
+        switch differenceKind {
+        case .generic:
+            return "다름"
+        case .time:
+            return "시간 다름"
+        case .component:
+            return "구성 다름"
+        case .timeAndComponent:
+            return "시간·구성 다름"
+        }
+    }
+}
+
+private enum ComparisonDifferenceKind {
+    case generic
+    case time
+    case component
+    case timeAndComponent
 }
 
 private struct ComparisonCellValue {
@@ -1148,8 +1170,8 @@ private struct ComparisonMetadataLabel: View {
             Text(row.label)
                 .font(.caption.weight(.medium))
                 .foregroundStyle(.secondary)
-            if row.isDifferent {
-                Label("다름", systemImage: "arrow.left.arrow.right")
+            if let differenceLabel = row.differenceLabel {
+                Label(differenceLabel, systemImage: "arrow.left.arrow.right")
                     .font(.caption2.weight(.semibold))
                     .foregroundStyle(.orange)
             }
@@ -1247,62 +1269,65 @@ private func comparisonRows(
         comparisonRow("role", "Resource 역할", copies: copies) {
             componentLines($0) { resourceRoleLabel($0.role) }
         },
-        comparisonRow("capture-primary", "대표 촬영 시각", copies: copies, sectionTitle: "원본 촬영 시각 · 가장 중요한 메타데이터", date: { $0.primaryResource?.captureTime?.instant }) {
-            componentLines($0) { capturePrimaryLabel($0.captureTime) }
+        livePhotoTimeComparisonRow("capture-primary", "대표 촬영 시각", copies: copies, sectionTitle: "원본 촬영 시각 · 가장 중요한 메타데이터", date: { $0.primaryResource?.captureTime?.instant }) {
+            capturePrimaryLabel($0.captureTime)
         },
-        comparisonRow("capture-evidence-agreement", "원본 timestamp 교차검증", copies: copies) {
-            componentLines($0) { imageCaptureDateAgreementLabel($0.imageCaptureDateEvidence) }
+        livePhotoTimeComparisonRow("capture-evidence-agreement", "원본 timestamp 교차검증", copies: copies) { resource in
+            if resource.role == .pairedVideo {
+                return quickTimeCaptureEvidenceLabel(resource.captureTime)
+            }
+            return imageCaptureDateAgreementLabel(resource.imageCaptureDateEvidence)
         },
-        comparisonRow("exif-original", "EXIF DateTimeOriginal", copies: copies, monospaced: true) {
-            componentLines($0) { $0.imageCaptureDateEvidence?.exifDateTimeOriginal ?? "—" }
+        livePhotoTimeComparisonRow("exif-original", "EXIF DateTimeOriginal", copies: copies, monospaced: true) {
+            $0.imageCaptureDateEvidence?.exifDateTimeOriginal ?? "—"
         },
-        comparisonRow("exif-offset-original", "EXIF OffsetTimeOriginal", copies: copies, monospaced: true) {
-            componentLines($0) { $0.imageCaptureDateEvidence?.exifOffsetTimeOriginal ?? "—" }
+        livePhotoTimeComparisonRow("exif-offset-original", "EXIF OffsetTimeOriginal", copies: copies, monospaced: true) {
+            $0.imageCaptureDateEvidence?.exifOffsetTimeOriginal ?? "—"
         },
-        comparisonRow("exif-subsec-original", "EXIF SubSecTimeOriginal", copies: copies, monospaced: true) {
-            componentLines($0) { $0.imageCaptureDateEvidence?.exifSubsecTimeOriginal ?? "—" }
+        livePhotoTimeComparisonRow("exif-subsec-original", "EXIF SubSecTimeOriginal", copies: copies, monospaced: true) {
+            $0.imageCaptureDateEvidence?.exifSubsecTimeOriginal ?? "—"
         },
-        comparisonRow("exif-digitized", "EXIF DateTimeDigitized", copies: copies, monospaced: true) {
-            componentLines($0) { $0.imageCaptureDateEvidence?.exifDateTimeDigitized ?? "—" }
+        livePhotoTimeComparisonRow("exif-digitized", "EXIF DateTimeDigitized", copies: copies, monospaced: true) {
+            $0.imageCaptureDateEvidence?.exifDateTimeDigitized ?? "—"
         },
-        comparisonRow("exif-offset-digitized", "EXIF OffsetTimeDigitized", copies: copies, monospaced: true) {
-            componentLines($0) { $0.imageCaptureDateEvidence?.exifOffsetTimeDigitized ?? "—" }
+        livePhotoTimeComparisonRow("exif-offset-digitized", "EXIF OffsetTimeDigitized", copies: copies, monospaced: true) {
+            $0.imageCaptureDateEvidence?.exifOffsetTimeDigitized ?? "—"
         },
-        comparisonRow("exif-subsec-digitized", "EXIF SubSecTimeDigitized", copies: copies, monospaced: true) {
-            componentLines($0) { $0.imageCaptureDateEvidence?.exifSubsecTimeDigitized ?? "—" }
+        livePhotoTimeComparisonRow("exif-subsec-digitized", "EXIF SubSecTimeDigitized", copies: copies, monospaced: true) {
+            $0.imageCaptureDateEvidence?.exifSubsecTimeDigitized ?? "—"
         },
-        comparisonRow("tiff-datetime", "TIFF DateTime", copies: copies, monospaced: true) {
-            componentLines($0) { $0.imageCaptureDateEvidence?.tiffDateTime ?? "—" }
+        livePhotoTimeComparisonRow("tiff-datetime", "TIFF DateTime", copies: copies, monospaced: true) {
+            $0.imageCaptureDateEvidence?.tiffDateTime ?? "—"
         },
-        comparisonRow("quicktime-creation", "QuickTime creation date", copies: copies, monospaced: true) {
-            componentLines($0) { quickTimeCaptureEvidenceLabel($0.captureTime) }
+        livePhotoTimeComparisonRow("quicktime-creation", "QuickTime creation date", copies: copies, monospaced: true) {
+            quickTimeCaptureEvidenceLabel($0.captureTime)
         },
-        comparisonRow("capture-instant", "촬영 시각 (절대시각)", copies: copies, date: { $0.primaryResource?.captureTime?.instant }) {
-            componentLines($0) { formatDate($0.captureTime?.instant) }
+        livePhotoTimeComparisonRow("capture-instant", "촬영 시각 (절대시각)", copies: copies, date: { $0.primaryResource?.captureTime?.instant }) {
+            formatDate($0.captureTime?.instant)
         },
-        comparisonRow("capture-source", "대표 촬영 시각 source", copies: copies) {
-            componentLines($0) { $0.captureTime.map { captureSourceLabel($0.source) } ?? "—" }
+        livePhotoTimeComparisonRow("capture-source", "대표 촬영 시각 source", copies: copies) {
+            $0.captureTime.map { captureSourceLabel($0.source) } ?? "—"
         },
-        comparisonRow("capture-confidence", "대표 촬영 시각 신뢰도", copies: copies) {
-            componentLines($0) { $0.captureTime.map { captureConfidenceLabel($0.confidence) } ?? "—" }
+        livePhotoTimeComparisonRow("capture-confidence", "대표 촬영 시각 신뢰도", copies: copies) {
+            $0.captureTime.map { captureConfidenceLabel($0.confidence) } ?? "—"
         },
-        comparisonRow("date-added", "Finder Date Added", copies: copies, sectionTitle: "파일 · 유입 · 관측 시각", date: { $0.primaryResource?.addedAt }) {
-            componentLines($0) { formatDate($0.addedAt) }
+        livePhotoTimeComparisonRow("date-added", "Finder Date Added", copies: copies, sectionTitle: "파일 · 유입 · 관측 시각", date: { $0.primaryResource?.addedAt }) {
+            formatDate($0.addedAt)
         },
-        comparisonRow("creation-date", "파일시스템 생성 시각", copies: copies, date: { $0.primaryResource?.fileSystemFacts.creationDate }) {
-            componentLines($0) { formatDate($0.fileSystemFacts.creationDate) }
+        livePhotoTimeComparisonRow("creation-date", "파일시스템 생성 시각", copies: copies, date: { $0.primaryResource?.fileSystemFacts.creationDate }) {
+            formatDate($0.fileSystemFacts.creationDate)
         },
-        comparisonRow("filesystem-modified", "파일시스템 수정 시각", copies: copies, date: { $0.primaryResource?.fileSystemFacts.modificationDate }) {
-            componentLines($0) { formatDate($0.fileSystemFacts.modificationDate) }
+        livePhotoTimeComparisonRow("filesystem-modified", "파일시스템 수정 시각", copies: copies, date: { $0.primaryResource?.fileSystemFacts.modificationDate }) {
+            formatDate($0.fileSystemFacts.modificationDate)
         },
-        comparisonRow("catalog-modified", "Catalog에 기록된 파일 수정 시각", copies: copies, date: { $0.primaryResource?.details?.catalogModifiedAt }) {
-            componentLines($0) { formatDate($0.details?.catalogModifiedAt) }
+        livePhotoTimeComparisonRow("catalog-modified", "Catalog에 기록된 파일 수정 시각", copies: copies, date: { $0.primaryResource?.details?.catalogModifiedAt }) {
+            formatDate($0.details?.catalogModifiedAt)
         },
-        comparisonRow("first-seen", "PhotoArchiveKit 최초 관측", copies: copies, date: { $0.primaryResource?.details?.firstSeenAt }) {
-            componentLines($0) { formatDate($0.details?.firstSeenAt) }
+        livePhotoTimeComparisonRow("first-seen", "PhotoArchiveKit 최초 관측", copies: copies, date: { $0.primaryResource?.details?.firstSeenAt }) {
+            formatDate($0.details?.firstSeenAt)
         },
-        comparisonRow("last-seen", "PhotoArchiveKit 최근 관측", copies: copies, date: { $0.primaryResource?.details?.lastSeenAt }) {
-            componentLines($0) { formatDate($0.details?.lastSeenAt) }
+        livePhotoTimeComparisonRow("last-seen", "PhotoArchiveKit 최근 관측", copies: copies, date: { $0.primaryResource?.details?.lastSeenAt }) {
+            formatDate($0.details?.lastSeenAt)
         },
         comparisonRow("root-label", "위치", copies: copies) {
             componentLines($0) { $0.rootLabel }
@@ -1459,8 +1484,99 @@ private func comparisonRow(
                 dateValue: date?(copy)
             )
         },
-        monospaced: monospaced
+        monospaced: monospaced,
+        differenceKind: .generic
     )
+}
+
+private struct LivePhotoTimeSlotValue {
+    let isPresent: Bool
+    let text: String
+}
+
+private func livePhotoTimeComparisonRow(
+    _ id: String,
+    _ label: String,
+    copies: [DuplicateReviewPresentationCopy],
+    sectionTitle: String? = nil,
+    monospaced: Bool = false,
+    date: ((DuplicateReviewPresentationCopy) -> Date?)? = nil,
+    value: (DuplicateReviewPresentationResource) -> String
+) -> ComparisonRowSpec {
+    let isLivePhotoComparison = copies.contains { $0.hasLivePhotoStill || $0.hasPairedVideo }
+    guard isLivePhotoComparison else {
+        return comparisonRow(
+            id,
+            label,
+            copies: copies,
+            sectionTitle: sectionTitle,
+            monospaced: monospaced,
+            date: date
+        ) { copy in
+            componentLines(copy, value: value)
+        }
+    }
+
+    let slotPairs: [(still: LivePhotoTimeSlotValue, video: LivePhotoTimeSlotValue)] = copies.map { copy in
+        let stillResource = copy.resources.first { $0.role == .photo }
+        let videoResource = copy.resources.first { $0.role == .pairedVideo }
+        return (
+            still: LivePhotoTimeSlotValue(
+                isPresent: stillResource != nil,
+                text: stillResource.map(value) ?? "—"
+            ),
+            video: LivePhotoTimeSlotValue(
+                isPresent: videoResource != nil,
+                text: videoResource.map(value) ?? "—"
+            )
+        )
+    }
+
+    let values = zip(copies, slotPairs).map { copy, slots in
+        ComparisonCellValue(
+            text: "[still] \(slots.still.text)\n[video] \(slots.video.text)",
+            comparisonKey: "still:\(slots.still.text)|video:\(slots.video.text)",
+            dateValue: date?(copy)
+        )
+    }
+    let differenceKind = livePhotoTimeDifferenceKind(slotPairs)
+
+    return ComparisonRowSpec(
+        id: id,
+        label: label,
+        sectionTitle: sectionTitle,
+        values: values,
+        monospaced: monospaced,
+        differenceKind: differenceKind
+    )
+}
+
+private func livePhotoTimeDifferenceKind(
+    _ pairs: [(still: LivePhotoTimeSlotValue, video: LivePhotoTimeSlotValue)]
+) -> ComparisonDifferenceKind {
+    var componentDifference = false
+    var timeDifference = false
+
+    for slots in [pairs.map(\.still), pairs.map(\.video)] {
+        let presence = Set(slots.map(\.isPresent))
+        let renderedValues = Set(slots.map(\.text))
+
+        if presence.count > 1, renderedValues.count > 1 {
+            componentDifference = true
+        }
+
+        let presentValues = Set(slots.filter(\.isPresent).map(\.text))
+        if presentValues.count > 1 {
+            timeDifference = true
+        }
+    }
+
+    switch (timeDifference, componentDifference) {
+    case (true, true): return .timeAndComponent
+    case (true, false): return .time
+    case (false, true): return .component
+    case (false, false): return .time
+    }
 }
 
 private func componentLines(
