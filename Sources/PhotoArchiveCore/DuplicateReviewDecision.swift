@@ -1,5 +1,26 @@
 import Foundation
 
+public enum DuplicateReviewSelectionPolicy {
+    public static func toggledCleanupCopyIDs(
+        current: Set<String>,
+        clickedCopyID: String,
+        allCopyIDs: [String]
+    ) -> Set<String> {
+        var next = current
+        if next.contains(clickedCopyID) {
+            next.remove(clickedCopyID)
+            return next
+        }
+
+        next.insert(clickedCopyID)
+        let all = Set(allCopyIDs)
+        if all.count > 1, all.isSubset(of: next) {
+            return [clickedCopyID]
+        }
+        return next
+    }
+}
+
 public struct DuplicateReviewDecision: Codable, Sendable, Equatable {
     public let itemID: String
     public let subjectID: String

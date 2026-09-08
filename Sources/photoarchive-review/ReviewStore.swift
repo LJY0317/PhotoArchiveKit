@@ -185,13 +185,7 @@ final class ReviewStore: ObservableObject {
         _ copy: DuplicateReviewPresentationCopy,
         item: DuplicateReviewPresentationItem
     ) -> Bool {
-        var next = cleanupCopyIDsByItem[item.id, default: []]
-        if next.contains(copy.id) {
-            next.remove(copy.id)
-            return selectionIsSafe(next, for: item)
-        }
-        next.insert(copy.id)
-        return selectionIsSafe(next, for: item)
+        item.copies.count > 1 || isMarkedForCleanup(copy, item: item)
     }
 
     func canKeepOnly(
@@ -209,15 +203,12 @@ final class ReviewStore: ObservableObject {
         if isMarkedForCleanup(copy, item: item) {
             return "클릭하면 이 사본의 정리 표시를 취소합니다."
         }
-        if canToggleCleanup(copy, item: item) {
-            if item.kind == .livePhotoAsset,
-               copy.isCompleteLivePhotoOccurrence,
-               item.copies.filter(\.isCompleteLivePhotoOccurrence).count == 1 {
-                return "이 사본은 유일한 완전한 Live Photo 페어입니다. 클릭하면 still + paired video 전체를 정리 대상으로 표시합니다."
-            }
-            return "클릭하면 이 사본을 정리 대상으로 표시합니다. 아직 파일은 이동하지 않습니다."
+        if item.kind == .livePhotoAsset,
+           copy.isCompleteLivePhotoOccurrence,
+           item.copies.filter(\.isCompleteLivePhotoOccurrence).count == 1 {
+            return "이 사본은 유일한 완전한 Live Photo 페어입니다. 클릭하면 still + paired video 전체를 정리 대상으로 표시합니다."
         }
-        return "최소 한 사본은 남겨야 하므로 이 사본을 정리 대상으로 지정할 수 없습니다."
+        return "클릭하면 이 사본을 정리 대상으로 표시합니다. 마지막 남은 사본을 클릭하면 기존 정리 선택이 이 사본으로 이동합니다."
     }
 
     func keepOnlyHelp(
@@ -238,19 +229,25 @@ final class ReviewStore: ObservableObject {
         item: DuplicateReviewPresentationItem
     ) {
         statusMessage = nil
-        var next = cleanupCopyIDsByItem[item.id, default: []]
-        if next.contains(copy.id) {
-            next.remove(copy.id)
-        } else {
-            next.insert(copy.id)
-        }
+        let current = cleanupCopyIDsByItem[item.id, default: []]
+        let wasMarked = current.contains(copy.id)
+        let next = DuplicateReviewSelectionPolicy.toggledCleanupCopyIDs(
+            current: current,
+            clickedCopyID: copy.id,
+            allCopyIDs: item.copies.map(\.id)
+        )
+        let movedSelection = !wasMarked
+            && current.count == max(0, item.copies.count - 1)
+            && next == [copy.id]
         guard selectionIsSafe(next, for: item) else {
-            statusMessage = "모든 사본을 정리 대상으로 선택할 수는 없습니다. 최소 한 사본은 남겨야 합니다."
+            statusMessage = "비교할 다른 사본이 없어 정리 대상으로 표시할 수 없습니다."
             return
         }
         cleanupCopyIDsByItem[item.id] = next
         approvedItemIDs.remove(item.id)
-        if next.contains(copy.id),
+        if movedSelection {
+            statusMessage = "정리 대상을 이 사본으로 옮겼습니다. 아직 파일은 이동하지 않았습니다."
+        } else if next.contains(copy.id),
            item.kind == .livePhotoAsset,
            copy.isCompleteLivePhotoOccurrence,
            item.copies.filter(\.isCompleteLivePhotoOccurrence).count == 1 {

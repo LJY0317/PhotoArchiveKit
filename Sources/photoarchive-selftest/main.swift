@@ -1974,6 +1974,24 @@ struct PhotoArchiveSelfTest {
                 && !decisionText.contains("IMG_5199.JPG"),
             "submitted duplicate-review decisions must not persist filenames or paths"
         )
+        let reviewCopyA = "copy-a"
+        let reviewCopyB = "copy-b"
+        try require(
+            DuplicateReviewSelectionPolicy.toggledCleanupCopyIDs(
+                current: [reviewCopyB],
+                clickedCopyID: reviewCopyB,
+                allCopyIDs: [reviewCopyA, reviewCopyB]
+            ).isEmpty,
+            "clicking an already selected duplicate-review column should immediately cancel its cleanup mark"
+        )
+        try require(
+            DuplicateReviewSelectionPolicy.toggledCleanupCopyIDs(
+                current: [reviewCopyA],
+                clickedCopyID: reviewCopyB,
+                allCopyIDs: [reviewCopyA, reviewCopyB]
+            ) == [reviewCopyB],
+            "clicking the last unmarked two-copy column should move cleanup selection instead of disabling the column"
+        )
 
         let trashCleanupRoot = temporary.appendingPathComponent("TrashCleanup", isDirectory: true)
         let trashCleanupNested = trashCleanupRoot

@@ -619,23 +619,28 @@ private struct ReviewComparisonTable: View {
             HStack(spacing: gap) {
                 Color.clear
                     .frame(width: labelWidth)
+                    .allowsHitTesting(false)
                 ForEach(copies) { copy in
                     let isCleanup = cleanupCopyIDs.contains(copy.id)
                     RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .fill(isCleanup ? Color.red.opacity(0.025) : Color.green.opacity(0.012))
+                        .fill(isCleanup ? Color.red.opacity(0.035) : Color.green.opacity(0.015))
                         .overlay {
                             RoundedRectangle(cornerRadius: 14, style: .continuous)
                                 .strokeBorder(
-                                    isCleanup ? Color.red.opacity(0.42) : Color.green.opacity(0.18),
-                                    lineWidth: isCleanup ? 1.5 : 1
+                                    isCleanup ? Color.red.opacity(0.52) : Color.green.opacity(0.24),
+                                    lineWidth: 1
                                 )
                         }
                         .frame(width: columnWidth)
                         .frame(maxHeight: .infinity)
+                        .contentShape(RoundedRectangle(cornerRadius: 14, style: .continuous))
+                        .onTapGesture {
+                            if canToggleCleanup(copy) { onToggleCleanup(copy) }
+                        }
+                        .help(cleanupToggleHelp(copy))
                 }
             }
             .frame(maxHeight: .infinity)
-            .allowsHitTesting(false)
 
             VStack(spacing: 0) {
                 HStack(alignment: .top, spacing: gap) {
@@ -667,6 +672,7 @@ private struct ReviewComparisonTable: View {
                 .padding(.bottom, 14)
 
                 Divider()
+                    .allowsHitTesting(false)
 
                 ForEach(rows) { row in
                     ComparisonMetadataRow(
@@ -681,6 +687,7 @@ private struct ReviewComparisonTable: View {
                         cleanupToggleHelp: cleanupToggleHelp
                     )
                     Divider()
+                        .allowsHitTesting(false)
                 }
             }
         }
@@ -797,19 +804,6 @@ private struct CopyHeaderCell: View {
             }
         }
         .padding(12)
-        .background(
-            isMarkedForCleanup ? Color.red.opacity(0.055) : Color.green.opacity(0.025),
-            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
-        )
-        .overlay {
-            RoundedRectangle(cornerRadius: 12, style: .continuous)
-                .strokeBorder(
-                    isApproved
-                        ? (isMarkedForCleanup ? Color.red.opacity(0.4) : Color.green.opacity(0.4))
-                        : (isMarkedForCleanup ? Color.red.opacity(0.18) : Color.green.opacity(0.18)),
-                    lineWidth: 1
-                )
-        }
     }
 
     @ViewBuilder
@@ -893,7 +887,6 @@ private struct ComparisonMetadataRow: View {
                     Text(value.text)
                         .font(row.monospaced ? .caption.monospaced() : .caption)
                         .fixedSize(horizontal: false, vertical: true)
-                        .textSelection(.enabled)
 
                     if let date = value.dateValue,
                        let earliest = row.earliestDate,
@@ -912,13 +905,10 @@ private struct ComparisonMetadataRow: View {
                     }
                 }
                 .frame(width: columnWidth, alignment: .topLeading)
-                .padding(.vertical, 9)
+                .padding(.vertical, 12)
                 .padding(.horizontal, 8)
                 .background(
-                    metadataCellBackground(
-                        isDifferent: row.isDifferent,
-                        isMarkedForCleanup: cleanupCopyIDs.contains(copy.id)
-                    ),
+                    row.isDifferent ? Color.orange.opacity(0.055) : Color.clear,
                     in: RoundedRectangle(cornerRadius: 8, style: .continuous)
                 )
                 .contentShape(Rectangle())
@@ -926,19 +916,15 @@ private struct ComparisonMetadataRow: View {
                     if canToggleCleanup(copy) { onToggleCleanup(copy) }
                 }
                 .help(cleanupToggleHelp(copy))
+                .contextMenu {
+                    Button("값 복사") {
+                        NSPasteboard.general.clearContents()
+                        NSPasteboard.general.setString(value.text, forType: .string)
+                    }
+                }
             }
         }
-        .padding(.vertical, 3)
-    }
-
-    private func metadataCellBackground(
-        isDifferent: Bool,
-        isMarkedForCleanup: Bool
-    ) -> Color {
-        if isMarkedForCleanup {
-            return isDifferent ? Color.orange.opacity(0.075) : Color.red.opacity(0.035)
-        }
-        return isDifferent ? Color.orange.opacity(0.055) : Color.green.opacity(0.018)
+        .contentShape(Rectangle())
     }
 }
 

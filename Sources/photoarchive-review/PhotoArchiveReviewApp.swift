@@ -2,6 +2,13 @@ import AppKit
 import SwiftUI
 
 final class PhotoArchiveReviewAppDelegate: NSObject, NSApplicationDelegate {
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        // Keep native AppKit help tags, but use the long-standing Mac-style
+        // one-second initial hover delay for this app only. Do not alter the
+        // user's global tooltip preference.
+        UserDefaults.standard.set(1000, forKey: "NSInitialToolTipDelay")
+    }
+
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.regular)
         NSApp.activate(ignoringOtherApps: true)
