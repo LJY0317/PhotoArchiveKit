@@ -480,7 +480,7 @@ private struct ReviewDetailView: View {
                 + (gap * CGFloat(max(0, copies.count - 1)))
             let contentWidth = max(proxy.size.width - horizontalPadding * 2, gridWidth)
 
-            ScrollView([.vertical, .horizontal]) {
+            ScrollView([.vertical, .horizontal], showsIndicators: true) {
                 VStack(alignment: .leading, spacing: 18) {
                     header
                         .frame(width: contentWidth, alignment: .leading)
@@ -521,6 +521,7 @@ private struct ReviewDetailView: View {
                 .padding(.horizontal, horizontalPadding)
                 .padding(.vertical, 20)
             }
+            .scrollIndicators(.visible, axes: [.vertical, .horizontal])
         }
         .background(Color(nsColor: .windowBackgroundColor))
     }
@@ -776,113 +777,137 @@ private struct CopyHeaderCell: View {
     let keepOnlyHelp: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            VStack(alignment: .leading, spacing: 10) {
-                HStack(spacing: 7) {
-                    if isMarkedForCleanup {
-                        Label("정리", systemImage: "trash.circle.fill")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.red)
-                    } else {
-                        Label("남김", systemImage: "circle")
-                            .font(.caption.weight(.semibold))
-                            .foregroundStyle(.secondary)
-                    }
+        VStack(alignment: .leading, spacing: 8) {
+            statusPrimaryRow
+                .frame(height: 22, alignment: .leading)
 
-                    if copy.isKeeper {
-                        Label("추천 keeper", systemImage: "checkmark.seal.fill")
-                            .font(.caption2.weight(.medium))
-                            .foregroundStyle(.green)
-                    } else {
-                        Text("추천 candidate")
-                            .font(.caption2)
-                            .foregroundStyle(.tertiary)
-                    }
-
-                    if itemKind == .livePhotoAsset {
-                        livePhotoIntegrityBadge
-                    }
-
-                    if isOnlyCompleteLivePhotoOccurrence {
-                        Text("유일한 페어")
-                            .font(.caption2.weight(.semibold))
-                            .foregroundStyle(.orange)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(Color.orange.opacity(0.10), in: Capsule())
-                            .help("이 사본은 현재 유일한 완전한 Live Photo 페어입니다")
-                    }
-
-                    Spacer(minLength: 4)
-                    Text("\(copy.resources.count) resource")
-                        .font(.caption2.monospacedDigit())
-                        .foregroundStyle(.tertiary)
-                }
-
-                if let primary = copy.primaryResource {
-                    ReviewThumbnail(url: primary.fileURL)
-                        .frame(maxWidth: .infinity)
-                        .frame(height: 260)
-                        .overlay(alignment: .topTrailing) {
-                            if isMarkedForCleanup {
-                                Image(systemName: "trash.circle.fill")
-                                    .font(.title2)
-                                    .symbolRenderingMode(.hierarchical)
-                                    .foregroundStyle(.red)
-                                    .padding(9)
-                            }
-                        }
-
-                    Text(primary.fileName)
-                        .font(.headline)
-                        .lineLimit(2)
-
-                    if copy.resources.count > 1 {
-                        VStack(alignment: .leading, spacing: 3) {
-                            ForEach(copy.resources) { resource in
-                                HStack(spacing: 6) {
-                                    Image(systemName: resource.role == .pairedVideo ? "checkmark.seal.fill" : (resource.mediaKind == .video ? "film" : "photo"))
-                                        .foregroundStyle(resource.role == .pairedVideo ? .green : .secondary)
-                                    Text(resourceRoleLabel(resource.role))
-                                        .fontWeight(resource.role == .pairedVideo ? .semibold : .regular)
-                                    Spacer(minLength: 4)
-                                    Text(ByteCountFormatter.string(fromByteCount: resource.byteSize, countStyle: .file))
-                                        .monospacedDigit()
-                                }
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            }
-                        }
-                    }
-                }
+            if itemKind == .livePhotoAsset {
+                statusSecondaryRow
+                    .frame(height: 22, alignment: .leading)
             }
-            .contentShape(Rectangle())
-            .onTapGesture(perform: onToggleCleanup)
-            .help(cleanupToggleHelp)
 
-            if !copy.resources.isEmpty {
-                ViewThatFits(in: .horizontal) {
-                    HStack {
-                        finderButton
-                        Spacer()
-                        keepButton
-                        cleanupButton
-                    }
-
-                    VStack(alignment: .leading, spacing: 6) {
-                        finderButton
-                        HStack {
-                            Spacer()
-                            keepButton
-                            cleanupButton
+            if let primary = copy.primaryResource {
+                ReviewThumbnail(url: primary.fileURL)
+                    .frame(maxWidth: .infinity)
+                    .frame(height: 260)
+                    .overlay(alignment: .topTrailing) {
+                        if isMarkedForCleanup {
+                            Image(systemName: "trash.circle.fill")
+                                .font(.title2)
+                                .symbolRenderingMode(.hierarchical)
+                                .foregroundStyle(.red)
+                                .padding(9)
                         }
                     }
-                }
+
+                Text(primary.fileName)
+                    .font(.headline)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                    .frame(height: 22, alignment: .leading)
+                    .help(primary.fileName)
+            } else {
+                Color.clear
+                    .frame(height: 290)
             }
+
+            if itemKind == .livePhotoAsset {
+                resourceSummary
+                    .frame(height: 42, alignment: .topLeading)
+            }
+
+            actionRows
+                .frame(height: 46, alignment: .topLeading)
         }
         .padding(12)
         .frame(width: columnWidth, alignment: .topLeading)
         .clipped()
+        .contentShape(Rectangle())
+        .onTapGesture(perform: onToggleCleanup)
+        .help(cleanupToggleHelp)
+    }
+
+    private var statusPrimaryRow: some View {
+        HStack(spacing: 7) {
+            if isMarkedForCleanup {
+                Label("정리", systemImage: "trash.circle.fill")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.red)
+            } else {
+                Label("남김", systemImage: "circle")
+                    .font(.caption.weight(.semibold))
+                    .foregroundStyle(.secondary)
+            }
+
+            if copy.isKeeper {
+                Label("추천 keeper", systemImage: "checkmark.seal.fill")
+                    .font(.caption2.weight(.medium))
+                    .foregroundStyle(.green)
+            } else {
+                Text("추천 candidate")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+
+            Spacer(minLength: 4)
+
+            Text("\(copy.resources.count) resource")
+                .font(.caption2.monospacedDigit())
+                .foregroundStyle(.tertiary)
+        }
+        .lineLimit(1)
+    }
+
+    private var statusSecondaryRow: some View {
+        HStack(spacing: 7) {
+            livePhotoIntegrityBadge
+
+            if isOnlyCompleteLivePhotoOccurrence {
+                Text("유일한 페어")
+                    .font(.caption2.weight(.semibold))
+                    .foregroundStyle(.orange)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color.orange.opacity(0.10), in: Capsule())
+                    .help("이 사본은 현재 유일한 완전한 Live Photo 페어입니다")
+            }
+
+            Spacer(minLength: 0)
+        }
+        .lineLimit(1)
+    }
+
+    private var resourceSummary: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            ForEach(copy.resources) { resource in
+                HStack(spacing: 6) {
+                    Image(systemName: resource.role == .pairedVideo ? "checkmark.seal.fill" : (resource.mediaKind == .video ? "film" : "photo"))
+                        .foregroundStyle(resource.role == .pairedVideo ? .green : .secondary)
+                    Text(resourceRoleLabel(resource.role))
+                        .fontWeight(resource.role == .pairedVideo ? .semibold : .regular)
+                    Spacer(minLength: 4)
+                    Text(ByteCountFormatter.string(fromByteCount: resource.byteSize, countStyle: .file))
+                        .monospacedDigit()
+                }
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private var actionRows: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            HStack {
+                finderButton
+                Spacer()
+            }
+
+            HStack(spacing: 8) {
+                Spacer()
+                keepButton
+                cleanupButton
+            }
+        }
     }
 
     private var finderButton: some View {
