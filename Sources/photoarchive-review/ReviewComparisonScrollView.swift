@@ -42,6 +42,7 @@ final class ComparisonScrollContainer<Content: View>: NSScrollView {
     private let hostingView: ComparisonHostingView<Content>
     private var documentID: String
     private var hasScheduledDocumentResize = false
+    private var isResizingDocument = false
 
     init(content: Content, documentID: String) {
         hostingView = ComparisonHostingView(rootView: content)
@@ -62,7 +63,7 @@ final class ComparisonScrollContainer<Content: View>: NSScrollView {
             self?.scheduleDocumentResize()
         }
         hostingView.layoutDidComplete = { [weak self] in
-            self?.scheduleDocumentResize()
+            self?.resizeDocumentAfterHostedLayout()
         }
         horizontalScroller?.toolTip = "좌우로 드래그하거나 Shift + 마우스 휠로 비교 열을 이동합니다."
         resizeDocument(resetPosition: true)
@@ -89,11 +90,20 @@ final class ComparisonScrollContainer<Content: View>: NSScrollView {
         }
     }
 
-    private func resizeDocument(resetPosition: Bool) {
+    private func resizeDocumentAfterHostedLayout() {
+        guard !isResizingDocument else { return }
+        let size = hostingView.fittingSize
+        guard hostingView.frame.size != size else { return }
+        isResizingDocument = true
+        resizeDocument(resetPosition: false, measuredSize: size)
+        isResizingDocument = false
+    }
+
+    private func resizeDocument(resetPosition: Bool, measuredSize: NSSize? = nil) {
         // Measure only on content/width updates, never on scroll bounds changes.
         // All preview slots have fixed heights, so thumbnail completion needs
         // repainting but does not require a new document measurement.
-        let size = hostingView.fittingSize
+        let size = measuredSize ?? hostingView.fittingSize
         let origin = resetPosition ? NSPoint.zero : contentView.bounds.origin
 
         // Document-height changes (for example showing advanced metadata)

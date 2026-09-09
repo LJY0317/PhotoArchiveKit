@@ -674,7 +674,7 @@ private struct ReviewComparisonTable: View {
     var body: some View {
         let rows = comparisonRows(for: copies)
         let advancedRows = advancedComparisonRows(for: copies)
-        let lastRowID = showsAdvancedInformation ? advancedRows.last?.id : rows.last?.id
+        let baseLastRowID = rows.last?.id
         Grid(alignment: .topLeading, horizontalSpacing: gap, verticalSpacing: 0) {
             GridRow(alignment: .top) {
                 Text("미리보기")
@@ -716,13 +716,13 @@ private struct ReviewComparisonTable: View {
                 .gridCellColumns(copies.count + 1)
                 .allowsHitTesting(false)
 
-            metadataRows(rows, lastRowID: lastRowID)
+            metadataRows(rows, lastRowID: baseLastRowID, tracksColumnBottom: true)
 
             advancedDisclosureButton
                 .gridCellColumns(copies.count + 1)
 
             if showsAdvancedInformation {
-                metadataRows(advancedRows, lastRowID: lastRowID)
+                metadataRows(advancedRows, lastRowID: nil, tracksColumnBottom: false)
 
                 Button {
                     setAdvancedInformationVisible(false)
@@ -738,6 +738,10 @@ private struct ReviewComparisonTable: View {
                 .padding(.bottom, 2)
                 .gridCellColumns(copies.count + 1)
             }
+        }
+        .transaction { transaction in
+            transaction.animation = nil
+            transaction.disablesAnimations = true
         }
         .padding(16)
         .background(.background.secondary, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
@@ -805,8 +809,21 @@ private struct ReviewComparisonTable: View {
     }
 
     @ViewBuilder
-    private func metadataRows(_ rows: [ComparisonRowSpec], lastRowID: String?) -> some View {
+    private func metadataRows(
+        _ rows: [ComparisonRowSpec],
+        lastRowID: String?,
+        tracksColumnBottom: Bool
+    ) -> some View {
         ForEach(rows) { row in
+            if let sectionTitle = row.sectionTitle {
+                Text(sectionTitle)
+                    .font(.caption2.weight(.bold))
+                    .foregroundStyle(.primary)
+                    .padding(.top, 14)
+                    .padding(.bottom, 6)
+                    .gridCellColumns(copies.count + 1)
+            }
+
             GridRow(alignment: .top) {
                 ComparisonMetadataLabel(row: row, width: labelWidth)
 
@@ -833,7 +850,7 @@ private struct ReviewComparisonTable: View {
                         key: ReviewColumnBoundsPreferenceKey.self,
                         value: .bounds
                     ) { anchor in
-                        row.id == lastRowID
+                        tracksColumnBottom && row.id == lastRowID
                             ? [copy.id: ReviewColumnBounds(top: nil, bottom: anchor)]
                             : [:]
                     }
@@ -1073,12 +1090,6 @@ private struct ComparisonMetadataLabel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
-            if let sectionTitle = row.sectionTitle {
-                Text(sectionTitle)
-                    .font(.caption2.weight(.bold))
-                    .foregroundStyle(.primary)
-                    .padding(.bottom, 4)
-            }
             Text(row.label)
                 .font(.caption.weight(.medium))
                 .foregroundStyle(.secondary)
@@ -1106,9 +1117,6 @@ private struct ComparisonMetadataCell: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
-            if row.sectionTitle != nil {
-                Color.clear.frame(height: 20)
-            }
             Text(value.text)
                 .font(row.monospaced ? .caption.monospaced() : .caption)
                 .fixedSize(horizontal: false, vertical: true)

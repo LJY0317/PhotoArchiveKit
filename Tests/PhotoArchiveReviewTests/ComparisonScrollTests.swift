@@ -86,12 +86,14 @@ struct ComparisonScrollSelfTest {
         dynamicScroll.contentView.scroll(to: NSPoint(x: 0, y: 300))
         dynamicScroll.reflectScrolledClipView(dynamicScroll.contentView)
         let originBeforeExpansion = dynamicScroll.contentView.bounds.origin
+        let documentFrameBeforeExpansion = dynamicDocumentView.frame
         let knobBeforeExpansion = dynamicScroll.verticalScroller!.knobProportion
         dynamicModel.height = 5200
         RunLoop.main.run(until: Date().addingTimeInterval(0.2))
         precondition(dynamicScroll.documentView!.frame.height == 5200)
         precondition(dynamicScroll.documentView === dynamicDocumentView)
         precondition(dynamicScroll.contentView.bounds.origin == originBeforeExpansion)
+        precondition(dynamicScroll.documentView!.frame.origin == documentFrameBeforeExpansion.origin)
         precondition(dynamicScroll.verticalScroller!.knobProportion < knobBeforeExpansion)
         let dynamicMaxY = dynamicScroll.documentView!.frame.height - dynamicScroll.contentView.bounds.height
         dynamicScroll.contentView.scroll(to: NSPoint(x: 0, y: dynamicMaxY))
