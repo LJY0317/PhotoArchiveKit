@@ -1,141 +1,140 @@
 # PhotoArchiveKit
 
-[한국어](README.ko.md)
-
 [![CI](https://github.com/LJY0317/PhotoArchiveKit/actions/workflows/ci.yml/badge.svg)](https://github.com/LJY0317/PhotoArchiveKit/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-PhotoArchiveKit is a local-first, session-based toolkit for preserving and organizing iPhone photos, videos, and Live Photos without making a photo-cloud provider the permanent source of truth.
+PhotoArchiveKit is a local-first macOS toolkit for safely reconciling iPhone, Mac, Google Photos, and external-drive photo copies while preserving Live Photos as complete logical assets.
 
-### Core promises
+The project is intentionally small and session-based. It does not run a background daemon, own media through an opaque storage format, or treat a cloud provider as the permanent source of truth.
 
-1. **AI agents do not need your personal photo details.** In the normal agent workflow, the local PhotoArchiveKit process reads the files and computes hashes/metadata locally, while the AI agent receives only opaque IDs and minimal semantic state. `--agent-json` deliberately excludes media bytes, thumbnails/frames/audio, filenames, paths, raw hashes, Live Photo identifiers, GPS, MakerNote data, exact byte sizes, capture timestamps, and other file-level private details. This is designed so an AI agent can orchestrate cleanup without those identifying details being sent to the AI service. A general-purpose shell or an explicitly requested local diagnostic can bypass this boundary, so agents should use only the privacy-minimized CLI/API surface.
-2. **A Live Photo is one atomic asset.** Its still image and paired video are never treated as unrelated files for copy, move, rename, quarantine, archive, delete, or provider projection. If the complete resource graph cannot be preserved, the operation must expand to the whole asset or stop.
-3. **The archive stays human-readable and restorable.** Media remains as ordinary HEIC/JPEG/MOV/MP4 files on HDD/file replicas, while SQLite keeps the provider-neutral relationships, provenance, collections, and decisions needed to reconstruct a Live Photo or project the archive into Apple/Google services later.
-4. **Exact duplicates and similar photos are different problems.** Byte-identical redundancy may be automated after local verification; perceptually similar/best-shot candidates remain human-reviewed.
+## Core promises
 
-The project is intentionally small. It does not run a background daemon, host a gallery server, or move media behind an opaque storage format. Media remains in ordinary filesystem folders; a local SQLite catalog records relationships and decisions that folders cannot express.
+1. **Agent-private by design.** The local process may read media and compute metadata/hashes, but normal AI-agent workflows use `--agent-json`, which omits media bytes, previews, filenames, paths, exact byte sizes, capture timestamps, raw hashes, Live Photo identifiers, GPS, and other file-level private details.
+2. **Live Photos are atomic.** A validated still + paired video is treated as one asset for copy, move, rename, quarantine, archive, deletion, and future provider projection. One-sided mutation is rejected.
+3. **Media stays ordinary and recoverable.** Files remain normal HEIC/JPEG/MOV/MP4 files on the filesystem. SQLite stores relationships, provenance, collections, root roles, and operation state that folders alone cannot express.
+4. **Exact duplicate is not perceptual similarity.** Byte-identical redundancy can become an automatic candidate after local verification. Similar/best-shot candidates remain human-reviewed.
+5. **Mutation is explicit and reversible.** Scan/plan paths are read-only by default. Cleanup uses Trash or an explicitly configured quarantine; permanent deletion is not implemented.
 
-> **Project status:** early safety-first prototype. `scan`, `archive-coverage`, `plan`, and `organize-plan` are media-read-only; `archive-index` can refresh an existing user-managed archive without moving media and writes its root-scoped portable inventory only with explicit `--apply`. The current user-managed HDD workflow is intentionally simple: copy or organize files in Finder, re-index the archive root, then run `archive-coverage` across every root that should count as a current copy. PhotoArchiveKit does not discover arbitrary unregistered folders or run a background filesystem watcher. Permanent deletion, independent replica verification, and cloud upload are not completed yet.
+## Current status
 
-### Recommended current workflow
+Implemented today:
 
-1. Register the roots that should participate in the comparison, such as a Mac library, a nested Google Takeout root, and a user-managed HDD photo root.
-2. Let the user copy or organize archive media in Finder. PhotoArchiveKit does not need to own the HDD folder layout.
-3. Run `archive-index` after manual HDD changes so the local catalog reflects the archive root's current files and folder hierarchy.
-4. Run `archive-coverage` with all roots that should count as current storage. It reports exact cross-root coverage and whether Live Photo occurrences have complete, partial/ambiguous, or missing counterparts elsewhere.
+- multi-root recursive scanning with local SQLite catalog;
+- embedded-identifier Live Photo pairing plus strict QuickTime `still-image-time` validation;
+- stable opaque logical/resource/duplicate IDs;
+- current-state exact duplicate grouping and cross-root archive coverage;
+- registered root roles: `staging`, `primary_library`, `archive`, `import_source`, `reference`;
+- deterministic preferred-representation planning with Live Photo safety gates;
+- native SwiftUI duplicate-review GUI and Finder-oriented review workspace;
+- reversible duplicate cleanup to macOS Trash or app-managed quarantine;
+- verified `restore-quarantine`;
+- deterministic camera-name organization and verified empty-directory cleanup;
+- stable `.photoarchive-root` identity for root relocation and mutation boundaries;
+- user-managed HDD archive indexing without reorganizing the user's folders;
+- Mac-local incremental metadata/hash cache plus removable-root portable hash inventory;
+- portable catalog JSONL export/restore;
+- immutable archive plans and resumable verified archive copies;
+- agent-safe JSON reports that exclude file-level private details;
+- structured foreground scan progress without a resident watcher.
 
-An `archive-index` refresh updates that archive root; it does not magically discover a source folder that has never been registered or scanned. `archive-coverage` performs the current multi-root comparison explicitly. This keeps filesystem observation separate from mutation and avoids treating an unavailable external drive as a deletion.
+Not complete or intentionally deferred:
 
-## Why this exists
+- permanent deletion;
+- independent off-site replica verification / rclone workflow;
+- general perceptual/best-shot automation;
+- cloud upload/projection;
+- always-on filesystem monitoring;
+- general gallery/search/OCR/face-recognition features.
 
-The first product value is **agent-private orchestration**; the second is **atomic, restorable Live Photo preservation**. Duplicate reconciliation, preferred representation selection, human-readable folder organization, verified replicas, and provider-neutral migration state build on those two invariants.
+## Recommended workflow
 
-A durable photo archive has at least three different kinds of state:
+PhotoArchiveKit separates local observation, human decisions, and mutation.
 
-1. Original media bytes.
-2. Logical asset relationships, such as the still image and paired video that form one Live Photo.
-3. Human or automatic organization, including primary folders and many-to-many album membership.
+1. Register or scan the roots that should participate: Mac library, Takeout/import folders, external archive roots, or read-only references.
+2. Use `scan`, `archive-coverage`, and `plan` to understand current state without modifying media.
+3. Review exact duplicates in the native app or generated local review workspace.
+4. Apply only reviewed/automatic exact cleanup through a reversible destination.
+5. If an external HDD is manually organized in Finder, run `archive-index` afterward so the catalog reflects its current hierarchy.
+6. For programmatic archive copies, create an immutable `archive-plan`, preflight it with `archive-copy`, then use `--apply` only after the current root/byte checks pass.
 
-No current photo-cloud service is a reliable portable container for all three. PhotoArchiveKit therefore treats them separately:
+An unavailable drive is never interpreted as evidence that its media was deleted.
 
-```text
-Filesystem archive        SQLite catalog          Provider projections
-HEIC/JPEG + MOV/MP4   +   asset relationships  -> Apple Photos / Google Photos
-ordinary folders          collections             optional gallery tools
-byte-preserving copies    provenance and history
-```
+## Build
 
-The intended long-term model is:
-
-- **Media truth:** normal files on an archive disk plus at least one verified replica.
-- **Semantic truth:** a provider-neutral local SQLite catalog.
-- **Cloud services:** useful backup, viewing, search, sharing, or projection targets—not permanent identity authorities.
-
-## Current capabilities
-
-The initial CLI can:
-
-- recursively scan one or more Inbox, archive, import, or reference roots;
-- identify Live Photo still and video resources from embedded Apple linkage metadata;
-- report a non-blocking notice when a verified Live Photo still/video pair uses different basenames; the pair remains valid because embedded linkage metadata, not filename equality, is the identity authority, and agent-safe output exposes only the notice code/root ID;
-- require a paired video with a matching identifier to contain exactly one valid QuickTime `still-image-time` timed-metadata marker before reporting that Live Photo occurrence as complete;
-- group copies found in different roots into one logical Live Photo asset and partition repeated same-identifier exports into physical occurrences using directory/basename only as boundary hints after embedded identifier identity is established;
-- report completeness separately for every root, so a complete copy elsewhere does not hide a broken local copy;
-- find exact duplicate files using local SHA-256 comparisons only when file sizes match;
-- expose duplicate groups as stable opaque IDs instead of raw hashes;
-- replace the membership snapshot of an exact duplicate group whenever that group is observed again, so a previously seen member cannot leak into the current group after the filesystem changed;
-- run `archive-coverage` as a media-read-only current-state comparison across two or more registered roots: report per-root exact-covered versus exact-unique resource counts, pairwise exact-group overlap, and Live Photo counterpart status (`complete`, `split/ambiguous`, still-only, video-only, or none) on other roots;
-- extract timezone-aware EXIF and QuickTime capture times when available;
-- suggest date-based event folders by clustering assets separated by a configurable time gap;
-- persist resources, logical assets, provenance, duplicate groups, source collection mappings, original filenames, path history, and scan sessions in SQLite;
-- index an existing **user-managed archive root** with `archive-index`: preserve the current nested folder hierarchy as user-authored collection semantics, leave all media in place, prune stale folder memberships after manual Finder moves, and compute exact hashes for every media resource;
-- reuse metadata probe results for unchanged files when path/filesystem identity, byte size, modification time, and metadata-probe cache version still match; failed probes and media whose effective capture time came from a mutable Google Takeout sidecar are conservatively re-probed;
-- reuse metadata and exact SHA-256 evidence for unchanged files from the Mac-local SQLite catalog, and for archive roots optionally seed exact hashes from the root's hidden `.photoarchive/inventory-v1.jsonl`; scan-style commands including `archive-index --fresh` bypass metadata/hash reuse and re-read every media resource;
-- keep the fast authoritative working catalog on the Mac while allowing each removable archive root to carry its own root-scoped portable inventory containing relative structure and integrity evidence for another computer; this inventory is an accelerator/portable map, never mutation authority;
-- export that catalog's portable semantic subset as versioned JSONL and dry-run/restore it into a new SQLite catalog without carrying raw hashes, Live Photo fingerprints, filesystem IDs, absolute root paths, capture timestamps, provider object IDs, or generated scan/event caches;
-- keep same-volume resource identity stable across rename/move and recognize a moved source root through an optional `.photoarchive-root` marker;
-- generate a read-only `organize-plan` for only `IMG_####` / `IMG_E####` camera-style names, using capture wall-clock names such as `YYYY-MM-DD_HH-mm-ss[_NN]` while preserving custom filenames;
-- generate an immutable `archive-plan` against a marker-initialized destination: choose one canonical representation per logical asset, keep complete Live Photo still+paired-video resources atomic, freeze source/destination marker bindings and relative paths, freshly compare each AUTO source byte stream with exact SHA-256 evidence from the same scan/catalog state, and avoid existing destination filename collisions deterministically;
-- dry-run or apply `archive-copy` from immutable plan schema v2: independently re-check current catalog asset/role/hash evidence and root markers, copy each AUTO item through hidden `.photoarchive` staging, verify full SHA-256 before and after finalization, resume from already verified staging/final files, scan the completed archive root back into SQLite, and write a portable catalog JSONL snapshot into the archive control directory; source media is never moved or deleted;
-- require a stable root marker before `organize --apply`, keep Live Photo still+video on one destination basename, verify post-move filesystem identity/size, transactionally update the stable resource path/history in SQLite without a second full scan, write a restore manifest, and roll back filesystem moves if catalog commit fails;
-- let `cleanup-empty-dirs` consider only source directories proven by a completed organization manifest plus catalog location history, require the stable root marker, skip package/symlink boundaries, and remove only directories that are still literally empty at apply time;
-- produce a human-readable report or sanitized JSON;
-- detect optional user-installed interoperability tools without requiring or bundling them;
-- dry-run or apply duplicate cleanup for strong `automatic_redundant` exact decisions after fresh SHA-256 verification against a preferred copy; the default destination is the macOS Trash and users may select a custom app-managed quarantine in product settings. Preference-sensitive keeper choices remain excluded unless the user explicitly approves their current plan item with repeatable `--approve-item ITEM_ID`, and Live Photo candidate sets are verified before any resource in the item moves;
-- preserve Google Takeout source-folder/album-like memberships in local SQLite before collapsing Takeout-only exact standalone copies, without exposing collection names or paths to agent-safe output;
-- write a local restore manifest for applied quarantine sessions, roll back the whole session if a move fails, and dry-run/apply `restore-quarantine` only after the quarantined bytes are freshly re-verified against the local catalog's original SHA-256 evidence;
-- perform all current analysis without contacting a network service.
-- report structured scan progress without contaminating machine-readable output: recursive enumeration is indeterminate until the file list is known, then metadata/hash stages expose completed/total counts and percentages. Interactive terminals redraw one stderr line; non-interactive logs emit throttled progress lines. `--no-progress` disables it.
-
-The catalog stores local integrity data, including raw exact-file hashes, because it needs them for reliable comparison. Human diagnostics and AI-agent output are deliberately separated: `--json` may include local paths for troubleshooting, while `--agent-json` omits paths, filenames, byte sizes, capture timestamps, raw hashes, Live Photo identifiers, GPS, previews, and other file-level private data. AI agents should use only the agent-safe surface.
-
-## Verified ingest behavior
-
-A small disposable fixture containing three iPhone Live Photos and one normal video was compared locally on macOS. No media fixture is committed to this repository.
-
-Observed in that fixture:
-
-| Ingest/export path | Result |
-| --- | --- |
-| macOS Image Capture | Complete HEIC + MOV Live Photo resources; selected as the reference ingest path |
-| iPhone Photos AirDrop with **All Photos Data** | Byte-identical to Image Capture for every tested resource |
-| ordinary iPhone Photos AirDrop | Still HEIC files remained byte-identical, but the three paired Live Photo videos were absent |
-| Google Photos web download | Every tested HEIC and motion resource was byte-identical to Image Capture; motion files were sometimes named `.MP4` although their bytes matched the original `.MOV` |
-| Google Photos iOS app AirDrop | Produced transformed standalone JPG/MP4 files rather than archival Live Photo resources |
-
-The read-only scanner reproduced the expected structure across all five roots:
-
-- 29 media resources;
-- 8 logical assets;
-- 3 logical Live Photos;
-- 7 exact duplicate resource groups;
-- 3 warnings for still-only Live Photo copies in the ordinary AirDrop root.
-
-These findings apply to the tested fixture and software versions. They are not a promise that every future Google download or Google Takeout export will behave identically. Takeout remains a separate validation target.
-
-## Requirements
+Requirements:
 
 - macOS 14 or later
 - Swift 6 toolchain
-- No required third-party executable
-
-PhotoArchiveKit currently uses Apple system frameworks (`ImageIO`, `AVFoundation`, and `CryptoKit`) plus the system SQLite library.
-
-## Build and run
+- no required third-party executable
 
 ```bash
 swift build
 swift run photoarchive doctor
+swift run photoarchive-selftest
 ```
 
-Run a read-only scan of one folder:
+Launch the native review app:
+
+```bash
+"$HOME/LJY Projects/PhotoArchiveKit/scripts/run-app.sh"
+```
+
+## Basic scanning
 
 ```bash
 swift run photoarchive scan --inbox "~/Photo Inbox"
 ```
 
-Generate a read-only preferred-representation plan. Exact duplicates use a role-aware canonical keeper policy. `primary_library` and `archive` roots may reduce redundant **same-root** exact copies while retaining a survivor in that same root; their intentional cross-root replicas are never collapsed by generic reconciliation. `staging` roots may additionally collapse byte-identical **standalone** copies across multiple staging roots because staging is temporary working storage. Keeper evidence is evaluated before mutation: strong usage-role retention evidence and explicit copy-name evidence come first, recognizable source filenames such as camera/KakaoTalk/date-style names outrank opaque generated names, and when those stronger signals tie the earlier Finder `Date Added` is preferred if both copies expose it. Structural/capture/path evidence follows. Provenance categories such as `local_library` and `unknown` are not implicit quality ranks between staging copies; provenance remains source-specific semantic/safety evidence or an explicitly user-configured preference. Cross-root Live Photo cleanup is not enabled by this staging rule; Live Photo occurrences remain atomic. `import_source` cleanup retains its separate source-semantics gates, `reference` is read-only, and staging-to-archive offload remains a separate protection workflow:
+Multiple roots can be scanned together:
+
+```bash
+swift run photoarchive scan \
+  --local "~/Pictures" \
+  --takeout "~/Pictures/Takeout" \
+  --archive "/Volumes/Photo Archive/Photos"
+```
+
+Registered nested roots belong to the most specific root, preventing a nested Takeout/import tree from being counted again through its parent.
+
+For human-local diagnostics:
+
+```bash
+swift run photoarchive scan --json --inbox "~/Photo Inbox"
+```
+
+For AI-agent workflows:
+
+```bash
+swift run photoarchive scan --agent-json --inbox "~/Photo Inbox"
+```
+
+`--json` may contain local paths and filenames. `--agent-json` is the privacy-minimized interface.
+
+## Root registry and roles
+
+Each registered root has its own usage role. Role is separate from device and provenance, so two folders on the same HDD may intentionally have different policies.
+
+```text
+staging          temporary working copy
+primary_library  retained main library
+archive          retained long-term replica
+import_source    Takeout/export/camera dump; cleanup only after its safety gates
+reference        comparison-only, never mutated
+```
+
+Examples:
+
+```bash
+swift run photoarchive root add --role staging --provenance local_library "~/Pictures"
+swift run photoarchive root role ROOT_ID archive
+swift run photoarchive root init --apply "/Volumes/My HDD/My Photos"
+```
+
+Changing a role changes policy only; it does not move or delete media.
+
+## Exact duplicate review and cleanup
+
+Generate a read-only preferred-representation plan:
 
 ```bash
 swift run photoarchive plan \
@@ -143,21 +142,9 @@ swift run photoarchive plan \
   --takeout "~/Pictures/Takeout"
 ```
 
-For local human review without copying media, `duplicate-review` can materialize the AUTO exact decisions as a Finder-friendly workspace of symbolic links. By default it reuses the latest complete scan snapshot that still matches the active root registry, so opening an already-computed review does not reread the full media library. Before trusting an old decision for display, it cheaply checks the participating files' current size, modification time, filesystem identity, and stable root-marker identity where available. `CURRENT` groups use `KEEPER` / `CANDIDATE`; changed groups are visibly labeled `STALE` and use `OLD_KEEPER` / `OLD_CANDIDATE`; unavailable roots are labeled `OFFLINE`. Every group also gets a local-private Korean `comparison.txt` that states exact-byte evidence, the original target size (not the Finder symlink size), embedded/capture metadata, filesystem creation/`Date Added`/modification evidence, path/name differences, filesystem identity, extended-attribute equality, and the keeper rationale. Filesystem-creation-date fallback is explicitly separated from embedded capture metadata. It deliberately says "no differences detected in the metadata PhotoArchiveKit currently inspects" rather than claiming universal metadata identity. `--preference-only` hides strong automatic choices such as complete-Live-Photo retention, explicit `copy` / `복사본` filename markers (numeric copy suffixes remain strong only when they correspond to a peer basename), user-validated recognizable source filenames, earlier `Date Added` when stronger evidence ties, and shallower same-root paths. A file whose basename matches its parent folder also strongly outranks a peer under an obvious placeholder parent such as `Untitled Folder`, `무제 폴더`, `New Folder`, or `새 폴더`. Pure deterministic ties remain review-only until an explicit user approval selects the survivor and do not receive automatic quarantine authority. `--candidate-root` can narrow the workspace to cleanup candidates from one registered root. Use `--refresh` to incrementally rescan current roots, or `--refresh --fresh` when a full metadata/hash recomputation is explicitly desired. Originals are never moved, renamed, deleted, or duplicated by review.
+The native duplicate-review app shows physical copies or Live Photo occurrences as aligned comparison columns. User-facing metadata stays compact; deeper local metadata can be expanded as advanced information. Selection is reversible and is not itself mutation authority.
 
-For faster human review, the native SwiftUI duplicate-review app opens the latest reusable exact-duplicate results and presents one aligned comparison column per physical copy or Live Photo occurrence. The sidebar uses consumer-facing labels, the system `livephoto` symbol, and a simple duplicate-item count. In each comparison card the photo is the primary visual: complete Live Photos show a small, restrained native `livephoto` badge inside the thumbnail, while a deletion choice is expressed by the red column state plus a small red trash badge on the thumbnail instead of an extra status label. Cancelling that choice uses a neutral **Cancel Selection** control rather than destructive red styling. The preferred copy is marked **Recommended to Keep** below the photo with a short human-readable reason such as “includes both the photo and video for this Live Photo”; internal planner IDs, keeper/candidate labels, and exact-scope debug badges are not shown in the consumer UI. The default metadata table is intentionally compact and keeps only **Filename, Full Path, Media Type, Capture Time, Finder Date Added, File Created, File Modified, and Total Size**. `Capture Time` renders one human-readable final value per copy and uses only actual capture evidence such as EXIF `DateTimeOriginal` or a QuickTime creation date; Google Takeout timestamps, filesystem creation dates, and other fallbacks render as `—` in this primary row. Finder Date Added, filesystem creation, and filesystem modification are grouped immediately below capture time. Live Photo file-time rows preserve aligned `[still]` / `[video]` slots, including `—` when a component is absent. `Total Size` likewise keeps one row while showing the current `[still]` / `[video]` resource sizes separately and uses the full exact integer form, for example `2,868,570 bytes`, rather than a rounded MB/GB abbreviation. **Show Advanced Information** expands the previously hidden comparison details in coherent groups for names/types, raw EXIF/QuickTime capture evidence, PhotoArchiveKit observation history, location/provenance, storage sizes, hashes/Live Photo integrity, filesystem permissions, and internal diagnostics; it changes to **Hide Advanced Information** while expanded. A second **Hide Advanced Information** control appears at the end of the expanded rows so the user can collapse immediately after reading to the bottom. The owned AppKit scroll view remeasures its document whenever hosted SwiftUI state changes the intrinsic content height, so the expanded table remains scrollable through its true final row and can scroll back to the top. The final default row has no bottom separator so the card has balanced top and bottom finishing. Clicking a column marks that copy for deletion; clicking it again cancels the mark, and clicking the other copy in a two-copy group moves the deletion choice. Selecting every copy requires the explicit **Select for Deletion** button and confirmation. Any selected copies can proceed directly to the destination action, normally **Move to Trash…**; the confirmation sheet shows only a concise copy/file/size summary plus meaningful risk warnings, while the full path/hash/Live Photo safety checks still run immediately before the reversible move. Comparison folders can be selected or added from the **Comparison Locations** menu, and the toolbar refresh reloads recent results without rereading media. For normal GUI use, launch the bundled `PhotoArchiveKit.app` with the script below rather than the raw SwiftPM executable.
-
-Advanced groups such as **Names and Types**, **Capture Metadata**, **PhotoArchiveKit Records**, **Location and Provenance**, **Storage**, **Integrity and Live Photo**, **File System**, and **Internal Records** use standalone section-header rows rather than adding spacer height inside the first value row. The first real row in every section therefore keeps the same vertical rhythm as ordinary metadata rows. The disclosure remains non-animated for the large Grid, and the default comparison-column selection/hover outline stays bounded to the default metadata region so expanding advanced details does not require stretching and recompositing that full overlay.
-
-Advanced-information disclosure switches immediately without animating the entire comparison grid. It preserves the existing viewport and document view while only adding or removing the advanced rows, and document-height-only changes do not force-retile the whole AppKit scroll view.
-
-The comparison area keeps its SwiftUI Grid inside an owned AppKit scroll view with persistent standard scroll bars. Drag the bottom scroll bar or use **Shift + mouse wheel** to move between columns; the ordinary wheel scrolls vertically. On wide windows, the comparison block is centered with balanced margins while keeping copy columns at a readable maximum width. The action bar occupies a separate layout row below the split view, so it cannot cover the horizontal scroll bar. The launcher builds an optimized release app by default; set `PHOTOARCHIVE_BUILD_CONFIGURATION=debug` for debugging.
-
-The GUI is intentionally polishing Korean first. Until a real second translation ships, it does not expose an inert language switch. When English localization work begins, the intended path is a String Catalog plus a `Settings > Language` picker that remains consistent with macOS per-app language preferences.
-
-```bash
-"$HOME/LJY Projects/PhotoArchiveKit/scripts/run-app.sh"
-```
+The Finder-oriented review workspace is also available:
 
 ```bash
 swift run photoarchive duplicate-review \
@@ -165,29 +152,7 @@ swift run photoarchive duplicate-review \
   --candidate-root "~/Pictures"
 ```
 
-Refresh first when the library has materially changed:
-
-```bash
-swift run photoarchive duplicate-review \
-  --refresh \
-  --output "~/Desktop/PhotoArchiveKit-Duplicate-Review-Fresh" \
-  --candidate-root "~/Pictures"
-```
-
-For an AI agent, use `--agent-json` with `scan`, `archive-coverage`, `plan`, `duplicate-review`, `organize-plan`, `archive-index`, `archive-plan`, `archive-copy`, `organize`, `quarantine`, `restore-quarantine`, `cleanup-empty-dirs`, or the `catalog` command reports; local diagnostic `--json` can contain paths. Persisted archive-plan, archive-copy manifest, archive-root inventory, and JSONL snapshot files themselves are **not** agent-safe because safe replay/disaster recovery requires local-private paths, filenames, catalog paths, marker bindings, or integrity preconditions.
-
-Check current Mac/Takeout/HDD coverage without moving media:
-
-```bash
-swift run photoarchive archive-coverage --agent-json \
-  --local "~/Pictures" \
-  --takeout "~/Pictures/Takeout" \
-  --archive "/Volumes/My HDD/deep/path/My Photos"
-```
-
-Only roots supplied to this session participate in the current coverage result. A separately registered active or inactive nested root remains an ownership boundary and is automatically excluded from a parent-only scan; only `root remove` returns that subtree to parent ownership. If media was copied from another Mac folder or another external device that PhotoArchiveKit has never scanned, register that location as an appropriate `--local`, `--import`, or `--reference` root when you want it included in the comparison.
-
-Preview duplicate cleanup without moving anything. The saved default destination is the macOS Trash:
+Preview reversible cleanup:
 
 ```bash
 swift run photoarchive quarantine \
@@ -195,45 +160,94 @@ swift run photoarchive quarantine \
   --takeout "~/Pictures/Takeout"
 ```
 
-Only after reviewing the dry run, add `--apply` to send the freshly re-verified `automatic_redundant` resources to the macOS Trash. `REVIEW` items are never moved by this command. After all candidate moves succeed, only the source parent chain made empty by this operation is pruned up to (but never including) the registered root; packages, symlinks, and non-empty directories are preserved.
+Only after reviewing the dry run should `--apply` be used. Before a candidate moves, PhotoArchiveKit re-checks current root/path boundaries, regular-file state, expected size, exact bytes, keeper evidence, and complete Live Photo resource sets.
 
-Users who want an app-managed temporary-trash location can change the product setting; that mode retains the existing restore-manifest workflow. `--to PATH` overrides the saved destination with a custom quarantine for one invocation, while `--trash` forces the macOS Trash for one invocation.
-
-After every duplicate candidate has moved successfully, PhotoArchiveKit prunes only the source parent chain that became empty because of that operation, stopping before the registered root. A directory is also treated as effectively empty when its only remaining files are known regenerable OS/file-manager metadata such as macOS `.DS_Store` or AppleDouble `._*`, Windows `Thumbs.db`/`ehthumbs.db`/`desktop.ini`, or KDE `.directory`. Unknown hidden files, symlinks, packages, and other subdirectories remain blockers.
+The default destination is macOS Trash. A custom app-managed quarantine can be configured when a restore manifest is preferred:
 
 ```bash
 swift run photoarchive settings deletion-destination trash
-swift run photoarchive settings deletion-destination quarantine "/path/to/custom quarantine"
-swift run photoarchive settings show
+swift run photoarchive settings deletion-destination quarantine "/path/to/quarantine"
 ```
 
-A new Mac with no saved setting defaults to `system_trash`. If no reversible destination can be used safely, PhotoArchiveKit does not silently fall back to permanent removal.
-
-A completed quarantine can be safely reversed. Restore is also a dry run by default and re-hashes every quarantined resource against the exact hash retained only in the local catalog before moving anything back:
+Restore is also dry-run by default and freshly verifies quarantined bytes:
 
 ```bash
 swift run photoarchive restore-quarantine --agent-json "/path/to/session/manifest.json"
 # add --apply only after the preflight succeeds
 ```
 
-Preview deterministic camera-name cleanup without moving media:
+Cleanup may remove only the source parent chain made empty by that same operation, stopping before the registered root and preserving package/symlink/unknown-content boundaries.
+
+## Organization
+
+PhotoArchiveKit can propose deterministic camera-name cleanup without touching custom filenames:
 
 ```bash
 swift run photoarchive organize-plan --agent-json --local "~/Pictures"
 ```
 
-For recurring Image Capture-style folders that contain exactly one logical asset and no other entries, add `--singleton-leaf-only` to limit the plan/apply scope to those clean nested folders. Live Photos still move as one still+paired-video asset, and the existing date-based destination/collision rules are reused. If a standalone `IMG_####` / `IMG_E####` file has no trusted capture timestamp, `--preserve-name-if-date-untrusted` can be combined with this scope to flatten it without inventing a date-based filename; root-level name collisions still block that promotion.
+`organize --apply` requires a stable root marker. Validated Live Photo still/video resources move atomically under one destination basename, and catalog commit failure rolls filesystem moves back.
 
-Before any organization apply, initialize a stable root marker explicitly (`photoarchive root init --apply "~/Pictures"`). `photoarchive organize` then defaults to a marker-verified dry run; only an explicit `--apply` can rename/flatten automatic items. Custom filenames and review items stay untouched.
+For clean singleton leaf folders, `--singleton-leaf-only` can narrow the scope. `cleanup-empty-dirs` is limited to source directories proven by a completed organization manifest and does not sweep unrelated empty folders.
 
-After organization, empty-directory cleanup can be constrained to directories that actually lost files in that completed organization session. It is also a dry run by default:
+## User-managed HDD archives
+
+PhotoArchiveKit does not require its own generated folder layout. Existing hand-organized HDD trees can remain exactly as they are.
+
+Initialize the photo root once, then index it:
 
 ```bash
-swift run photoarchive cleanup-empty-dirs --agent-json "/path/to/organization.json"
-# add --apply only after the preflight succeeds
+swift run photoarchive root init --apply "/Volumes/My HDD/My Photos"
+swift run photoarchive archive-index --agent-json "/Volumes/My HDD/My Photos"
 ```
 
-Create a local-private immutable HDD archive plan without copying media yet. Both the canonical source root and archive destination need stable `.photoarchive-root` markers for an item to receive automatic copy authority:
+The default index updates the Mac-local SQLite catalog without moving/re-writing media. `archive-index --apply` additionally writes a hidden root-scoped `.photoarchive/inventory-v1.jsonl` containing relative structure and integrity/cache evidence. That inventory is **local-private** and not safe to send to an AI agent.
+
+`archive-index --fresh` bypasses local and portable caches and re-reads media bytes when a full integrity audit is desired.
+
+Current cross-root coverage can be recomputed explicitly:
+
+```bash
+swift run photoarchive archive-coverage --agent-json \
+  --local "~/Pictures" \
+  --takeout "~/Pictures/Takeout" \
+  --archive "/Volumes/My HDD/My Photos"
+```
+
+Coverage reports exact resource preservation and Live Photo counterpart completeness separately. File-level exact overlap alone does not authorize cleanup.
+
+## Portable catalog recovery
+
+The authoritative working catalog stays on the Mac, normally at:
+
+```text
+~/Library/Application Support/PhotoArchiveKit/catalog.sqlite3
+```
+
+It is private local state and may contain paths and raw local integrity values.
+
+Export a portable semantic snapshot:
+
+```bash
+swift run photoarchive catalog export \
+  --output "/path/to/photoarchive-catalog.jsonl"
+```
+
+Restore validates first and refuses to overwrite an existing catalog:
+
+```bash
+swift run photoarchive catalog restore \
+  --to "/path/to/restored-catalog.sqlite3" \
+  --bind-root ROOT_ID="/path/to/current/root" \
+  "/path/to/photoarchive-catalog.jsonl"
+# add --apply only after the dry run succeeds
+```
+
+The JSONL snapshot deliberately omits reproducible raw caches such as exact hashes and absolute machine paths, but it still contains relative paths/filenames and collection semantics needed for recovery. It is therefore **local-private, not agent-safe/share-safe**.
+
+## Immutable archive copy
+
+Create a local-private immutable archive plan:
 
 ```bash
 swift run photoarchive archive-plan \
@@ -244,272 +258,91 @@ swift run photoarchive archive-plan \
   --takeout "~/Pictures/Takeout"
 ```
 
-The persisted plan is **local-private**: schema v2 contains the working catalog path, source/destination paths, exact byte sizes, marker bindings, and expected SHA-256 preconditions. `--agent-json` exposes only opaque IDs, reason codes, and counts. `archive-plan` never copies or deletes media.
+The persisted plan contains local replay preconditions such as source/destination identity and expected exact bytes, so the plan file itself is not agent-safe.
 
-Preview the immutable plan again at the copy boundary. The executor re-checks the plan against current catalog evidence and fresh source bytes, so the plan file alone is not sufficient copy authority:
+Preflight it again at the copy boundary:
 
 ```bash
 swift run photoarchive archive-copy --agent-json \
   "~/Library/Application Support/PhotoArchiveKit/archive-plan.json"
 ```
 
-Only after the preflight succeeds, add `--apply`. AUTO resources are copied through `.photoarchive/staging/<plan-id>`, full-file SHA-256 is verified before and after finalization, and complete Live Photo items are staged as a full still+paired-video set before a missing member is finalized. A pending operation can be re-run idempotently: already verified staged or final files are reused. On completion the archive root is scanned back into the working catalog and a portable catalog snapshot is written under the archive's hidden `.photoarchive` directory. Source media is never moved or deleted.
+Only after successful preflight:
 
 ```bash
 swift run photoarchive archive-copy --apply --agent-json \
   "~/Library/Application Support/PhotoArchiveKit/archive-plan.json"
 ```
 
-If the HDD already contains a carefully hand-organized photo tree, index that tree instead of forcing it into PhotoArchiveKit's generated folder layout. First place a stable marker at the **photo root itself**, not necessarily at the volume root:
+AUTO items are copied through hidden staging, fully hashed before and after finalization, and complete Live Photo resources are handled as one item. Re-running an interrupted operation reuses already verified staging/final files. Source media is never moved or deleted by `archive-copy`.
 
-```bash
-swift run photoarchive root init --apply "/Volumes/My HDD/deep/path/My Photos"
-swift run photoarchive archive-index --agent-json "/Volumes/My HDD/deep/path/My Photos"
-```
+Large real-HDD archive applications should still be expanded in bounded logical-item batches rather than treating an old plan as permanent authority.
 
-`archive-index` recursively records the current folders that contain supported media as user-authored collection hierarchy in the Mac-local SQLite catalog. Media is not moved, renamed, deleted, or rewritten. A normal repeat scan reuses cached metadata and exact hashes when stable file facts still match. On the same volume, filesystem identity also lets a manual Finder move/rename reuse the old evidence even when the relative path changed. `archive-index --fresh` bypasses metadata plus local/portable hash reuse. High-risk mutations never trust cache alone; they still perform fresh byte verification.
+## Ingest observations
 
-After reviewing the index, an explicit `--apply` writes only a hidden root-scoped portable inventory:
+A disposable five-path fixture showed:
 
-```bash
-swift run photoarchive archive-index --apply --agent-json \
-  "/Volumes/My HDD/deep/path/My Photos"
-```
+| Path | Observed result |
+| --- | --- |
+| macOS Image Capture | complete archival HEIC + MOV resources |
+| iPhone AirDrop with **All Photos Data** | byte-identical to Image Capture for tested resources |
+| ordinary Photos AirDrop | still images preserved, tested Live Photo motion resources absent |
+| Google Photos web download | tested resources byte-identical to Image Capture, sometimes with different extension |
+| Google Photos iOS app AirDrop | transformed standalone JPG/MP4 rather than archival Live Photo resource pairs |
 
-The recommended split is intentional:
+These are observations from the tested fixture, not permanent guarantees about future Apple/Google behavior. Image Capture is the current baseline ingest path when preserving the original Live Photo resources matters.
 
-```text
-Mac internal SSD                              Removable archive root
-~/Library/Application Support/PhotoArchiveKit  My Photos/
-└── catalog.sqlite3                            ├── Family/
-    authoritative working catalog             ├── Trips/
-                                                └── .photoarchive/
-                                                    ├── root marker
-                                                    └── inventory-v1.jsonl
-                                                        root-scoped portable map/cache
-```
+## Privacy and security boundary
 
-The Mac SQLite database remains the authoritative **working** catalog because SQLite random I/O and transaction state belong on reliable local storage. The archive inventory travels with only that archive root and contains relative paths, byte sizes, modification times, opaque IDs, roles, and SHA-256 evidence, so it is **local-private** and should not be shared with an AI agent. When the HDD is attached to a computer with a fresh local catalog, the inventory can seed unchanged-file hashes and avoid re-reading all media bytes. Use `archive-index --fresh` periodically, or whenever a full integrity audit is desired, to ignore both local and portable caches and re-hash every media resource.
+The core currently makes no network request. Cloud/provider integrations, when added, must be separate opt-in adapters.
 
-The root inventory and `catalog export` serve different purposes. `inventory-v1.jsonl` is root-scoped and intentionally carries raw integrity evidence for fast reattachment; `catalog export` is a broader disaster-recovery semantic snapshot and deliberately omits raw hashes and other reproducible local caches.
+Never publish or attach personal media, catalog databases, provider exports/sidecars, credentials, raw hashes, Live Photo identifiers, GPS, private paths, or unsanitized diagnostic output to an issue or support request. Prefer a synthetic reproduction.
 
-Export a versioned disaster-recovery snapshot of the catalog's portable semantic state:
+High-priority security bugs include:
 
-```bash
-swift run photoarchive catalog export \
-  --output "/path/to/photoarchive-catalog.jsonl"
-```
+- path traversal outside configured roots;
+- unintended symlink following;
+- unavailable roots interpreted as deletion;
+- one-sided Live Photo mutation;
+- stale-plan mutation after source bytes change;
+- partial commit/corruption after interruption;
+- private file-level data leaking through the agent-safe interface;
+- command injection through optional subprocess adapters.
 
-The snapshot excludes absolute root paths and reproducible/sensitive local caches such as raw exact hashes, keyed Live Photo fingerprints, filesystem IDs, capture timestamps, provider object IDs, and generated scan/event results. It is still **local-private**, not share-safe, because it keeps relative paths, original filenames, collection labels, opaque IDs, asset/resource roles, root provenance, and stable root-marker bindings needed for disaster recovery.
-
-Restore always validates first and refuses to overwrite an existing catalog. Roots without a stable marker can be explicitly rebound to current directories:
-
-```bash
-swift run photoarchive catalog restore \
-  --to "/path/to/restored-catalog.sqlite3" \
-  --bind-root ROPAQUEID="/path/to/current/root" \
-  "/path/to/photoarchive-catalog.jsonl"
-# add --apply only after the dry run succeeds
-```
-
-The restored catalog seeds opaque root/resource/asset identity and collection semantics. The next normal scan re-reads media metadata and hashes from the files and replaces snapshot placeholders with fresh local evidence while retaining restored opaque asset identity when the same resources are found.
-
-Scan several sources together so exact copies, provenance, and cross-source Live Photo relationships can be reconciled without flattening the folders first:
-
-```bash
-swift run photoarchive scan \
-  --local "~/Pictures" \
-  --takeout "~/Pictures/Takeout" \
-  --takeout "~/Pictures/Takeout-2" \
-  --archive "/Volumes/Photo Archive/Photos"
-```
-
-Registered nested roots belong to the most specific root, so the Takeout directories above are not scanned a second time through `~/Pictures`. This preserves source provenance even when byte-identical copies cannot be distinguished from file content alone.
-
-Print a local human diagnostic report, which may contain paths:
-
-```bash
-swift run photoarchive scan --json --inbox "~/Photo Inbox"
-```
-
-For AI-agent workflows, use the privacy-minimized report instead:
-
-```bash
-swift run photoarchive scan --agent-json --inbox "~/Photo Inbox"
-```
-
-The agent-safe report exposes opaque IDs, provenance/status/counts, and relationships without filenames, paths, raw fingerprints, media content, capture timestamps, or exact byte sizes.
-
-Use a disposable catalog during experiments:
-
-```bash
-swift run photoarchive scan \
-  --catalog "/tmp/photoarchive-test.sqlite3" \
-  --reference "/path/to/test-fixtures"
-```
-
-Run the dependency-free synthetic self-test:
-
-```bash
-swift run photoarchive-selftest
-```
-
-The default working catalog is stored at:
-
-```text
-~/Library/Application Support/PhotoArchiveKit/catalog.sqlite3
-```
-
-Treat the catalog as private local application state. It may contain paths and locally computed integrity values even though reports are sanitized.
-
-## Commands
-
-### `photoarchive scan`
-
-Root options are repeatable:
-
-- `--inbox PATH` — Inbox with unknown provenance.
-- `--local PATH` — mixed local/iPhone-derived library.
-- `--apple PATH` — direct Apple/iPhone import.
-- `--takeout PATH` — Google Photos Takeout export.
-- `--google-web PATH` — Google Photos web download.
-- `--archive PATH`
-- `--import PATH`
-- `--reference PATH`
-
-Bare paths are treated as Inbox roots.
-
-For a path that is already registered, its saved usage role is authoritative: a later scan flag does not silently change `staging`/`primary_library`/`archive`/`import_source`/`reference`. Change policy explicitly with `photoarchive root role`.
-
-Other options:
-
-- `--catalog PATH` — choose a SQLite catalog.
-- `--json` — print local diagnostic JSON; may include paths and filenames.
-- `--agent-json` — print privacy-minimized JSON intended for AI agents.
-- `--no-exact-duplicates` — skip local SHA-256 comparison.
-- `--event-gap-hours NUMBER` — begin a new automatic event after this gap; default is six hours.
-- `--jobs NUMBER` — limit concurrent metadata probes.
-- `--no-progress` — disable stderr progress output. Progress never changes JSON/stdout payloads.
-
-Long scans follow the usual two-phase progress convention used by mature file tools: while recursively enumerating a tree, the final total is not yet known, so PhotoArchiveKit reports only the number discovered. Once enumeration finishes, determinate stages report `completed/total` and a percentage. This avoids an extra full pre-count pass over slow external disks.
-
-### `photoarchive archive-index`
-
-Indexes one existing marker-initialized user-managed archive root without reorganizing it.
-
-- default: update the Mac-local SQLite catalog only; do not write anything into the archive root;
-- `--apply`: additionally write `.photoarchive/inventory-v1.jsonl` inside that root;
-- `--fresh`: ignore both local SQLite and portable-inventory hash caches and re-read every media byte;
-- `--jobs NUMBER`: limit concurrent metadata probes;
-- `--json`: local-private diagnostic including the inventory path;
-- `--agent-json`: path/hash-free counts and status only.
-
-The current folder collection model represents folders that contain supported media (including their parent hierarchy); empty folders with no indexed media are not semantic collections.
-
-### `photoarchive doctor`
-
-Reports required system support and whether optional executables are already available in `PATH`.
-
-For registered Google Takeout roots, the scanner reads only the sidecar `title` and `photoTakenTime` fields when embedded media metadata cannot provide a reliable capture instant. GPS, descriptions, and unrelated Takeout metadata are not imported by this path.
-
-Sidecar policy is consumer-oriented: users are not expected to open JSON/XMP files manually. Recognized sidecars are associated with their logical media asset automatically: Google Takeout JSON uses its verified `title` target, while unambiguous same-basename XMP/AAE files are linked locally. These sidecars do not block `organize --singleton-leaf-only` from moving the media asset, but the sidecar file itself is preserved in place rather than silently deleted. Unknown or ambiguous JSON remains unassociated and may block deletion of its source folder until it is explicitly reviewed or preserved.
-
-Exact-only Live Photo reconciliation also treats a whole incomplete occurrence (`still_only` or `video_only`) as automatically redundant when every resource in that occurrence has a byte-identical same-role counterpart outside Takeout. This does not require a complete Live Photo counterpart elsewhere and never removes only part of an occurrence; quarantine still re-hashes the candidate and keeper before moving anything.
-
-Canonical keeper selection does **not** collapse intentional backup replicas across every registered root into one global file. Each registered root has one user-changeable usage role: `staging`, `primary_library`, `archive`, `import_source`, or `reference`. Staging is temporary working storage; primary library is retained long-term; archive is a long-term protection target that remains actively manageable; import source is cleanup-eligible after the required coverage/semantics checks; reference is comparison-only and read-only. Byte-identical same-root copies may be reduced in staging, primary, and archive roots while retaining one survivor in that root. Standalone exact copies may also be reduced across multiple **staging** roots, using the same canonical evidence ordering and Finder `Date Added` only after stronger filename evidence ties. Within the same usage role, provenance categories are not treated as implicit quality rankings; provenance remains source-specific semantic/safety evidence, and any separate provenance preference should be explicitly user-configured. This does not authorize cross-root Live Photo collapse, and primary/archive replicas are never removed merely because another root has an equal copy. Import-source cleanup retains its separate semantics gates. Every automatic mutation is still re-verified by fresh full-file hashes before quarantine.
-
-The native local duplicate-review GUI exposes the private side of this decision directly: one duplicate group at a time, with physical copies/Live Photo occurrences as aligned comparison columns, Quick Look previews, local-private catalog/filesystem facts, and difference markers. This is deliberately a **local-only** view; agent-safe reports continue to expose opaque group/root IDs and counts without filenames, paths, hashes, or media metadata. The current first milestone remains read-only and delegates all duplicate reasoning to `PhotoArchiveCore` rather than becoming a second decision engine.
-
-Library locations have an explicit root registry. `photoarchive root add`, `enable`, `disable`, `remove`, `role`, and `list` separate locations the user currently manages from roots merely observed by older scans. Roles are assigned **per registered root, not per device**, so different folders on the same Mac, HDD, or future file-cloud provider can have different policies. `root role ROOT ROLE` changes policy only and never moves/deletes media; role changes are recorded in the local catalog. `staging` and `primary_library` both map to the internal `inbox` kind, while `archive`, `import_source`, and `reference` map to their matching kinds. Provenance remains a separate fact. The portable catalog snapshot preserves the current role so disaster recovery does not silently change retention policy. `root remove` never touches media: it prunes current evidence while retaining minimal root identity/history.
-
-Example:
-
-```bash
-swift run photoarchive root add --role staging --provenance local_library "~/Pictures"
-swift run photoarchive root role ROOT_ID archive
-```
-
-Legacy catalogs are migrated conservatively: an existing `inbox` is initially treated as `primary_library` so an upgrade cannot silently make it easier to clean up. New `inbox` roots default to `staging` unless another role is explicitly selected.
-
-## Automatic organization strategy
-
-PhotoArchiveKit is being designed to reduce manual filing rather than merely provide a safer Finder workflow.
-
-The planned classifier is layered:
-
-1. **Deterministic grouping:** capture time, timezone, bursts, Live Photo relationship, and source session.
-2. **Local event segmentation:** already implemented as time-gap folder suggestions.
-3. **Archive-guided classification:** learn from the user's existing folder organization and propose the nearest known collection.
-4. **Optional on-device visual analysis:** use Apple Vision/Core ML locally for similarity and coarse content labels; feature vectors must remain local and must not appear in agent reports.
-5. **Confidence policy:** apply high-confidence proposals automatically, place medium-confidence groups in a small review queue, and fall back to date-event folders when confidence is low.
-
-This avoids hard-coding one person's folder names while allowing an archive to become easier to organize over time. See [Automatic Organization Strategy](docs/AUTOMATION.md).
-
-## Provider capability boundary
-
-Apple PhotoKit is the stronger future projection target for Live Photos and user albums because an authorized local macOS client can read Photos assets and collections, create a Live Photo from `.photo` plus `.pairedVideo` resources, and modify editable album membership.
-
-The current Google Photos Library API can upload compatible ordinary media without assigning an album, which is useful even when album synchronization is unavailable. Existing-library reads and album operations are generally limited to app-created content, and the public upload model does not document a composite Live Photo creation operation. The planned Google adapter will therefore support flat upload for eligible ordinary media while blocking any workflow that would split a validated Live Photo and misreport it as preserved.
-
-See [Provider Capabilities](docs/PROVIDER_CAPABILITIES.md) for the dated capability matrix and official references.
-
-## Privacy-safe AI agent boundary
-
-A core reason for PhotoArchiveKit to exist is to let an AI agent reason about duplicate groups, Live Photo completeness, provenance, and archive plans **without receiving the user's media or private file-level metadata**. Hashes, content identifiers, broad metadata dumps, filenames/paths, previews, and timestamps stay inside the local process. The agent receives opaque asset/group/plan IDs and semantic decisions only.
-
-This guarantee applies to PhotoArchiveKit's agent-safe interface; giving a general-purpose AI shell direct access to personal media would bypass that boundary. See [Privacy model](docs/PRIVACY.md) and [Agent interface](docs/AGENT_INTERFACE.md).
-
-## Live Photo safety model
-
-A Live Photo is one logical asset with at least two resources:
-
-```text
-Live Photo asset
-├── photo          HEIC or JPEG
-└── paired_video   MOV or MP4
-```
-
-PhotoArchiveKit does not use matching basenames as proof of pairing. It compares the internal still-side and QuickTime content identifiers locally, then requires the paired video to contain exactly one valid int8 `com.apple.quicktime.still-image-time` timed-metadata marker at a valid movie timeline position before the occurrence is considered complete. The marker payload itself is not treated as the timestamp; the timed metadata sample position is the evidence. Only a keyed identifier fingerprint and semantic validation status are exposed beyond the local metadata reader.
-
-A future mutating command must treat all resources of a validated Live Photo as one transaction. One-sided rename, move, quarantine, or deletion is forbidden by project policy.
+If GitHub private vulnerability reporting is enabled, use **Security → Report a vulnerability**. Otherwise open only a minimal public issue without sensitive details and request a private contact path.
 
 ## Optional interoperability
 
-The core does not vendor or require these projects, but future adapters may invoke copies already installed by the user:
+The required core does not bundle third-party executables. Optional adapters may use software the user installs and licenses separately:
 
-- `rclone` for verified off-site file replication;
-- `czkawka_cli` for additional duplicate and perceptual-similarity candidate generation;
-- ExifTool for broad metadata inspection and migration diagnostics;
-- `ffprobe` for optional video diagnostics.
+- `rclone` — file replica and verification workflows;
+- Czkawka / Krokiet — duplicate/similarity candidate generation;
+- ExifTool — broad metadata diagnostics;
+- `ffprobe` — optional video diagnostics;
+- osxphotos — possible Apple Photos query/export interoperability when it is preferable to custom code.
 
-Naming an interoperable tool is normal and preferable to hiding the dependency. Documentation must clearly state that the tool is optional, separately installed, separately licensed, and not affiliated with PhotoArchiveKit. See [THIRD_PARTY.md](THIRD_PARTY.md).
+External tools never own PhotoArchiveKit's semantic truth, Live Photo atomicity, keeper policy, or mutation authority.
 
-## Non-goals for the initial releases
+## Development
 
-- A continuously running sync daemon
-- A replacement gallery server
-- Browser automation for Google Photos
-- Permanent deletion
-- Silent metadata rewriting
-- Treating perceptual similarity as permission to delete
-- Assuming an unavailable external drive means its files were deleted
-- Uploading a HEIC and MOV as separate Google Photos items and calling the result a preserved Live Photo
+Before submitting a meaningful change, run:
 
-## Documentation
+```bash
+swift build
+swift run photoarchive-selftest
+bash scripts/check-public-tree.sh
+git diff --check
+```
 
-- [Project North Star and scope gate](docs/PROJECT_NORTH_STAR.md)
-- [Architecture](docs/ARCHITECTURE.md)
-- [Automatic organization strategy](docs/AUTOMATION.md)
-- [Provider capabilities](docs/PROVIDER_CAPABILITIES.md)
-- [Optional integrations](docs/INTEGRATIONS.md)
-- [Privacy model](docs/PRIVACY.md)
-- [Ingest guidance](docs/INGEST.md)
-- [Validation notes](docs/VALIDATION.md)
-- [Agent interface](docs/AGENT_INTERFACE.md)
-- [Roadmap](docs/ROADMAP.md)
-- [Changelog](CHANGELOG.md)
-- [Security policy](SECURITY.md)
-- [Contributing](CONTRIBUTING.md)
+For duplicate-review scrolling/layout changes also run:
+
+```bash
+bash scripts/test-review-scroll.sh
+```
+
+Keep changes small, preserve existing user data and behavior unless intentionally changed, and prefer synthetic/public fixtures over personal media.
+
+Git history is the change log; this repository does not maintain a duplicate hand-written changelog or detailed roadmap document.
 
 ## License
 
