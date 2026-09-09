@@ -130,6 +130,81 @@ final class ReviewStore: ObservableObject {
         } else {
             selectedRootIDs.insert(rootID)
         }
+        resetReviewChoicesForRootChange()
+        if selectedRootsNeedScan {
+            statusMessage = "아직 검사하지 않은 위치가 선택되었습니다. ‘선택한 위치 다시 검사’를 실행하면 함께 비교합니다."
+        }
+    }
+
+    func setRootActive(_ rootID: String, isActive: Bool) {
+        guard !isScanning else { return }
+        do {
+            let report = try RootRegistry.setState(
+                target: rootID,
+                state: isActive ? .active : .inactive
+            )
+            registeredRoots = try RootRegistry.list()
+            if !isActive {
+                selectedRootIDs.remove(rootID)
+            }
+            ensureUsableRootSelection()
+            resetReviewChoicesForRootChange()
+            statusMessage = isActive
+                ? "‘\(report.label)’을 비교 위치로 다시 활성화했습니다."
+                : "‘\(report.label)’을 비교 위치에서 비활성화했습니다. 파일은 변경되지 않았습니다."
+        } catch {
+            statusMessage = "비교 위치 상태를 바꾸지 못했습니다: \(error.localizedDescription)"
+        }
+    }
+
+    func setRootUsageRole(_ rootID: String, role: RootUsageRole) {
+        guard !isScanning else { return }
+        do {
+            let report = try RootRegistry.setUsageRole(target: rootID, role: role)
+            registeredRoots = try RootRegistry.list()
+
+            let previousSelectedRootIDs = selectedRootIDs
+            if let next = try? DuplicateReviewPresentationBuilder.latest() {
+                installPresentation(next, selectAllScopeRoots: false)
+                let scopeRootIDs = Set(next.scopeRoots.map(\.id))
+                selectedRootIDs = previousSelectedRootIDs.intersection(scopeRootIDs)
+                ensureUsableRootSelection()
+            } else {
+                resetReviewChoicesForRootChange()
+            }
+
+            statusMessage = "‘\(report.label)’의 역할을 ‘\(roleDisplayName(role))’(으)로 변경했습니다. 파일은 변경되지 않았습니다."
+        } catch {
+            statusMessage = "비교 위치 역할을 바꾸지 못했습니다: \(error.localizedDescription)"
+        }
+    }
+
+    func unregisterRoot(_ rootID: String) {
+        guard !isScanning else { return }
+        let label = registeredRoots.first(where: { $0.rootID == rootID })?.label ?? "비교 위치"
+        do {
+            _ = try RootRegistry.remove(target: rootID)
+            registeredRoots = try RootRegistry.list()
+            selectedRootIDs.remove(rootID)
+            ensureUsableRootSelection()
+            resetReviewChoicesForRootChange()
+            statusMessage = "‘\(label)’의 등록을 해제했습니다. 원본 파일은 변경되지 않았습니다."
+        } catch {
+            statusMessage = "비교 위치 등록을 해제하지 못했습니다: \(error.localizedDescription)"
+        }
+    }
+
+    private func ensureUsableRootSelection() {
+        let activeIDs = Set(activeRegisteredRoots.map(\.rootID))
+        selectedRootIDs.formIntersection(activeIDs)
+        guard selectedRootIDs.isEmpty else { return }
+        if let fallback = activeRegisteredRoots.first(where: \.isAvailable)
+            ?? activeRegisteredRoots.first {
+            selectedRootIDs.insert(fallback.rootID)
+        }
+    }
+
+    private func resetReviewChoicesForRootChange() {
         cleanupCopyIDsByItem = cleanupCopyIDsByItem.mapValues { _ in [] }
         explicitlyRemoveAllItemIDs.removeAll()
         removeAllConfirmation = nil
@@ -137,8 +212,15 @@ final class ReviewStore: ObservableObject {
         if let selection, !visibleItems.contains(where: { $0.id == selection }) {
             self.selection = visibleItems.first?.id
         }
-        if selectedRootsNeedScan {
-            statusMessage = "아직 검사하지 않은 위치가 선택되었습니다. ‘선택 위치 스캔’을 실행하면 함께 비교합니다."
+    }
+
+    private func roleDisplayName(_ role: RootUsageRole) -> String {
+        switch role {
+        case .staging: return "작업 위치"
+        case .primaryLibrary: return "주 라이브러리"
+        case .archive: return "장기 보관"
+        case .importSource: return "가져오기 원본"
+        case .reference: return "비교 전용"
         }
     }
 

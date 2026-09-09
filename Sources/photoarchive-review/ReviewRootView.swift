@@ -6,6 +6,8 @@ import SwiftUI
 struct ReviewRootView: View {
     @StateObject private var store = ReviewStore()
     @State private var addRootRequest: AddComparisonRootRequest?
+    @State private var isComparisonLocationsPresented = false
+    @State private var isRootManagerPresented = false
 
     var body: some View {
         ReviewWindowLayout {
@@ -33,47 +35,34 @@ struct ReviewRootView: View {
             }
 
             ToolbarItem {
-                Menu {
-                    if store.activeRegisteredRoots.isEmpty {
-                        Text("등록된 위치가 없습니다")
-                    } else {
-                        ForEach(store.activeRegisteredRoots, id: \.rootID) { root in
-                            Button {
-                                store.toggleRoot(root.rootID)
-                            } label: {
-                                Label(
-                                    rootMenuTitle(root),
-                                    systemImage: store.selectedRootIDs.contains(root.rootID)
-                                        ? "checkmark.circle.fill"
-                                        : "circle"
-                                )
-                            }
-                            .disabled(!root.isAvailable && !store.selectedRootIDs.contains(root.rootID))
-                        }
-                    }
-
-                    Divider()
-
-                    Button {
-                        chooseComparisonFolder()
-                    } label: {
-                        Label("폴더 추가…", systemImage: "folder.badge.plus")
-                    }
-
-                    Button {
-                        Task { await store.scanSelectedRoots() }
-                    } label: {
-                        Label(
-                            store.selectedRootsNeedScan ? "선택 위치 스캔 필요" : "선택 위치 다시 스캔",
-                            systemImage: "arrow.triangle.2.circlepath"
-                        )
-                    }
-                    .disabled(store.selectedRootIDs.isEmpty || store.isScanning)
+                Button {
+                    isComparisonLocationsPresented.toggle()
                 } label: {
                     Label("비교 위치", systemImage: "folder.badge.gearshape")
                 }
                 .help("비교할 위치를 선택하거나 새 폴더를 추가합니다")
                 .disabled(store.isScanning)
+                .popover(isPresented: $isComparisonLocationsPresented, arrowEdge: .top) {
+                    ComparisonLocationsPopover(
+                        roots: store.activeRegisteredRoots,
+                        selectedRootIDs: store.selectedRootIDs,
+                        selectedRootsNeedScan: store.selectedRootsNeedScan,
+                        isScanning: store.isScanning,
+                        onToggle: store.toggleRoot,
+                        onAddFolder: {
+                            isComparisonLocationsPresented = false
+                            chooseComparisonFolder()
+                        },
+                        onManage: {
+                            isComparisonLocationsPresented = false
+                            isRootManagerPresented = true
+                        },
+                        onScan: {
+                            isComparisonLocationsPresented = false
+                            Task { await store.scanSelectedRoots() }
+                        }
+                    )
+                }
             }
 
             ToolbarItem(placement: .primaryAction) {
@@ -105,6 +94,17 @@ struct ReviewRootView: View {
                         }
                     }
                 }
+            )
+        }
+        .sheet(isPresented: $isRootManagerPresented) {
+            ComparisonRootManagerSheet(
+                roots: store.registeredRoots,
+                isWorking: store.isScanning,
+                statusMessage: store.statusMessage,
+                onClose: { isRootManagerPresented = false },
+                onSetActive: store.setRootActive,
+                onSetRole: store.setRootUsageRole,
+                onRemove: store.unregisterRoot
             )
         }
         .sheet(item: $store.preparedCleanup) { prepared in
@@ -143,11 +143,6 @@ struct ReviewRootView: View {
         panel.canCreateDirectories = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
         addRootRequest = AddComparisonRootRequest(url: url.standardizedFileURL)
-    }
-
-    private func rootMenuTitle(_ root: RegisteredRootReport) -> String {
-        let availability = root.isAvailable ? "" : " · 오프라인"
-        return "\(root.label) · \(rootUsageRoleLabel(root.usageRole))\(availability)"
     }
 
     private var sidebar: some View {
@@ -377,6 +372,254 @@ private struct ReviewCleanupConfirmationSheet: View {
 private struct AddComparisonRootRequest: Identifiable {
     let id = UUID()
     let url: URL
+}
+
+private struct ComparisonLocationsPopover: View {
+    let roots: [RegisteredRootReport]
+    let selectedRootIDs: Set<String>
+    let selectedRootsNeedScan: Bool
+    let isScanning: Bool
+    let onToggle: (String) -> Void
+    let onAddFolder: () -> Void
+    let onManage: () -> Void
+    let onScan: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text("비교 위치")
+                    .font(.headline)
+                Text("\(selectedRootIDs.count)개 위치 선택됨")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+
+            if roots.isEmpty {
+                ContentUnavailableView(
+                    "등록된 위치가 없습니다",
+                    systemImage: "folder",
+                    description: Text("폴더를 추가해 비교 위치를 등록하세요.")
+                )
+                .frame(width: 290, height: 120)
+            } else {
+                VStack(alignment: .leading, spacing: 8) {
+                    ForEach(roots, id: \.rootID) { root in
+                        let isSelected = selectedRootIDs.contains(root.rootID)
+                        Toggle(
+                            isOn: Binding(
+                                get: { isSelected },
+                                set: { _ in onToggle(root.rootID) }
+                            )
+                        ) {
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(root.label)
+                                    .lineLimit(1)
+                                Text(rootSubtitle(root))
+                                    .font(.caption)
+                                    .foregroundStyle(root.isAvailable ? .secondary : .tertiary)
+                                    .lineLimit(1)
+                            }
+                        }
+                        .toggleStyle(.checkbox)
+                        .disabled(
+                            isScanning
+                                || (!root.isAvailable && !isSelected)
+                                || (isSelected && selectedRootIDs.count == 1)
+                        )
+                    }
+                }
+            }
+
+            Divider()
+
+            VStack(alignment: .leading, spacing: 8) {
+                Button(action: onAddFolder) {
+                    Label("폴더 추가…", systemImage: "folder.badge.plus")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(.plain)
+
+                Button(action: onManage) {
+                    Label("비교 위치 관리…", systemImage: "slider.horizontal.3")
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(.plain)
+
+                Divider()
+
+                Button(action: onScan) {
+                    Label(
+                        selectedRootsNeedScan ? "선택한 위치 검사" : "선택한 위치 다시 검사",
+                        systemImage: "arrow.triangle.2.circlepath"
+                    )
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+                .buttonStyle(.plain)
+                .disabled(selectedRootIDs.isEmpty || isScanning)
+            }
+        }
+        .padding(14)
+        .frame(width: 320)
+    }
+
+    private func rootSubtitle(_ root: RegisteredRootReport) -> String {
+        if root.isAvailable {
+            return rootUsageRoleLabel(root.usageRole)
+        }
+        return "\(rootUsageRoleLabel(root.usageRole)) · 오프라인"
+    }
+}
+
+private struct RootRemovalRequest: Identifiable {
+    let rootID: String
+    let label: String
+    var id: String { rootID }
+}
+
+private struct ComparisonRootManagerSheet: View {
+    let roots: [RegisteredRootReport]
+    let isWorking: Bool
+    let statusMessage: String?
+    let onClose: () -> Void
+    let onSetActive: (String, Bool) -> Void
+    let onSetRole: (String, RootUsageRole) -> Void
+    let onRemove: (String) -> Void
+
+    @State private var removalRequest: RootRemovalRequest?
+
+    private var sortedRoots: [RegisteredRootReport] {
+        roots.sorted {
+            if $0.state != $1.state {
+                return $0.state == .active
+            }
+            if $0.label != $1.label {
+                return $0.label.localizedStandardCompare($1.label) == .orderedAscending
+            }
+            return $0.canonicalPath < $1.canonicalPath
+        }
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 5) {
+                Text("비교 위치 관리")
+                    .font(.title2.weight(.semibold))
+                Text("비교 위치의 사용 여부와 역할만 바꿉니다. 이 화면에서 원본 파일을 이동하거나 삭제하지 않습니다.")
+                    .foregroundStyle(.secondary)
+            }
+
+            ScrollView {
+                LazyVStack(spacing: 10) {
+                    ForEach(sortedRoots, id: \.rootID) { root in
+                        rootRow(root)
+                    }
+                }
+                .padding(.vertical, 1)
+            }
+            .frame(minHeight: 260, maxHeight: 440)
+
+            if let statusMessage, !statusMessage.isEmpty {
+                Text(statusMessage)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            HStack {
+                Spacer()
+                Button("완료", action: onClose)
+                    .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(22)
+        .frame(width: 700)
+        .alert(item: $removalRequest) { request in
+            Alert(
+                title: Text("‘\(request.label)’ 등록을 해제할까요?"),
+                message: Text("PhotoArchiveKit의 현재 등록과 catalog 관측 정보가 정리됩니다. 원본 폴더와 media 파일은 변경되지 않습니다."),
+                primaryButton: .destructive(Text("등록 해제")) {
+                    onRemove(request.rootID)
+                },
+                secondaryButton: .cancel(Text("취소"))
+            )
+        }
+    }
+
+    @ViewBuilder
+    private func rootRow(_ root: RegisteredRootReport) -> some View {
+        HStack(spacing: 14) {
+            Image(systemName: root.isAvailable ? "folder.fill" : "folder.badge.questionmark")
+                .font(.system(size: 21))
+                .foregroundStyle(root.isAvailable ? .secondary : .tertiary)
+                .frame(width: 28)
+
+            VStack(alignment: .leading, spacing: 3) {
+                HStack(spacing: 6) {
+                    Text(root.label)
+                        .font(.headline)
+                        .lineLimit(1)
+                    if !root.isAvailable {
+                        Text("오프라인")
+                            .font(.caption2.weight(.medium))
+                            .foregroundStyle(.secondary)
+                            .padding(.horizontal, 6)
+                            .padding(.vertical, 2)
+                            .background(.background.secondary, in: Capsule())
+                    }
+                }
+                Text(root.canonicalPath)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Text("출처: \(sourceProvenanceLabel(root.provenance))")
+                    .font(.caption2)
+                    .foregroundStyle(.tertiary)
+            }
+
+            Spacer(minLength: 14)
+
+            Toggle(
+                "사용",
+                isOn: Binding(
+                    get: { root.state == .active },
+                    set: { onSetActive(root.rootID, $0) }
+                )
+            )
+            .toggleStyle(.switch)
+            .disabled(isWorking)
+
+            Picker(
+                "역할",
+                selection: Binding(
+                    get: { root.usageRole },
+                    set: { onSetRole(root.rootID, $0) }
+                )
+            ) {
+                ForEach(RootUsageRole.allCases, id: \.self) { role in
+                    Text(rootUsageRoleLabel(role)).tag(role)
+                }
+            }
+            .labelsHidden()
+            .frame(width: 135)
+            .disabled(isWorking)
+
+            Menu {
+                Button("등록 해제…", role: .destructive) {
+                    removalRequest = RootRemovalRequest(rootID: root.rootID, label: root.label)
+                }
+            } label: {
+                Image(systemName: "ellipsis.circle")
+                    .imageScale(.large)
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .disabled(isWorking)
+            .help("이 비교 위치를 관리합니다")
+        }
+        .padding(12)
+        .background(.background.secondary, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+    }
 }
 
 private struct AddComparisonRootSheet: View {
