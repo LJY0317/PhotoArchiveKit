@@ -14,7 +14,12 @@ struct ReviewRootView: View {
             sidebar
                 .navigationSplitViewColumnWidth(min: 250, ideal: 290, max: 360)
         } detail: {
-            detail
+            VStack(spacing: 0) {
+                if store.isScanning {
+                    ReviewScanProgressStrip(progress: store.scanProgress)
+                }
+                detail
+            }
         } actions: {
             ReviewActionBar(store: store)
         }
@@ -207,18 +212,7 @@ private struct ReviewActionBar: View {
 
     var body: some View {
         HStack(spacing: 12) {
-            if store.isScanning {
-                ProgressView()
-                    .controlSize(.small)
-                Text("비교하는 중…")
-                    .font(.caption.weight(.medium))
-                    .foregroundStyle(.secondary)
-            }
-
-            if let status = store.statusMessage {
-                if store.isScanning {
-                    Divider().frame(height: 16)
-                }
+            if let status = store.statusMessage, !store.isScanning {
                 Text(status)
                     .font(.caption)
                     .foregroundStyle(.secondary)
@@ -252,6 +246,62 @@ private struct ReviewActionBar: View {
         .padding(.vertical, 9)
         .background(.bar)
         .overlay(alignment: .top) { Divider() }
+    }
+}
+
+private struct ReviewScanProgressStrip: View {
+    let progress: ScanProgress?
+
+    private var title: String {
+        switch progress?.stage {
+        case .enumerating, .none:
+            return "파일 찾는 중"
+        case .metadata:
+            return "파일 확인 중"
+        case .hashingDuplicates, .hashingIntegrity:
+            return "중복 확인 중"
+        case .cataloging, .finalizing:
+            return "마무리 중"
+        }
+    }
+
+    private var fraction: Double? {
+        guard let progress,
+              let total = progress.totalUnitCount,
+              total > 0
+        else { return nil }
+        return min(max(Double(progress.completedUnitCount) / Double(total), 0), 1)
+    }
+
+    var body: some View {
+        VStack(spacing: 6) {
+            HStack(spacing: 8) {
+                Text(title)
+                    .font(.caption.weight(.medium))
+
+                Spacer()
+
+                if let fraction {
+                    Text(fraction, format: .percent.precision(.fractionLength(0)))
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+            }
+
+            if let fraction {
+                ProgressView(value: fraction)
+                    .progressViewStyle(.linear)
+            } else {
+                ProgressView()
+                    .progressViewStyle(.linear)
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 8)
+        .background(.bar)
+        .overlay(alignment: .bottom) { Divider() }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(title)
     }
 }
 

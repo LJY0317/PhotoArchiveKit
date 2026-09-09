@@ -27,6 +27,7 @@ final class ReviewStore: ObservableObject {
     @Published var statusMessage: String?
     @Published var isLoading = false
     @Published var isScanning = false
+    @Published private(set) var scanProgress: ScanProgress?
     @Published var isPreparingCleanup = false
     @Published var isApplyingCleanup = false
     @Published var cleanupErrorMessage: String?
@@ -240,6 +241,7 @@ final class ReviewStore: ObservableObject {
         }
 
         isScanning = true
+        scanProgress = ScanProgress(stage: .enumerating, completedUnitCount: 0)
         errorMessage = nil
         statusMessage = "선택한 \(roots.count)개 위치를 비교하는 중입니다…"
         let scanRoots = roots.map {
@@ -250,17 +252,29 @@ final class ReviewStore: ObservableObject {
             )
         }
 
+        let progressHandler: ScanProgressHandler = { [weak self] progress in
+            Task { @MainActor [weak self] in
+                guard let self, self.isScanning else { return }
+                self.scanProgress = progress
+            }
+        }
+
         do {
             let next = try await Task.detached(priority: .userInitiated) {
-                try await Self.scanPresentation(roots: scanRoots)
+                try await Self.scanPresentation(
+                    roots: scanRoots,
+                    progressHandler: progressHandler
+                )
             }.value
             registeredRoots = try RootRegistry.list()
             installPresentation(next, selectAllScopeRoots: true)
             statusMessage = "비교가 완료되었습니다 · 중복 항목 \(next.items.count)개"
+            scanProgress = nil
             isScanning = false
             return true
         } catch {
             statusMessage = "비교하지 못했습니다: \(error.localizedDescription)"
+            scanProgress = nil
             isScanning = false
             return false
         }
@@ -563,10 +577,14 @@ final class ReviewStore: ObservableObject {
     }
 
     nonisolated private static func scanPresentation(
-        roots: [ScanRoot]
+        roots: [ScanRoot],
+        progressHandler: ScanProgressHandler? = nil
     ) async throws -> DuplicateReviewPresentation {
         let scanner = try ArchiveScanner()
-        let report = try await scanner.scan(roots: roots)
+        let report = try await scanner.scan(
+            roots: roots,
+            options: ScanOptions(progressHandler: progressHandler)
+        )
         let plan = ReconciliationPlanner.makePlan(from: report)
         let referenceKeys = Set(plan.items.flatMap { item in
             (item.preferredResources + item.candidateResources).map {

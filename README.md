@@ -142,7 +142,7 @@ swift run photoarchive plan \
   --takeout "~/Pictures/Takeout"
 ```
 
-The native duplicate-review app shows physical copies or Live Photo occurrences as aligned comparison columns. User-facing metadata stays compact; deeper local metadata can be expanded as advanced information. Selection is reversible and is not itself mutation authority. The toolbar's comparison-locations popover uses standard multi-select checkboxes and keeps root roles as secondary information; registration state, role changes, and unregistering are separated into a dedicated management sheet. The ordinary refresh button reloads recent review results without rereading media, while **Scan Selected Locations** explicitly scans the chosen roots.
+The native duplicate-review app shows physical copies or Live Photo occurrences as aligned comparison columns. User-facing metadata stays compact; deeper local metadata can be expanded as advanced information. Selection is reversible and is not itself mutation authority. The toolbar's comparison-locations popover uses standard multi-select checkboxes and keeps root roles as secondary information; registration state, role changes, and unregistering are separated into a dedicated management sheet. The ordinary refresh button reloads recent review results without rereading media, while **Scan Selected Locations** explicitly scans the chosen roots and shows a compact in-content progress bar.
 
 The Finder-oriented review workspace is also available:
 
