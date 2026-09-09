@@ -43,6 +43,7 @@ PhotoArchiveKit의 중요한 변경 사항을 여기에 기록한다.
 
 ### 변경됨
 
+- native duplicate-review GUI의 소비자 화면을 더 압축했다. sidebar 상단은 leading 정렬로 맞추고 Live Photo/삭제 badge 크기를 줄였으며, 삭제 선택을 되돌리는 control은 destructive red 대신 중립적인 `선택 취소`로 표시한다. 기본 metadata 표는 파일명·전체 경로·미디어 종류·원본 촬영 시각·EXIF DateTimeOriginal·EXIF OffsetTimeOriginal·QuickTime 생성 시각·Finder에 추가된 시각·전체 크기만 남기고, 권한/owner/group/internal ID/hash/catalog history 등 진단 항목은 기본 화면에서 숨긴다. 원본 촬영 시각은 EXIF DateTimeOriginal 또는 QuickTime creation date만 인정하고 Google Takeout/file-creation fallback만 있으면 `—`로 표시한다. 전체 크기는 Live Photo를 포함한 현재 copy resource의 논리 byte 수 합계를 `2,868,570 B`처럼 반올림 없이 전체 정수 byte 값으로 우선 표시한다. 한국어 UI를 먼저 완성하며 실제 두 번째 locale이 생기기 전에는 비기능 언어 전환 control을 노출하지 않고, 영어 추가 시 String Catalog와 앱 설정의 언어 선택 UI를 붙이는 방향으로 확장한다.
 - 공개 repository 문서를 제품·기여·재사용 가능한 validation 중심으로 정리하고, maintainer의 현재 작업 상태와 개인 validation 이력은 Git에서 제거해 `.local/` 전용으로 분리
 
 ### 보안
