@@ -669,10 +669,12 @@ private struct ReviewComparisonTable: View {
     let cleanupToggleHelp: (DuplicateReviewPresentationCopy) -> String
 
     @State private var hoveredCopyID: String?
+    @State private var showsAdvancedInformation = false
 
     var body: some View {
         let rows = comparisonRows(for: copies)
-        let lastRowID = rows.last?.id
+        let advancedRows = advancedComparisonRows(for: copies)
+        let lastRowID = showsAdvancedInformation ? advancedRows.last?.id : rows.last?.id
         Grid(alignment: .topLeading, horizontalSpacing: gap, verticalSpacing: 0) {
             GridRow(alignment: .top) {
                 Text("미리보기")
@@ -714,43 +716,28 @@ private struct ReviewComparisonTable: View {
                 .gridCellColumns(copies.count + 1)
                 .allowsHitTesting(false)
 
-            ForEach(rows) { row in
-                GridRow(alignment: .top) {
-                    ComparisonMetadataLabel(row: row, width: labelWidth)
+            metadataRows(rows, lastRowID: lastRowID)
 
-                    ForEach(Array(row.values.enumerated()), id: \.offset) { index, value in
-                        let copy = copies[index]
-                        ComparisonMetadataCell(
-                            row: row,
-                            value: value,
-                            copy: copy,
-                            width: columnWidth,
-                            isMarkedForCleanup: cleanupCopyIDs.contains(copy.id),
-                            onToggleCleanup: { onToggleCleanupFromColumn(copy) },
-                            canToggleCleanup: canToggleCleanup(copy),
-                            cleanupToggleHelp: columnToggleHelp(copy)
-                        )
-                        .onHover { hovering in
-                            if hovering {
-                                hoveredCopyID = copy.id
-                            } else if hoveredCopyID == copy.id {
-                                hoveredCopyID = nil
-                            }
-                        }
-                        .anchorPreference(
-                            key: ReviewColumnBoundsPreferenceKey.self,
-                            value: .bounds
-                        ) { anchor in
-                            row.id == lastRowID
-                                ? [copy.id: ReviewColumnBounds(top: nil, bottom: anchor)]
-                                : [:]
-                        }
-                    }
+            Button {
+                withAnimation(.easeInOut(duration: 0.16)) {
+                    showsAdvancedInformation.toggle()
                 }
+            } label: {
+                Label(
+                    showsAdvancedInformation ? "고급 정보 숨기기" : "고급 정보 보기",
+                    systemImage: showsAdvancedInformation ? "chevron.up" : "chevron.down"
+                )
+                .font(.caption.weight(.medium))
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .padding(.vertical, 10)
+            .gridCellColumns(copies.count + 1)
 
-                Divider()
-                    .gridCellColumns(copies.count + 1)
-                    .allowsHitTesting(false)
+            if showsAdvancedInformation {
+                metadataRows(advancedRows, lastRowID: lastRowID)
             }
         }
         .padding(16)
@@ -792,6 +779,50 @@ private struct ReviewComparisonTable: View {
         if isCleanup { return Color.red.opacity(0.68) }
         if isHovered { return Color.accentColor.opacity(0.38) }
         return Color.primary.opacity(0.08)
+    }
+
+    @ViewBuilder
+    private func metadataRows(_ rows: [ComparisonRowSpec], lastRowID: String?) -> some View {
+        ForEach(rows) { row in
+            GridRow(alignment: .top) {
+                ComparisonMetadataLabel(row: row, width: labelWidth)
+
+                ForEach(Array(row.values.enumerated()), id: \.offset) { index, value in
+                    let copy = copies[index]
+                    ComparisonMetadataCell(
+                        row: row,
+                        value: value,
+                        copy: copy,
+                        width: columnWidth,
+                        isMarkedForCleanup: cleanupCopyIDs.contains(copy.id),
+                        onToggleCleanup: { onToggleCleanupFromColumn(copy) },
+                        canToggleCleanup: canToggleCleanup(copy),
+                        cleanupToggleHelp: columnToggleHelp(copy)
+                    )
+                    .onHover { hovering in
+                        if hovering {
+                            hoveredCopyID = copy.id
+                        } else if hoveredCopyID == copy.id {
+                            hoveredCopyID = nil
+                        }
+                    }
+                    .anchorPreference(
+                        key: ReviewColumnBoundsPreferenceKey.self,
+                        value: .bounds
+                    ) { anchor in
+                        row.id == lastRowID
+                            ? [copy.id: ReviewColumnBounds(top: nil, bottom: anchor)]
+                            : [:]
+                    }
+                }
+            }
+
+            if row.id != rows.last?.id {
+                Divider()
+                    .gridCellColumns(copies.count + 1)
+                    .allowsHitTesting(false)
+            }
+        }
     }
 }
 
@@ -930,7 +961,7 @@ private struct CopyHeaderCell: View {
                     Text(resourceRoleLabel(resource.role))
                         .fontWeight(resource.role == .pairedVideo ? .semibold : .regular)
                     Spacer(minLength: 4)
-                    Text(ByteCountFormatter.string(fromByteCount: resource.byteSize, countStyle: .file))
+                    Text(formatBytes(resource.fileSystemFacts.currentByteSize ?? resource.byteSize))
                         .monospacedDigit()
                 }
                 .font(.caption)
@@ -1129,13 +1160,69 @@ private func comparisonRows(
         comparisonRow("media-kind", "미디어 종류", copies: copies) {
             componentText($0) { mediaKindLabel($0.mediaKind) }
         },
-        livePhotoTimeComparisonRow(
+        comparisonRow(
             "capture-primary",
-            "원본 촬영 시각",
+            "촬영 시각",
             copies: copies,
             date: { consumerOriginalCaptureTime($0.primaryResource?.captureTime)?.instant }
-        ) {
-            consumerOriginalCaptureLabel($0.captureTime)
+        ) { copy in
+            consumerOriginalCaptureLabel(copy.primaryResource?.captureTime)
+        },
+        livePhotoTimeComparisonRow("date-added", "Finder에 추가된 시각", copies: copies, date: { $0.primaryResource?.addedAt }) {
+            formatDate($0.addedAt)
+        },
+        livePhotoTimeComparisonRow("creation-date", "파일 생성 시각", copies: copies, date: { $0.primaryResource?.fileSystemFacts.creationDate }) {
+            formatDate($0.fileSystemFacts.creationDate)
+        },
+        livePhotoTimeComparisonRow("filesystem-modified", "파일 수정 시각", copies: copies, date: { $0.primaryResource?.fileSystemFacts.modificationDate }) {
+            formatDate($0.fileSystemFacts.modificationDate)
+        },
+        comparisonRow("current-total-bytes", "전체 크기", copies: copies, monospaced: true) {
+            componentText($0) { resource in
+                formatBytes(resource.fileSystemFacts.currentByteSize ?? resource.byteSize)
+            }
+        }
+    ]
+}
+
+private func advancedComparisonRows(
+    for copies: [DuplicateReviewPresentationCopy]
+) -> [ComparisonRowSpec] {
+    let usesLivePhotoSlots = copies.contains { $0.hasLivePhotoStill || $0.hasPairedVideo }
+    func componentText(
+        _ copy: DuplicateReviewPresentationCopy,
+        value: (DuplicateReviewPresentationResource) -> String
+    ) -> String {
+        componentLines(copy, forceLivePhotoSlots: usesLivePhotoSlots, value: value)
+    }
+
+    return [
+        comparisonRow("original-name", "최초 파일명", copies: copies, sectionTitle: "이름과 형식") {
+            componentText($0) { $0.details?.originalFileName ?? "—" }
+        },
+        comparisonRow("extension", "확장자", copies: copies) {
+            componentText($0) { $0.fileExtension.isEmpty ? "—" : $0.fileExtension }
+        },
+        comparisonRow("role", "파일 역할", copies: copies) {
+            componentText($0) { resourceRoleLabel($0.role) }
+        },
+        comparisonRow("file-type", "파일 종류", copies: copies) {
+            componentText($0) { $0.fileSystemFacts.fileType ?? "—" }
+        },
+        comparisonRow("type-identifier", "파일 형식 식별자", copies: copies, monospaced: true) {
+            componentText($0) { $0.fileSystemFacts.typeIdentifier ?? "—" }
+        },
+
+        livePhotoTimeComparisonRow(
+            "capture-evidence-agreement",
+            "촬영 시각 근거 일치 여부",
+            copies: copies,
+            sectionTitle: "촬영 메타데이터"
+        ) { resource in
+            if resource.role == .pairedVideo {
+                return quickTimeCaptureEvidenceLabel(resource.captureTime)
+            }
+            return imageCaptureDateAgreementLabel(resource.imageCaptureDateEvidence)
         },
         livePhotoTimeComparisonRow("exif-original", "EXIF DateTimeOriginal", copies: copies, monospaced: true) {
             $0.imageCaptureDateEvidence?.exifDateTimeOriginal ?? "—"
@@ -1143,14 +1230,177 @@ private func comparisonRows(
         livePhotoTimeComparisonRow("exif-offset-original", "EXIF OffsetTimeOriginal", copies: copies, monospaced: true) {
             $0.imageCaptureDateEvidence?.exifOffsetTimeOriginal ?? "—"
         },
+        livePhotoTimeComparisonRow("exif-subsec-original", "EXIF SubSecTimeOriginal", copies: copies, monospaced: true) {
+            $0.imageCaptureDateEvidence?.exifSubsecTimeOriginal ?? "—"
+        },
+        livePhotoTimeComparisonRow("exif-digitized", "EXIF DateTimeDigitized", copies: copies, monospaced: true) {
+            $0.imageCaptureDateEvidence?.exifDateTimeDigitized ?? "—"
+        },
+        livePhotoTimeComparisonRow("exif-offset-digitized", "EXIF OffsetTimeDigitized", copies: copies, monospaced: true) {
+            $0.imageCaptureDateEvidence?.exifOffsetTimeDigitized ?? "—"
+        },
+        livePhotoTimeComparisonRow("exif-subsec-digitized", "EXIF SubSecTimeDigitized", copies: copies, monospaced: true) {
+            $0.imageCaptureDateEvidence?.exifSubsecTimeDigitized ?? "—"
+        },
+        livePhotoTimeComparisonRow("tiff-datetime", "TIFF DateTime", copies: copies, monospaced: true) {
+            $0.imageCaptureDateEvidence?.tiffDateTime ?? "—"
+        },
         livePhotoTimeComparisonRow("quicktime-creation", "QuickTime 생성 시각", copies: copies, monospaced: true) {
             quickTimeCaptureEvidenceLabel($0.captureTime)
         },
-        livePhotoTimeComparisonRow("date-added", "Finder에 추가된 시각", copies: copies, date: { $0.primaryResource?.addedAt }) {
-            formatDate($0.addedAt)
+        livePhotoTimeComparisonRow("capture-instant", "촬영 시각 (시간대 반영)", copies: copies, date: { $0.primaryResource?.captureTime?.instant }) {
+            formatDate($0.captureTime?.instant)
         },
-        comparisonRow("current-total-bytes", "전체 크기", copies: copies, monospaced: true) {
-            formatBytes(currentCopyByteSize($0))
+        livePhotoTimeComparisonRow("capture-source", "촬영 시각 출처", copies: copies) {
+            $0.captureTime.map { captureSourceLabel($0.source) } ?? "—"
+        },
+        livePhotoTimeComparisonRow("capture-confidence", "촬영 시각 신뢰도", copies: copies) {
+            $0.captureTime.map { captureConfidenceLabel($0.confidence) } ?? "—"
+        },
+
+        livePhotoTimeComparisonRow(
+            "catalog-modified",
+            "이전에 기록된 수정 시각",
+            copies: copies,
+            sectionTitle: "PhotoArchiveKit 기록",
+            date: { $0.primaryResource?.details?.catalogModifiedAt }
+        ) {
+            formatDate($0.details?.catalogModifiedAt)
+        },
+        livePhotoTimeComparisonRow("first-seen", "처음 확인한 시각", copies: copies, date: { $0.primaryResource?.details?.firstSeenAt }) {
+            formatDate($0.details?.firstSeenAt)
+        },
+        livePhotoTimeComparisonRow("last-seen", "최근 확인한 시각", copies: copies, date: { $0.primaryResource?.details?.lastSeenAt }) {
+            formatDate($0.details?.lastSeenAt)
+        },
+        comparisonRow("location-count", "위치 변경 기록 수", copies: copies, monospaced: true) {
+            componentText($0) { $0.details.map { String($0.locationHistoryCount) } ?? "—" }
+        },
+
+        comparisonRow("root-label", "위치", copies: copies, sectionTitle: "위치와 출처") {
+            componentText($0) { $0.rootLabel }
+        },
+        comparisonRow("relative-path", "상대 경로", copies: copies) {
+            componentText($0) { $0.relativePath }
+        },
+        comparisonRow("root-kind", "위치 종류", copies: copies) {
+            componentText($0) { sourceRootKindLabel($0.rootKind) }
+        },
+        comparisonRow("usage-role", "위치 역할", copies: copies) {
+            componentText($0) { rootUsageRoleLabel($0.rootUsageRole) }
+        },
+        comparisonRow("provenance", "출처", copies: copies) {
+            componentText($0) { sourceProvenanceLabel($0.rootProvenance) }
+        },
+        comparisonRow("stable-marker", "위치 확인 키", copies: copies, monospaced: true) {
+            componentText($0) { $0.stableMarkerKey ?? "—" }
+        },
+
+        comparisonRow("catalog-total-bytes", "기록된 전체 크기", copies: copies, sectionTitle: "크기와 저장 공간", monospaced: true) {
+            formatBytes($0.totalByteSize)
+        },
+        comparisonRow("catalog-resource-bytes", "기록된 파일 크기", copies: copies, monospaced: true) {
+            componentText($0) { formatBytes($0.byteSize) }
+        },
+        comparisonRow("filesystem-resource-bytes", "현재 파일 크기", copies: copies, monospaced: true) {
+            componentText($0) { resource in
+                resource.fileSystemFacts.currentByteSize.map(formatBytes) ?? "—"
+            }
+        },
+        comparisonRow("allocated-bytes", "디스크 사용 크기", copies: copies, monospaced: true) {
+            componentText($0) { resource in
+                resource.fileSystemFacts.allocatedByteSize.map(formatBytes) ?? "—"
+            }
+        },
+        comparisonRow("total-allocated-bytes", "전체 디스크 사용 크기", copies: copies, monospaced: true) {
+            componentText($0) { resource in
+                resource.fileSystemFacts.totalAllocatedByteSize.map(formatBytes) ?? "—"
+            }
+        },
+
+        comparisonRow("freshness", "현재 파일 상태", copies: copies, sectionTitle: "무결성과 Live Photo") {
+            componentText($0) { resourceFreshnessLabel($0) }
+        },
+        comparisonRow("exact-sha256", "기록된 SHA-256", copies: copies, monospaced: true) {
+            componentText($0) { $0.details?.exactSHA256Hex ?? "—" }
+        },
+        comparisonRow("fresh-hash", "현재 SHA-256", copies: copies) {
+            componentText($0) { _ in
+                "아직 확인하지 않음 — 이동 직전에 확인"
+            }
+        },
+        comparisonRow("live-fingerprint", "Live Photo 식별값", copies: copies, monospaced: true) {
+            componentText($0) { $0.details?.liveIdentifierFingerprintHex ?? "—" }
+        },
+        comparisonRow("live-timed-status", "Live Photo 시간 정보", copies: copies) {
+            componentText($0) { $0.details?.liveTimedMetadataStatus?.rawValue ?? "—" }
+        },
+
+        comparisonRow("exists", "현재 파일 존재", copies: copies, sectionTitle: "파일 시스템") {
+            componentText($0) { $0.fileSystemFacts.exists ? "예" : "아니오" }
+        },
+        comparisonRow("catalog-fs-id", "기록된 파일 시스템 식별자", copies: copies, monospaced: true) {
+            componentText($0) { $0.details?.catalogFileSystemIdentifier ?? "—" }
+        },
+        comparisonRow("current-fs-id", "현재 파일 시스템 식별자", copies: copies, monospaced: true) {
+            componentText($0) { $0.fileSystemFacts.fileSystemIdentifier ?? "—" }
+        },
+        comparisonRow("owner", "소유자", copies: copies) {
+            componentText($0) { $0.fileSystemFacts.ownerAccountName ?? "—" }
+        },
+        comparisonRow("group", "소유 그룹", copies: copies) {
+            componentText($0) { $0.fileSystemFacts.groupOwnerAccountName ?? "—" }
+        },
+        comparisonRow("permissions", "POSIX 권한", copies: copies, monospaced: true) {
+            componentText($0) { resource in
+                resource.fileSystemFacts.posixPermissions.map { String(format: "%04o", $0) } ?? "—"
+            }
+        },
+        comparisonRow("immutable", "변경 금지", copies: copies) {
+            componentText($0) { optionalBool($0.fileSystemFacts.isImmutable) }
+        },
+        comparisonRow("append-only", "추가만 허용", copies: copies) {
+            componentText($0) { optionalBool($0.fileSystemFacts.isAppendOnly) }
+        },
+        comparisonRow("hidden", "숨김 파일", copies: copies) {
+            componentText($0) { optionalBool($0.fileSystemFacts.isHidden) }
+        },
+        comparisonRow("readable", "읽기 가능", copies: copies) {
+            componentText($0) { optionalBool($0.fileSystemFacts.isReadable) }
+        },
+        comparisonRow("writable", "쓰기 가능", copies: copies) {
+            componentText($0) { optionalBool($0.fileSystemFacts.isWritable) }
+        },
+        comparisonRow("executable", "실행 가능", copies: copies) {
+            componentText($0) { optionalBool($0.fileSystemFacts.isExecutable) }
+        },
+        comparisonRow("xattrs", "확장 속성", copies: copies, monospaced: true) {
+            componentText($0) { xattrSummary($0.fileSystemFacts.extendedAttributes) }
+        },
+
+        comparisonRow("metadata-probe", "메타데이터 읽기 상태", copies: copies, sectionTitle: "내부 기록") {
+            componentText($0) { resource in
+                guard let details = resource.details else { return "—" }
+                return details.metadataProbeFailed ? "실패" : "성공"
+            }
+        },
+        comparisonRow("metadata-version", "메타데이터 검사 버전", copies: copies, monospaced: true) {
+            componentText($0) { $0.details?.metadataProbeVersion.map(String.init) ?? "—" }
+        },
+        comparisonRow("resource-id", "파일 식별자", copies: copies, monospaced: true) {
+            componentText($0) { $0.id }
+        },
+        comparisonRow("asset-id", "사진 묶음 식별자", copies: copies, monospaced: true) {
+            componentText($0) { $0.assetID ?? "—" }
+        },
+        comparisonRow("root-id", "위치 식별자", copies: copies, monospaced: true) {
+            componentText($0) { $0.rootID }
+        },
+        comparisonRow("last-session", "최근 검사 식별자", copies: copies, monospaced: true) {
+            componentText($0) { $0.details?.lastSeenSessionID ?? "—" }
+        },
+        comparisonRow("original-name-session", "최초 이름 기록 식별자", copies: copies, monospaced: true) {
+            componentText($0) { $0.details?.originalNameFirstSeenSessionID ?? "—" }
         }
     ]
 }
@@ -1356,13 +1606,7 @@ private func sourceRootKindLabel(_ kind: SourceRootKind) -> String {
 }
 
 private func formatBytes(_ bytes: Int64) -> String {
-    "\(bytes.formatted(.number.grouping(.automatic))) B"
-}
-
-private func currentCopyByteSize(_ copy: DuplicateReviewPresentationCopy) -> Int64 {
-    copy.resources.reduce(0) { partial, resource in
-        partial + (resource.fileSystemFacts.currentByteSize ?? resource.byteSize)
-    }
+    "\(bytes.formatted(.number.grouping(.automatic))) bytes"
 }
 
 private func formatDate(_ date: Date?) -> String {
@@ -1442,7 +1686,7 @@ private func xattrSummary(_ attributes: [DuplicateReviewExtendedAttribute]) -> S
     guard !attributes.isEmpty else { return "없음" }
     return attributes.map { attribute in
         let digest = attribute.valueSHA256Hex.map { " · value SHA-256 \($0)" } ?? ""
-        return "\(attribute.name) (\(attribute.byteCount) B)\(digest)"
+        return "\(attribute.name) (\(formatBytes(Int64(attribute.byteCount))))\(digest)"
     }.joined(separator: "\n")
 }
 
