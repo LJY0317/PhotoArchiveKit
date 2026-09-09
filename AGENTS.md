@@ -31,6 +31,8 @@
 
 ## 작업·Git
 - 장기 branch는 `main` 하나를 기본으로 한다. 큰 격리 실험만 임시 feature branch/worktree를 쓰고 완료 후 합쳐 삭제한다.
+- `~/LJY Projects/PhotoArchiveKit`을 유일한 영구 기준 checkout으로 유지한다. `~/LJY Projects - Agent Workspace/`에는 병렬·격리 작업에 필요한 임시 worktree만 만들고, merge되었거나 폐기된 작업의 clone/worktree/backup은 검증 후 즉시 제거한다.
+- 같은 프로젝트의 독립 clone을 Agent Workspace에 장기 보관하지 않는다. 임시 worktree 이름은 작업 목적을 드러내고, 해당 작업 종료 시 branch와 worktree를 함께 정리한다.
 - 기존 작업 재개 시 Git 상태와 `.local/STATE.md`부터 확인한다. main이 최신이라고 가정하지 말고 다른 worktree/branch가 있으면 실제 기준점을 확인한다.
 - 기존 사용자 변경을 보존한다. 예상하지 않은 HEAD/diff 변화가 생기면 쓰기를 중단하고 상태를 다시 확인한다.
 - force push는 명시적 요청 없이는 하지 않는다.
