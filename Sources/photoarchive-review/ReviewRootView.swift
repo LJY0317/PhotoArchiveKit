@@ -798,9 +798,10 @@ private struct ReviewComparisonTable: View {
     }
 
     private func setAdvancedInformationVisible(_ visible: Bool) {
-        withAnimation(.easeInOut(duration: 0.16)) {
-            showsAdvancedInformation = visible
-        }
+        // A large comparison grid is expensive to animate as one changing
+        // layout. Keep the existing viewport stable and let the advanced rows
+        // appear/disappear immediately below the disclosure control.
+        showsAdvancedInformation = visible
     }
 
     @ViewBuilder

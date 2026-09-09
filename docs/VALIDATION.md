@@ -6,6 +6,8 @@
 
 ## Duplicate-review native scrolling (2026-09-08)
 
+The advanced-information regression path now checks an internal hosted-SwiftUI height expansion without replacing the parent representable. The document view must keep the same identity and scroll origin while growing, the vertical scroller knob must update for the larger range, and the disclosure is intentionally non-animated so document-height-only changes do not force-retile the whole comparison viewport.
+
 `bash scripts/test-review-scroll.sh` compiles a dependency-free AppKit/SwiftUI synthetic Grid harness, without opening the user's catalog or media. It checks persistent horizontal scroller geometry outside the clip viewport, overflow knob state, ordinary wheel versus Shift-wheel movement, narrow/wide window resizing, updated document dimensions, same-group position preservation and new-group reset. It uses the main run loop to allow native wheel animation to finish. The test runs with Command Line Tools and does not require XCTest or Swift Testing.
 
 On 2026-09-09 the harness was extended after the advanced-information disclosure exposed a separate dynamic-height failure. It now also changes an observed SwiftUI model inside the already-hosted document from 1200pt to 5200pt and back to 1200pt without replacing the representable's root content. The test requires the AppKit document frame to follow both changes and verifies that the expanded document can move to a >4000pt vertical origin and return to zero. This specifically covers disclosure-driven intrinsic-size changes that the earlier parent-update-only regression test did not exercise.

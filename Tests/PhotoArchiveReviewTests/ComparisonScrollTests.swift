@@ -82,9 +82,17 @@ struct ComparisonScrollSelfTest {
         dynamicScroll.layoutSubtreeIfNeeded()
         RunLoop.main.run(until: Date().addingTimeInterval(0.1))
         precondition(dynamicScroll.documentView!.frame.height == 1200)
+        let dynamicDocumentView = dynamicScroll.documentView!
+        dynamicScroll.contentView.scroll(to: NSPoint(x: 0, y: 300))
+        dynamicScroll.reflectScrolledClipView(dynamicScroll.contentView)
+        let originBeforeExpansion = dynamicScroll.contentView.bounds.origin
+        let knobBeforeExpansion = dynamicScroll.verticalScroller!.knobProportion
         dynamicModel.height = 5200
         RunLoop.main.run(until: Date().addingTimeInterval(0.2))
         precondition(dynamicScroll.documentView!.frame.height == 5200)
+        precondition(dynamicScroll.documentView === dynamicDocumentView)
+        precondition(dynamicScroll.contentView.bounds.origin == originBeforeExpansion)
+        precondition(dynamicScroll.verticalScroller!.knobProportion < knobBeforeExpansion)
         let dynamicMaxY = dynamicScroll.documentView!.frame.height - dynamicScroll.contentView.bounds.height
         dynamicScroll.contentView.scroll(to: NSPoint(x: 0, y: dynamicMaxY))
         dynamicScroll.reflectScrolledClipView(dynamicScroll.contentView)

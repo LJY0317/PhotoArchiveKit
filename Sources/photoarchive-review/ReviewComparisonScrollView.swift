@@ -94,14 +94,23 @@ final class ComparisonScrollContainer<Content: View>: NSScrollView {
         // All preview slots have fixed heights, so thumbnail completion needs
         // repainting but does not require a new document measurement.
         let size = hostingView.fittingSize
-        if hostingView.frame.size != size {
-            hostingView.setFrameSize(size)
-        }
-        tile()
         let origin = resetPosition ? NSPoint.zero : contentView.bounds.origin
-        contentView.scroll(to: contentView.constrainBoundsRect(
-            NSRect(origin: origin, size: contentView.bounds.size)
-        ).origin)
+
+        // Document-height changes (for example showing advanced metadata)
+        // should not retile the whole scroll view or animate the hosted frame.
+        // Retiling is handled by the scroll view's normal layout when the
+        // viewport itself changes; here we only update the document extent and
+        // preserve the visible origin.
+        NSAnimationContext.runAnimationGroup { context in
+            context.duration = 0
+            context.allowsImplicitAnimation = false
+            if hostingView.frame.size != size {
+                hostingView.setFrameSize(size)
+            }
+            contentView.scroll(to: contentView.constrainBoundsRect(
+                NSRect(origin: origin, size: contentView.bounds.size)
+            ).origin)
+        }
         reflectScrolledClipView(contentView)
     }
 }
