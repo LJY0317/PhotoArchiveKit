@@ -718,26 +718,25 @@ private struct ReviewComparisonTable: View {
 
             metadataRows(rows, lastRowID: lastRowID)
 
-            Button {
-                withAnimation(.easeInOut(duration: 0.16)) {
-                    showsAdvancedInformation.toggle()
-                }
-            } label: {
-                Label(
-                    showsAdvancedInformation ? "고급 정보 숨기기" : "고급 정보 보기",
-                    systemImage: showsAdvancedInformation ? "chevron.up" : "chevron.down"
-                )
-                .font(.caption.weight(.medium))
-                .foregroundStyle(.secondary)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .contentShape(Rectangle())
-            }
-            .buttonStyle(.plain)
-            .padding(.vertical, 10)
-            .gridCellColumns(copies.count + 1)
+            advancedDisclosureButton
+                .gridCellColumns(copies.count + 1)
 
             if showsAdvancedInformation {
                 metadataRows(advancedRows, lastRowID: lastRowID)
+
+                Button {
+                    setAdvancedInformationVisible(false)
+                } label: {
+                    Label("고급 정보 숨기기", systemImage: "chevron.up")
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .padding(.top, 10)
+                .padding(.bottom, 2)
+                .gridCellColumns(copies.count + 1)
             }
         }
         .padding(16)
@@ -779,6 +778,29 @@ private struct ReviewComparisonTable: View {
         if isCleanup { return Color.red.opacity(0.68) }
         if isHovered { return Color.accentColor.opacity(0.38) }
         return Color.primary.opacity(0.08)
+    }
+
+    private var advancedDisclosureButton: some View {
+        Button {
+            setAdvancedInformationVisible(!showsAdvancedInformation)
+        } label: {
+            Label(
+                showsAdvancedInformation ? "고급 정보 숨기기" : "고급 정보 보기",
+                systemImage: showsAdvancedInformation ? "chevron.up" : "chevron.down"
+            )
+            .font(.caption.weight(.medium))
+            .foregroundStyle(.secondary)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .padding(.vertical, 10)
+    }
+
+    private func setAdvancedInformationVisible(_ visible: Bool) {
+        withAnimation(.easeInOut(duration: 0.16)) {
+            showsAdvancedInformation = visible
+        }
     }
 
     @ViewBuilder

@@ -2,6 +2,11 @@ import AppKit
 import SwiftUI
 
 @MainActor
+private final class DynamicHeightModel: ObservableObject {
+    @Published var height: CGFloat = 1200
+}
+
+@MainActor
 private func fixture(width: CGFloat, height: CGFloat) -> some View {
     Grid {
         ForEach(0..<20) { row in
@@ -13,6 +18,16 @@ private func fixture(width: CGFloat, height: CGFloat) -> some View {
         }
     }
     .frame(width: width, height: height)
+}
+
+@MainActor
+private struct DynamicHeightFixture: View {
+    @ObservedObject var model: DynamicHeightModel
+    let width: CGFloat
+
+    var body: some View {
+        fixture(width: width, height: model.height)
+    }
 }
 
 @main
@@ -54,7 +69,43 @@ struct ComparisonScrollSelfTest {
         scroll.update(content: fixture(width: 1600, height: 2400), documentID: "a")
         precondition(scroll.contentView.bounds.origin == NSPoint(x: 500, y: 900))
 
+        // Internal SwiftUI state can change the hosted document height without
+        // NSViewRepresentable receiving a new root content value. The scroll
+        // container must follow intrinsic-size invalidation in both directions.
+        let dynamicModel = DynamicHeightModel()
+        let dynamicScroll = ComparisonScrollContainer(
+            content: DynamicHeightFixture(model: dynamicModel, width: 1600),
+            documentID: "dynamic"
+        )
+        window.contentView = dynamicScroll
+        window.setContentSize(NSSize(width: 800, height: 600))
+        dynamicScroll.layoutSubtreeIfNeeded()
+        RunLoop.main.run(until: Date().addingTimeInterval(0.1))
+        precondition(dynamicScroll.documentView!.frame.height == 1200)
+        dynamicModel.height = 5200
+        RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+        precondition(dynamicScroll.documentView!.frame.height == 5200)
+        let dynamicMaxY = dynamicScroll.documentView!.frame.height - dynamicScroll.contentView.bounds.height
+        dynamicScroll.contentView.scroll(to: NSPoint(x: 0, y: dynamicMaxY))
+        dynamicScroll.reflectScrolledClipView(dynamicScroll.contentView)
+        precondition(dynamicScroll.contentView.bounds.origin.y > 4000)
+        dynamicScroll.contentView.scroll(to: .zero)
+        dynamicScroll.reflectScrolledClipView(dynamicScroll.contentView)
+        precondition(dynamicScroll.contentView.bounds.origin.y == 0)
+        dynamicScroll.contentView.scroll(to: NSPoint(x: 0, y: dynamicMaxY))
+        dynamicScroll.reflectScrolledClipView(dynamicScroll.contentView)
+        precondition(dynamicScroll.contentView.bounds.origin.y > 4000)
+        dynamicModel.height = 1200
+        RunLoop.main.run(until: Date().addingTimeInterval(0.2))
+        precondition(dynamicScroll.documentView!.frame.height == 1200)
+        let collapsedMaxY = max(0, 1200 - dynamicScroll.contentView.bounds.height)
+        precondition(dynamicScroll.contentView.bounds.origin.y <= collapsedMaxY)
+        dynamicScroll.contentView.scroll(to: .zero)
+        dynamicScroll.reflectScrolledClipView(dynamicScroll.contentView)
+        precondition(dynamicScroll.contentView.bounds.origin.y == 0)
+
         window.setContentSize(NSSize(width: 600, height: 400))
+        window.contentView = scroll
         scroll.layoutSubtreeIfNeeded()
         scroll.tile()
         precondition(!bar.isHidden && bar.knobProportion < 0.4)
@@ -125,6 +176,6 @@ struct ComparisonScrollSelfTest {
             precondition(!fullBar.isHidden && fullBar.isEnabled)
         }
 
-        print("PASS: native scroller geometry, wheel/Shift-wheel, resize, document update, group reset and full-window action-bar clearance")
+        print("PASS: native scroller geometry, wheel/Shift-wheel, resize, internal SwiftUI height changes, document update, group reset and full-window action-bar clearance")
     }
 }

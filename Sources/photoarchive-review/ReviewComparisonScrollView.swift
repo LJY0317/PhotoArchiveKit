@@ -23,12 +23,28 @@ struct ReviewComparisonScrollView<Content: View>: NSViewRepresentable {
     }
 }
 
+private final class ComparisonHostingView<Content: View>: NSHostingView<Content> {
+    var intrinsicContentSizeDidInvalidate: (() -> Void)?
+    var layoutDidComplete: (() -> Void)?
+
+    override func invalidateIntrinsicContentSize() {
+        super.invalidateIntrinsicContentSize()
+        intrinsicContentSizeDidInvalidate?()
+    }
+
+    override func layout() {
+        super.layout()
+        layoutDidComplete?()
+    }
+}
+
 final class ComparisonScrollContainer<Content: View>: NSScrollView {
-    private let hostingView: NSHostingView<Content>
+    private let hostingView: ComparisonHostingView<Content>
     private var documentID: String
+    private var hasScheduledDocumentResize = false
 
     init(content: Content, documentID: String) {
-        hostingView = NSHostingView(rootView: content)
+        hostingView = ComparisonHostingView(rootView: content)
         self.documentID = documentID
         super.init(frame: .zero)
         borderType = .noBorder
@@ -42,6 +58,12 @@ final class ComparisonScrollContainer<Content: View>: NSScrollView {
         verticalScrollElasticity = .automatic
         hostingView.sizingOptions = [.intrinsicContentSize]
         documentView = hostingView
+        hostingView.intrinsicContentSizeDidInvalidate = { [weak self] in
+            self?.scheduleDocumentResize()
+        }
+        hostingView.layoutDidComplete = { [weak self] in
+            self?.scheduleDocumentResize()
+        }
         horizontalScroller?.toolTip = "좌우로 드래그하거나 Shift + 마우스 휠로 비교 열을 이동합니다."
         resizeDocument(resetPosition: true)
     }
@@ -52,7 +74,19 @@ final class ComparisonScrollContainer<Content: View>: NSScrollView {
         let changedGroup = self.documentID != documentID
         self.documentID = documentID
         hostingView.rootView = content
+        hostingView.layoutSubtreeIfNeeded()
         resizeDocument(resetPosition: changedGroup)
+    }
+
+    private func scheduleDocumentResize() {
+        guard !hasScheduledDocumentResize else { return }
+        hasScheduledDocumentResize = true
+        DispatchQueue.main.async { [weak self] in
+            guard let self else { return }
+            self.hostingView.layoutSubtreeIfNeeded()
+            self.resizeDocument(resetPosition: false)
+            self.hasScheduledDocumentResize = false
+        }
     }
 
     private func resizeDocument(resetPosition: Bool) {
