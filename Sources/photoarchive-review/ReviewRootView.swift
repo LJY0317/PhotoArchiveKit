@@ -8,6 +8,7 @@ struct ReviewRootView: View {
     @State private var addRootRequest: AddComparisonRootRequest?
     @State private var isComparisonLocationsPresented = false
     @State private var isRootManagerPresented = false
+    @State private var returnsToRootManagerAfterAdd = false
 
     var body: some View {
         ReviewWindowLayout {
@@ -86,7 +87,10 @@ struct ReviewRootView: View {
                 request: request,
                 isWorking: store.isScanning,
                 statusMessage: store.statusMessage,
-                onCancel: { addRootRequest = nil },
+                onCancel: {
+                    addRootRequest = nil
+                    reopenRootManagerAfterAddIfNeeded()
+                },
                 onRegisterAndScan: { purpose in
                     Task {
                         let succeeded = await store.registerAndScan(
@@ -95,6 +99,7 @@ struct ReviewRootView: View {
                         )
                         if succeeded {
                             addRootRequest = nil
+                            reopenRootManagerAfterAddIfNeeded()
                         }
                     }
                 }
@@ -105,6 +110,12 @@ struct ReviewRootView: View {
                 roots: store.registeredRoots,
                 isWorking: store.isScanning,
                 onClose: { isRootManagerPresented = false },
+                onAddFolder: {
+                    isRootManagerPresented = false
+                    DispatchQueue.main.async {
+                        chooseComparisonFolder(returnToManager: true)
+                    }
+                },
                 onSetActive: store.setRootActive,
                 onSetPurpose: store.setRootUserPurpose,
                 onRemove: store.unregisterRoot
@@ -135,7 +146,7 @@ struct ReviewRootView: View {
         }
     }
 
-    private func chooseComparisonFolder() {
+    private func chooseComparisonFolder(returnToManager: Bool = false) {
         let panel = NSOpenPanel()
         panel.title = "비교할 폴더 선택"
         panel.prompt = "선택"
@@ -144,13 +155,34 @@ struct ReviewRootView: View {
         panel.canChooseDirectories = true
         panel.allowsMultipleSelection = false
         panel.canCreateDirectories = false
-        guard panel.runModal() == .OK, let url = panel.url else { return }
+        guard panel.runModal() == .OK, let url = panel.url else {
+            if returnToManager {
+                scheduleRootManagerPresentation()
+            }
+            return
+        }
         let standardized = url.standardizedFileURL
         if store.isRegisteredRoot(standardized) {
             store.selectRegisteredRoot(at: standardized)
+            if returnToManager {
+                scheduleRootManagerPresentation()
+            }
             return
         }
+        returnsToRootManagerAfterAdd = returnToManager
         addRootRequest = AddComparisonRootRequest(url: standardized)
+    }
+
+    private func reopenRootManagerAfterAddIfNeeded() {
+        guard returnsToRootManagerAfterAdd else { return }
+        returnsToRootManagerAfterAdd = false
+        scheduleRootManagerPresentation()
+    }
+
+    private func scheduleRootManagerPresentation() {
+        DispatchQueue.main.async {
+            isRootManagerPresented = true
+        }
     }
 
     private var sidebar: some View {
@@ -549,6 +581,7 @@ private struct ComparisonRootManagerSheet: View {
     let roots: [RegisteredRootReport]
     let isWorking: Bool
     let onClose: () -> Void
+    let onAddFolder: () -> Void
     let onSetActive: (String, Bool) -> Void
     let onSetPurpose: (String, RootUserPurpose) -> Void
     let onRemove: (String) -> Void
@@ -587,6 +620,11 @@ private struct ComparisonRootManagerSheet: View {
             .frame(minHeight: 260, maxHeight: 440)
 
             HStack {
+                Button(action: onAddFolder) {
+                    Label("폴더 추가…", systemImage: "plus")
+                }
+                .disabled(isWorking)
+
                 Spacer()
                 Button("완료", action: onClose)
                     .keyboardShortcut(.defaultAction)
