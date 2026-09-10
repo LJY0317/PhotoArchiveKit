@@ -48,6 +48,13 @@ public enum DuplicateReviewSelectionPolicy {
 
         return current
     }
+
+    public static func cleanupCopyIDsExcludingKeepers(
+        allCopyIDs: [String],
+        keeperCopyIDs: Set<String>
+    ) -> Set<String> {
+        Set(allCopyIDs).subtracting(keeperCopyIDs)
+    }
 }
 
 public struct DuplicateReviewDecision: Codable, Sendable, Equatable {

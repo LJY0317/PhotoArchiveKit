@@ -44,13 +44,7 @@ final class ReviewStore: ObservableObject {
     }
 
     var visibleItems: [DuplicateReviewPresentationItem] {
-        guard let items = presentation?.items else { return [] }
-        return items.filter { item in
-            let itemRootIDs = Set(item.allResources.map(\.rootID))
-            guard !selectedRootIDs.isEmpty,
-                  itemRootIDs.isSubset(of: selectedRootIDs)
-            else { return false }
-
+        itemsInSelectedRoots.filter { item in
             let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !query.isEmpty else { return true }
             return item.allResources.contains {
@@ -58,6 +52,17 @@ final class ReviewStore: ObservableObject {
                     || $0.relativePath.localizedCaseInsensitiveContains(query)
                     || $0.rootLabel.localizedCaseInsensitiveContains(query)
             }
+        }
+    }
+
+    private var itemsInSelectedRoots: [DuplicateReviewPresentationItem] {
+        guard let items = presentation?.items else { return [] }
+        return items.filter { item in
+            let itemRootIDs = Set(item.allResources.map(\.rootID))
+            guard !selectedRootIDs.isEmpty,
+                  itemRootIDs.isSubset(of: selectedRootIDs)
+            else { return false }
+            return true
         }
     }
 
@@ -76,6 +81,22 @@ final class ReviewStore: ObservableObject {
         case .customQuarantine:
             return "격리 폴더로 이동…"
         }
+    }
+
+    var canToggleRecommendedCleanupSelection: Bool {
+        !recommendedCleanupTargetsByItem.isEmpty
+    }
+
+    var recommendedCleanupSelectionIsApplied: Bool {
+        let targets = recommendedCleanupTargetsByItem
+        guard !targets.isEmpty else { return false }
+        return targets.allSatisfy { itemID, copyIDs in
+            cleanupCopyIDsByItem[itemID, default: []] == copyIDs
+        }
+    }
+
+    var recommendedCleanupSelectionTitle: String {
+        recommendedCleanupSelectionIsApplied ? "전체 선택 해제" : "추천 외 모두 선택"
     }
 
     var activeRegisteredRoots: [RegisteredRootReport] {
@@ -311,6 +332,30 @@ final class ReviewStore: ObservableObject {
         cleanupCopyIDsByItem[item.id, default: []].contains(copy.id)
     }
 
+    func toggleRecommendedCleanupSelection() {
+        guard !isScanning && !isPreparingCleanup && !isApplyingCleanup else { return }
+        let items = itemsInSelectedRoots
+        let targets = recommendedCleanupTargetsByItem
+        guard !targets.isEmpty else { return }
+
+        statusMessage = nil
+        cleanupErrorMessage = nil
+        preparedCleanup = nil
+        removeAllConfirmation = nil
+
+        if recommendedCleanupSelectionIsApplied {
+            for item in items {
+                cleanupCopyIDsByItem[item.id] = []
+            }
+        } else {
+            for item in items {
+                cleanupCopyIDsByItem[item.id] = targets[item.id] ?? []
+            }
+        }
+
+        explicitlyRemoveAllItemIDs.subtract(items.map(\.id))
+    }
+
     func canToggleCleanup(
         _ copy: DuplicateReviewPresentationCopy,
         item: DuplicateReviewPresentationItem
@@ -542,6 +587,18 @@ final class ReviewStore: ObservableObject {
                 cleanupResourceIDs: cleanupResources
             )
         }
+    }
+
+    private var recommendedCleanupTargetsByItem: [String: Set<String>] {
+        Dictionary(uniqueKeysWithValues: itemsInSelectedRoots.compactMap { item in
+            let keeperCopyIDs = Set(item.copies.filter(\.isKeeper).map(\.id))
+            let cleanupCopyIDs = DuplicateReviewSelectionPolicy.cleanupCopyIDsExcludingKeepers(
+                allCopyIDs: item.copies.map(\.id),
+                keeperCopyIDs: keeperCopyIDs
+            )
+            guard !cleanupCopyIDs.isEmpty else { return nil }
+            return (item.id, cleanupCopyIDs)
+        })
     }
 
     func selectPrevious() {

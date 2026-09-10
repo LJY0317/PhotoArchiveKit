@@ -2081,6 +2081,13 @@ struct PhotoArchiveSelfTest {
             ) == [reviewCopyA, reviewCopyB],
             "column clicks must not silently select every copy in groups with more than two copies"
         )
+        try require(
+            DuplicateReviewSelectionPolicy.cleanupCopyIDsExcludingKeepers(
+                allCopyIDs: [reviewCopyA, reviewCopyB, "copy-c"],
+                keeperCopyIDs: [reviewCopyA]
+            ) == [reviewCopyB, "copy-c"],
+            "bulk duplicate-review selection should keep recommended copies and select every other copy"
+        )
 
         guard let reviewedCandidateResource = stagingPolicyReport.resources.first(where: {
             $0.resourceID == reviewedCandidateID

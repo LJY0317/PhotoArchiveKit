@@ -221,6 +221,18 @@ private struct ReviewActionBar: View {
 
             Spacer()
 
+            Button(store.recommendedCleanupSelectionTitle) {
+                store.toggleRecommendedCleanupSelection()
+            }
+            .buttonStyle(.bordered)
+            .disabled(
+                !store.canToggleRecommendedCleanupSelection
+                    || store.isScanning
+                    || store.isPreparingCleanup
+                    || store.isApplyingCleanup
+            )
+            .help("각 중복 항목에서 남기기 추천 사본은 유지하고 나머지를 한 번에 선택하거나 해제합니다")
+
             Button {
                 Task { await store.prepareSelectedCleanup() }
             } label: {
@@ -276,6 +288,11 @@ private struct ReviewScanProgressStrip: View {
     var body: some View {
         VStack(spacing: 6) {
             HStack(spacing: 8) {
+                if fraction == nil {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+
                 Text(title)
                     .font(.caption.weight(.medium))
 
@@ -291,11 +308,9 @@ private struct ReviewScanProgressStrip: View {
             if let fraction {
                 ProgressView(value: fraction)
                     .progressViewStyle(.linear)
-            } else {
-                ProgressView()
-                    .progressViewStyle(.linear)
             }
         }
+        .frame(minHeight: 24)
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
         .background(.bar)
@@ -630,7 +645,7 @@ private struct ComparisonRootManagerSheet: View {
             Spacer(minLength: 14)
 
             Toggle(
-                "사용",
+                "사용 중",
                 isOn: Binding(
                     get: { root.state == .active },
                     set: { onSetActive(root.rootID, $0) }
