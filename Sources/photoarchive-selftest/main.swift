@@ -283,6 +283,80 @@ struct PhotoArchiveSelfTest {
         try require(!registryAgentJSON.contains(registryRoot.path), "agent-safe root registry exposed a path")
         try require(registryAgentJSON.contains("primary_library"), "agent-safe root registry should expose the semantic role")
 
+        let comparisonPurposeRoot = temporary.appendingPathComponent("ComparisonPurposeRoot", isDirectory: true)
+        let comparisonPurposeCatalog = temporary.appendingPathComponent("comparison-purpose.sqlite3")
+        try fileManager.createDirectory(at: comparisonPurposeRoot, withIntermediateDirectories: true)
+        try Data("comparison-purpose".utf8)
+            .write(to: comparisonPurposeRoot.appendingPathComponent("sample.jpg"))
+        let firstComparisonRegistration = try RootRegistry.addComparisonRoot(
+            url: comparisonPurposeRoot,
+            catalogURL: comparisonPurposeCatalog
+        )
+        try require(
+            !firstComparisonRegistration.wasAlreadyRegistered
+                && firstComparisonRegistration.root.usageRole == .staging
+                && firstComparisonRegistration.root.usageRole.userPurpose == .standard,
+            "a new comparison folder should use the consumer-facing standard purpose by default"
+        )
+        let registrationUpdatedAt = try sqliteText(
+            databaseURL: comparisonPurposeCatalog,
+            sql: "SELECT printf('%.6f', updated_at) FROM root_registrations WHERE root_id = '\(firstComparisonRegistration.root.rootID)'"
+        )
+        let duplicateComparisonRegistration = try RootRegistry.addComparisonRoot(
+            url: comparisonPurposeRoot,
+            purpose: .archive,
+            catalogURL: comparisonPurposeCatalog
+        )
+        let duplicateRegistrationUpdatedAt = try sqliteText(
+            databaseURL: comparisonPurposeCatalog,
+            sql: "SELECT printf('%.6f', updated_at) FROM root_registrations WHERE root_id = '\(firstComparisonRegistration.root.rootID)'"
+        )
+        try require(
+            duplicateComparisonRegistration.wasAlreadyRegistered
+                && duplicateComparisonRegistration.root.rootID == firstComparisonRegistration.root.rootID
+                && duplicateComparisonRegistration.root.usageRole == .staging
+                && duplicateRegistrationUpdatedAt == registrationUpdatedAt,
+            "adding an already registered comparison folder must be a no-op without role or registration timestamp changes"
+        )
+        let archivedComparisonRoot = try RootRegistry.setUserPurpose(
+            target: firstComparisonRegistration.root.rootID,
+            purpose: .archive,
+            catalogURL: comparisonPurposeCatalog
+        )
+        try require(
+            archivedComparisonRoot.usageRole == .archive
+                && archivedComparisonRoot.usageRole.userPurpose == .archive,
+            "the archive consumer purpose should map to the protected archive role"
+        )
+        let readOnlyComparisonRoot = try RootRegistry.setUserPurpose(
+            target: firstComparisonRegistration.root.rootID,
+            purpose: .readOnly,
+            catalogURL: comparisonPurposeCatalog
+        )
+        try require(
+            readOnlyComparisonRoot.usageRole == .reference
+                && readOnlyComparisonRoot.usageRole.userPurpose == .readOnly,
+            "the read-only consumer purpose should map to the non-mutating reference role"
+        )
+
+        let autoTakeoutRoot = temporary.appendingPathComponent("AutoTakeoutRoot", isDirectory: true)
+        let autoTakeoutCatalog = temporary.appendingPathComponent("auto-takeout.sqlite3")
+        try fileManager.createDirectory(at: autoTakeoutRoot, withIntermediateDirectories: true)
+        try Data("takeout-media".utf8).write(to: autoTakeoutRoot.appendingPathComponent("IMG_1000.jpg"))
+        try Data("""
+        {"title":"IMG_1000.jpg","photoTakenTime":{"timestamp":"1700000000"}}
+        """.utf8).write(to: autoTakeoutRoot.appendingPathComponent("IMG_1000.jpg.json"))
+        let autoTakeoutRegistration = try RootRegistry.addComparisonRoot(
+            url: autoTakeoutRoot,
+            catalogURL: autoTakeoutCatalog
+        )
+        try require(
+            autoTakeoutRegistration.root.provenance == .googleTakeout
+                && autoTakeoutRegistration.root.usageRole == .importSource
+                && autoTakeoutRegistration.root.usageRole.userPurpose == .standard,
+            "Google Takeout provenance should be inferred internally without exposing a provenance choice in the consumer UI"
+        )
+
         let historySwitchRoot = temporary.appendingPathComponent("HistorySwitchRoot", isDirectory: true)
         let historySwitchCatalog = temporary.appendingPathComponent("history-switch.sqlite3")
         try fileManager.createDirectory(at: historySwitchRoot, withIntermediateDirectories: true)

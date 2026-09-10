@@ -13,7 +13,7 @@
 - root unavailable을 삭제 증거로 해석하지 않는다. mutation 직전 current root marker, path boundary, regular-file 상태, byte size와 필요한 fresh full-file hash를 다시 검증한다.
 - duplicate cleanup 기본 destination은 OS Trash/Recycle Bin이다. 사용자가 명시한 경우에만 app-managed quarantine을 사용한다. permanent removal로 fallback하지 않는다.
 - cleanup 뒤에는 해당 operation이 직접 비운 source parent chain만 registered root 직전까지 정리한다. package/symlink/unknown residue/다른 항목이 있으면 보존한다.
-- `archive`/`primary_library`의 intentional cross-root replica는 generic dedupe로 collapse하지 않는다. `reference`는 read-only다. `import_source` cleanup은 source semantics/coverage gate를 통과해야 한다.
+- 소비자용 위치 용도는 `기본`, `장기 보관`, `읽기 전용` 세 가지다. `장기 보관` 사본을 keeper로 우선하고 intentional archive replica를 generic dedupe로 collapse하지 않는다. `읽기 전용` 위치는 mutation하지 않는다. Takeout/import semantics는 자동 감지한 내부 metadata와 safety gate로 처리한다.
 
 ## 데이터·privacy
 - media truth는 ordinary filesystem file, semantic truth는 Mac-local SQLite가 맡는다. provider ID나 filename/path 하나를 permanent asset identity로 쓰지 않는다.
@@ -26,7 +26,7 @@
 - required core는 Apple system frameworks/Swift/SQLite처럼 기본 플랫폼 기능을 우선한다.
 - 외부 도구가 더 적합하면 user-installed optional adapter로 재사용한다. 현재 후보는 rclone, Czkawka/Krokiet, ExifTool, ffprobe, osxphotos다. 별도 license review 없이 binary를 vendor/redistribute하지 않는다.
 - Live Photo asset graph, provenance, root role, keeper policy, mutation/archive transaction, agent-safe boundary는 PhotoArchiveKit core가 소유한다.
-- registered root마다 `staging`, `primary_library`, `archive`, `import_source`, `reference` role을 가진다. role은 device/provider와 별개이며 변경 자체는 media mutation이 아니다.
+- GUI에는 위치 용도를 `기본`, `장기 보관`, `읽기 전용`만 노출한다. 기존 catalog 호환과 import 안전성에 필요한 세부 role/provenance는 core 내부에만 유지하고 일반 사용자에게 설정을 요구하지 않는다.
 - GUI는 local-private human surface다. 사용자 문구는 자연어를 쓰고 internal ID/reason/debug 용어는 필요한 고급 정보가 아니면 숨긴다. 현재는 한국어 완성도를 우선한다.
 
 ## 작업·Git

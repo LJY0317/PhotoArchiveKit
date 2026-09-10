@@ -87,12 +87,11 @@ struct ReviewRootView: View {
                 isWorking: store.isScanning,
                 statusMessage: store.statusMessage,
                 onCancel: { addRootRequest = nil },
-                onRegisterAndScan: { role, provenance in
+                onRegisterAndScan: { purpose in
                     Task {
                         let succeeded = await store.registerAndScan(
                             url: request.url,
-                            role: role,
-                            provenance: provenance
+                            purpose: purpose
                         )
                         if succeeded {
                             addRootRequest = nil
@@ -105,10 +104,9 @@ struct ReviewRootView: View {
             ComparisonRootManagerSheet(
                 roots: store.registeredRoots,
                 isWorking: store.isScanning,
-                statusMessage: store.statusMessage,
                 onClose: { isRootManagerPresented = false },
                 onSetActive: store.setRootActive,
-                onSetRole: store.setRootUsageRole,
+                onSetPurpose: store.setRootUserPurpose,
                 onRemove: store.unregisterRoot
             )
         }
@@ -147,7 +145,12 @@ struct ReviewRootView: View {
         panel.allowsMultipleSelection = false
         panel.canCreateDirectories = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
-        addRootRequest = AddComparisonRootRequest(url: url.standardizedFileURL)
+        let standardized = url.standardizedFileURL
+        if store.isRegisteredRoot(standardized) {
+            store.selectRegisteredRoot(at: standardized)
+            return
+        }
+        addRootRequest = AddComparisonRootRequest(url: standardized)
     }
 
     private var sidebar: some View {
@@ -491,6 +494,7 @@ private struct ComparisonLocationsPopover: View {
                                 || (!root.isAvailable && !isSelected)
                                 || (isSelected && selectedRootIDs.count == 1)
                         )
+                        .help(rootUserPurposeDescription(root.usageRole.userPurpose))
                     }
                 }
             }
@@ -544,10 +548,9 @@ private struct RootRemovalRequest: Identifiable {
 private struct ComparisonRootManagerSheet: View {
     let roots: [RegisteredRootReport]
     let isWorking: Bool
-    let statusMessage: String?
     let onClose: () -> Void
     let onSetActive: (String, Bool) -> Void
-    let onSetRole: (String, RootUsageRole) -> Void
+    let onSetPurpose: (String, RootUserPurpose) -> Void
     let onRemove: (String) -> Void
 
     @State private var removalRequest: RootRemovalRequest?
@@ -569,7 +572,7 @@ private struct ComparisonRootManagerSheet: View {
             VStack(alignment: .leading, spacing: 5) {
                 Text("비교 위치 관리")
                     .font(.title2.weight(.semibold))
-                Text("비교 위치의 사용 여부와 역할만 바꿉니다. 이 화면에서 원본 파일을 이동하거나 삭제하지 않습니다.")
+                Text("비교에 사용할 위치와 용도를 관리합니다.")
                     .foregroundStyle(.secondary)
             }
 
@@ -582,13 +585,6 @@ private struct ComparisonRootManagerSheet: View {
                 .padding(.vertical, 1)
             }
             .frame(minHeight: 260, maxHeight: 440)
-
-            if let statusMessage, !statusMessage.isEmpty {
-                Text(statusMessage)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
 
             HStack {
                 Spacer()
@@ -637,9 +633,6 @@ private struct ComparisonRootManagerSheet: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
                     .truncationMode(.middle)
-                Text("출처: \(sourceProvenanceLabel(root.provenance))")
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
             }
 
             Spacer(minLength: 14)
@@ -655,19 +648,22 @@ private struct ComparisonRootManagerSheet: View {
             .disabled(isWorking)
 
             Picker(
-                "역할",
+                "용도",
                 selection: Binding(
-                    get: { root.usageRole },
-                    set: { onSetRole(root.rootID, $0) }
+                    get: { root.usageRole.userPurpose },
+                    set: { onSetPurpose(root.rootID, $0) }
                 )
             ) {
-                ForEach(RootUsageRole.allCases, id: \.self) { role in
-                    Text(rootUsageRoleLabel(role)).tag(role)
+                ForEach(RootUserPurpose.allCases, id: \.self) { purpose in
+                    Text(rootUserPurposeLabel(purpose))
+                        .help(rootUserPurposeDescription(purpose))
+                        .tag(purpose)
                 }
             }
             .labelsHidden()
             .frame(width: 135)
             .disabled(isWorking)
+            .help(rootUserPurposeDescription(root.usageRole.userPurpose))
 
             Menu {
                 Button("등록 해제…", role: .destructive) {
@@ -692,17 +688,17 @@ private struct AddComparisonRootSheet: View {
     let isWorking: Bool
     let statusMessage: String?
     let onCancel: () -> Void
-    let onRegisterAndScan: (RootUsageRole, SourceProvenance) -> Void
+    let onRegisterAndScan: (RootUserPurpose) -> Void
 
-    @State private var role: RootUsageRole = .staging
-    @State private var provenance: SourceProvenance = .unknown
+    @State private var purpose: RootUserPurpose = .standard
+    @State private var showsAdvancedOptions = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
             VStack(alignment: .leading, spacing: 6) {
                 Text("비교 위치 추가")
                     .font(.title2.weight(.semibold))
-                Text("이 폴더를 비교 목록에 추가하고 현재 선택한 위치들과 함께 검사합니다.")
+                Text("이 폴더를 비교 위치에 추가합니다.")
                     .foregroundStyle(.secondary)
             }
 
@@ -723,46 +719,22 @@ private struct AddComparisonRootSheet: View {
             .padding(12)
             .background(.background.secondary, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
 
-            Grid(alignment: .leading, horizontalSpacing: 14, verticalSpacing: 12) {
-                GridRow {
-                    Text("역할")
+            DisclosureGroup("고급 옵션", isExpanded: $showsAdvancedOptions) {
+                HStack(spacing: 14) {
+                    Text("용도")
                         .foregroundStyle(.secondary)
-                    Picker("역할", selection: $role) {
-                        ForEach(RootUsageRole.allCases, id: \.self) { value in
-                            Text(rootUsageRoleLabel(value)).tag(value)
+                    Picker("용도", selection: $purpose) {
+                        ForEach(RootUserPurpose.allCases, id: \.self) { value in
+                            Text(rootUserPurposeLabel(value))
+                                .help(rootUserPurposeDescription(value))
+                                .tag(value)
                         }
                     }
                     .labelsHidden()
                     .frame(maxWidth: .infinity)
+                    .help(rootUserPurposeDescription(purpose))
                 }
-
-                GridRow {
-                    Color.clear.frame(width: 1, height: 1)
-                    Text(rootUsageRoleDescription(role))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-
-                GridRow {
-                    Text("출처")
-                        .foregroundStyle(.secondary)
-                    Picker("출처", selection: $provenance) {
-                        ForEach(SourceProvenance.allCases, id: \.self) { value in
-                            Text(sourceProvenanceLabel(value)).tag(value)
-                        }
-                    }
-                    .labelsHidden()
-                    .frame(maxWidth: .infinity)
-                }
-
-                GridRow {
-                    Color.clear.frame(width: 1, height: 1)
-                    Text("출처 정보는 파일이 어디서 왔는지 이해하고 안전하게 비교하는 데 사용됩니다.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+                .padding(.top, 10)
             }
 
             if isWorking {
@@ -785,8 +757,8 @@ private struct AddComparisonRootSheet: View {
                 Button("취소", action: onCancel)
                     .keyboardShortcut(.cancelAction)
                     .disabled(isWorking)
-                Button("추가하고 비교 시작") {
-                    onRegisterAndScan(role, provenance)
+                Button("추가하고 비교") {
+                    onRegisterAndScan(purpose)
                 }
                 .buttonStyle(.borderedProminent)
                 .keyboardShortcut(.defaultAction)
@@ -1616,20 +1588,14 @@ private func advancedComparisonRows(
             componentText($0) { $0.details.map { String($0.locationHistoryCount) } ?? "—" }
         },
 
-        comparisonRow("root-label", "위치", copies: copies, sectionTitle: "위치와 출처") {
+        comparisonRow("root-label", "위치", copies: copies, sectionTitle: "위치") {
             componentText($0) { $0.rootLabel }
         },
         comparisonRow("relative-path", "상대 경로", copies: copies) {
             componentText($0) { $0.relativePath }
         },
-        comparisonRow("root-kind", "위치 종류", copies: copies) {
-            componentText($0) { sourceRootKindLabel($0.rootKind) }
-        },
-        comparisonRow("usage-role", "위치 역할", copies: copies) {
+        comparisonRow("usage-role", "용도", copies: copies) {
             componentText($0) { rootUsageRoleLabel($0.rootUsageRole) }
-        },
-        comparisonRow("provenance", "출처", copies: copies) {
-            componentText($0) { sourceProvenanceLabel($0.rootProvenance) }
         },
         comparisonRow("stable-marker", "위치 확인 키", copies: copies, monospaced: true) {
             componentText($0) { $0.stableMarkerKey ?? "—" }
@@ -1900,47 +1866,25 @@ private func shortRoleLabel(_ role: ResourceRole) -> String {
 }
 
 private func rootUsageRoleLabel(_ role: RootUsageRole) -> String {
-    switch role {
-    case .staging: return "작업 위치"
-    case .primaryLibrary: return "주 라이브러리"
+    rootUserPurposeLabel(role.userPurpose)
+}
+
+private func rootUserPurposeLabel(_ purpose: RootUserPurpose) -> String {
+    switch purpose {
+    case .standard: return "기본"
     case .archive: return "장기 보관"
-    case .importSource: return "가져오기 원본"
-    case .reference: return "비교 전용"
+    case .readOnly: return "읽기 전용"
     }
 }
 
-private func rootUsageRoleDescription(_ role: RootUsageRole) -> String {
-    switch role {
-    case .staging:
-        return "사진을 정리하거나 옮기기 전에 잠시 두는 작업 폴더입니다."
-    case .primaryLibrary:
-        return "계속 보관할 주 사진 폴더입니다."
+private func rootUserPurposeDescription(_ purpose: RootUserPurpose) -> String {
+    switch purpose {
+    case .standard:
+        return "일반적인 사진 폴더입니다. 중복을 비교하고 정리할 수 있습니다."
     case .archive:
-        return "장기 보관용 폴더입니다. 보관본을 우선 보호합니다."
-    case .importSource:
-        return "가져오기·내보내기 원본처럼 사진의 출처가 되는 폴더입니다."
-    case .reference:
-        return "비교에만 사용하는 폴더입니다. 이 위치의 파일은 변경하지 않습니다."
-    }
-}
-
-private func sourceProvenanceLabel(_ provenance: SourceProvenance) -> String {
-    switch provenance {
-    case .unknown: return "알 수 없음"
-    case .localLibrary: return "Mac의 기존 사진"
-    case .appleDirect: return "Apple에서 직접 가져옴"
-    case .googleTakeout: return "Google Takeout"
-    case .googleWeb: return "Google Photos 웹"
-    case .googleIOSShare: return "Google Photos iPhone 공유"
-    }
-}
-
-private func sourceRootKindLabel(_ kind: SourceRootKind) -> String {
-    switch kind {
-    case .inbox: return "일반 폴더"
-    case .archive: return "보관 폴더"
-    case .importSource: return "가져오기 원본"
-    case .reference: return "비교 전용"
+        return "오래 보관할 사진을 둡니다. 중복을 정리할 때 이 위치의 사본을 우선 남깁니다."
+    case .readOnly:
+        return "비교에는 사용하지만 이 위치의 파일은 이동하거나 삭제하지 않습니다."
     }
 }
 

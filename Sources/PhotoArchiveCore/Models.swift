@@ -66,6 +66,25 @@ public enum RootUsageRole: String, Codable, CaseIterable, Sendable {
     }
 }
 
+public enum RootUserPurpose: String, Codable, CaseIterable, Sendable {
+    case standard
+    case archive
+    case readOnly = "read_only"
+}
+
+public extension RootUsageRole {
+    var userPurpose: RootUserPurpose {
+        switch self {
+        case .staging, .primaryLibrary, .importSource:
+            return .standard
+        case .archive:
+            return .archive
+        case .reference:
+            return .readOnly
+        }
+    }
+}
+
 public enum SourceProvenance: String, Codable, CaseIterable, Sendable {
     case unknown
     case localLibrary = "local_library"

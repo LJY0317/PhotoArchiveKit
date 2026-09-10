@@ -23,7 +23,7 @@ Implemented today:
 - embedded-identifier Live Photo pairing plus strict QuickTime `still-image-time` validation;
 - stable opaque logical/resource/duplicate IDs;
 - current-state exact duplicate grouping and cross-root archive coverage;
-- registered root roles: `staging`, `primary_library`, `archive`, `import_source`, `reference`;
+- simple comparison-location purposes: default, long-term archive, or read-only; source/import provenance is tracked internally;
 - deterministic preferred-representation planning with Live Photo safety gates;
 - native SwiftUI duplicate-review GUI and Finder-oriented review workspace;
 - reversible duplicate cleanup to macOS Trash or app-managed quarantine;
@@ -110,27 +110,18 @@ swift run photoarchive scan --agent-json --inbox "~/Photo Inbox"
 
 `--json` may contain local paths and filenames. `--agent-json` is the privacy-minimized interface.
 
-## Root registry and roles
+## Root registry and purposes
 
-Each registered root has its own usage role. Role is separate from device and provenance, so two folders on the same HDD may intentionally have different policies.
-
-```text
-staging          temporary working copy
-primary_library  retained main library
-archive          retained long-term replica
-import_source    Takeout/export/camera dump; cleanup only after its safety gates
-reference        comparison-only, never mutated
-```
+The native app exposes only three purposes: **Default** for normal comparison and cleanup, **Long-term Archive** when that location's copy should be preferred for retention, and **Read-only** when files may be compared but never moved or deleted. Provider/import provenance such as Google Takeout is detected and kept internally rather than requested from the user.
 
 Examples:
 
 ```bash
-swift run photoarchive root add --role staging --provenance local_library "~/Pictures"
-swift run photoarchive root role ROOT_ID archive
+swift run photoarchive root add "~/Pictures"
 swift run photoarchive root init --apply "/Volumes/My HDD/My Photos"
 ```
 
-Changing a role changes policy only; it does not move or delete media.
+Changing a purpose changes policy only; it does not itself move or delete media.
 
 ## Exact duplicate review and cleanup
 
@@ -142,7 +133,7 @@ swift run photoarchive plan \
   --takeout "~/Pictures/Takeout"
 ```
 
-The native duplicate-review app shows physical copies or Live Photo occurrences as aligned comparison columns. User-facing metadata stays compact; deeper local metadata can be expanded as advanced information. Selection is reversible and is not itself mutation authority. A single bulk action can select every non-recommended copy across the current comparison, and the same control clears that selection. The toolbar's comparison-locations popover uses standard multi-select checkboxes and keeps root roles as secondary information; registration state, role changes, and unregistering are separated into a dedicated management sheet. The ordinary refresh button reloads recent review results without rereading media, while **Scan Selected Locations** explicitly scans the chosen roots and shows compact scan progress.
+The native duplicate-review app shows physical copies or Live Photo occurrences as aligned comparison columns. User-facing metadata stays compact; deeper local metadata can be expanded as advanced information. Selection is reversible and is not itself mutation authority. A single bulk action can select every non-recommended copy across the current comparison, and the same control clears that selection. The comparison-locations popover uses standard multi-select checkboxes and shows the simple location purpose as secondary information; purpose changes and unregistering stay in a dedicated management sheet. Adding an already registered folder is a no-op and does not rescan it. The ordinary refresh button reloads recent review results without rereading media, while **Scan Selected Locations** explicitly scans the chosen roots and shows compact scan progress.
 
 Launch or refresh the GUI with `scripts/run-app.sh`. It rebuilds the single local `.build/PhotoArchiveKit.app`, closes an older running review process, and opens the newly built app instead of keeping versioned app copies.
 

@@ -161,7 +161,7 @@ final class ReviewStore: ObservableObject {
     func setRootActive(_ rootID: String, isActive: Bool) {
         guard !isScanning else { return }
         do {
-            let report = try RootRegistry.setState(
+            _ = try RootRegistry.setState(
                 target: rootID,
                 state: isActive ? .active : .inactive
             )
@@ -171,18 +171,16 @@ final class ReviewStore: ObservableObject {
             }
             ensureUsableRootSelection()
             resetReviewChoicesForRootChange()
-            statusMessage = isActive
-                ? "‘\(report.label)’을 비교 위치로 다시 활성화했습니다."
-                : "‘\(report.label)’을 비교 위치에서 비활성화했습니다. 파일은 변경되지 않았습니다."
+            statusMessage = nil
         } catch {
             statusMessage = "비교 위치 상태를 바꾸지 못했습니다: \(error.localizedDescription)"
         }
     }
 
-    func setRootUsageRole(_ rootID: String, role: RootUsageRole) {
+    func setRootUserPurpose(_ rootID: String, purpose: RootUserPurpose) {
         guard !isScanning else { return }
         do {
-            let report = try RootRegistry.setUsageRole(target: rootID, role: role)
+            _ = try RootRegistry.setUserPurpose(target: rootID, purpose: purpose)
             registeredRoots = try RootRegistry.list()
 
             let previousSelectedRootIDs = selectedRootIDs
@@ -195,22 +193,21 @@ final class ReviewStore: ObservableObject {
                 resetReviewChoicesForRootChange()
             }
 
-            statusMessage = "‘\(report.label)’의 역할을 ‘\(roleDisplayName(role))’(으)로 변경했습니다. 파일은 변경되지 않았습니다."
+            statusMessage = nil
         } catch {
-            statusMessage = "비교 위치 역할을 바꾸지 못했습니다: \(error.localizedDescription)"
+            statusMessage = "비교 위치 용도를 바꾸지 못했습니다: \(error.localizedDescription)"
         }
     }
 
     func unregisterRoot(_ rootID: String) {
         guard !isScanning else { return }
-        let label = registeredRoots.first(where: { $0.rootID == rootID })?.label ?? "비교 위치"
         do {
             _ = try RootRegistry.remove(target: rootID)
             registeredRoots = try RootRegistry.list()
             selectedRootIDs.remove(rootID)
             ensureUsableRootSelection()
             resetReviewChoicesForRootChange()
-            statusMessage = "‘\(label)’의 등록을 해제했습니다. 원본 파일은 변경되지 않았습니다."
+            statusMessage = nil
         } catch {
             statusMessage = "비교 위치 등록을 해제하지 못했습니다: \(error.localizedDescription)"
         }
@@ -233,16 +230,6 @@ final class ReviewStore: ObservableObject {
         preparedCleanup = nil
         if let selection, !visibleItems.contains(where: { $0.id == selection }) {
             self.selection = visibleItems.first?.id
-        }
-    }
-
-    private func roleDisplayName(_ role: RootUsageRole) -> String {
-        switch role {
-        case .staging: return "작업 위치"
-        case .primaryLibrary: return "주 라이브러리"
-        case .archive: return "장기 보관"
-        case .importSource: return "가져오기 원본"
-        case .reference: return "비교 전용"
         }
     }
 
@@ -304,25 +291,57 @@ final class ReviewStore: ObservableObject {
     @discardableResult
     func registerAndScan(
         url: URL,
-        role: RootUsageRole,
-        provenance: SourceProvenance
+        purpose: RootUserPurpose
     ) async -> Bool {
         guard !isScanning else { return false }
         do {
-            let registered = try RootRegistry.add(
-                url: url,
-                kind: role.sourceKind,
-                provenance: provenance,
-                usageRole: role
-            )
+            let result = try await Task.detached(priority: .userInitiated) {
+                try RootRegistry.addComparisonRoot(url: url, purpose: purpose)
+            }.value
             registeredRoots = try RootRegistry.list()
-            selectedRootIDs.insert(registered.rootID)
-            statusMessage = "‘\(registered.label)’을 비교에 추가했습니다. 검사를 시작합니다…"
+            if result.wasAlreadyRegistered {
+                if result.root.state == .active,
+                   !selectedRootIDs.contains(result.root.rootID) {
+                    selectedRootIDs.insert(result.root.rootID)
+                    resetReviewChoicesForRootChange()
+                }
+                statusMessage = "이미 추가된 위치입니다."
+                return true
+            }
+            selectedRootIDs.insert(result.root.rootID)
+            statusMessage = nil
         } catch {
             statusMessage = "폴더를 추가하지 못했습니다: \(error.localizedDescription)"
             return false
         }
         return await scanSelectedRoots()
+    }
+
+    func isRegisteredRoot(_ url: URL) -> Bool {
+        registeredRoot(at: url) != nil
+    }
+
+    func selectRegisteredRoot(at url: URL) {
+        guard let root = registeredRoot(at: url) else { return }
+        if root.state == .active,
+           !selectedRootIDs.contains(root.rootID) {
+            selectedRootIDs.insert(root.rootID)
+            resetReviewChoicesForRootChange()
+        }
+        statusMessage = "이미 추가된 위치입니다."
+    }
+
+    private func registeredRoot(at url: URL) -> RegisteredRootReport? {
+        let target = normalizedRootPath(url)
+        return registeredRoots.first { root in
+            normalizedRootPath(URL(fileURLWithPath: root.canonicalPath, isDirectory: true)) == target
+        }
+    }
+
+    private func normalizedRootPath(_ url: URL) -> String {
+        url.resolvingSymlinksInPath()
+            .standardizedFileURL.path
+            .decomposedStringWithCanonicalMapping
     }
 
     func isMarkedForCleanup(
