@@ -90,6 +90,11 @@ public enum RootRegistry {
         includeHistory: Bool = false
     ) throws -> [RegisteredRootReport] {
         let catalog = try SQLiteCatalog(url: catalogURL)
+        let displayOrder = try catalog.rootDisplayOrder()
+        var rank: [String: Int] = [:]
+        for (index, rootID) in displayOrder.enumerated() where rank[rootID] == nil {
+            rank[rootID] = index
+        }
         return try catalog.rootRegistryRows(includeHistory: includeHistory).map { row in
             RegisteredRootReport(
                 rootID: row.rootID,
@@ -102,7 +107,35 @@ public enum RootRegistry {
                 isAvailable: FileManager.default.fileExists(atPath: row.canonicalPath),
                 currentResourceCount: row.currentResourceCount
             )
-        }
+        }.enumerated().sorted { lhs, rhs in
+            let leftRank = rank[lhs.element.rootID]
+            let rightRank = rank[rhs.element.rootID]
+            switch (leftRank, rightRank) {
+            case let (.some(left), .some(right)):
+                return left < right
+            case (.some, .none):
+                return true
+            case (.none, .some):
+                return false
+            case (.none, .none):
+                return lhs.offset < rhs.offset
+            }
+        }.map(\.element)
+    }
+
+    @discardableResult
+    public static func setDisplayOrder(
+        rootIDs: [String],
+        catalogURL: URL = PhotoArchivePaths.defaultCatalogURL
+    ) throws -> [RegisteredRootReport] {
+        let catalog = try SQLiteCatalog(url: catalogURL)
+        let currentIDs = try catalog.rootRegistryRows(includeHistory: false).map(\.rootID)
+        let currentSet = Set(currentIDs)
+        var seen = Set<String>()
+        var normalized = rootIDs.filter { currentSet.contains($0) && seen.insert($0).inserted }
+        normalized.append(contentsOf: currentIDs.filter { seen.insert($0).inserted })
+        try catalog.setRootDisplayOrder(normalized)
+        return try list(catalogURL: catalogURL)
     }
 
     public static func registeredRoot(

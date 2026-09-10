@@ -121,7 +121,8 @@ struct ReviewRootView: View {
                 },
                 onSetActive: store.setRootActive,
                 onSetPurpose: store.setRootUserPurpose,
-                onRemove: store.unregisterRoot
+                onRemove: store.unregisterRoot,
+                onReorder: store.reorderRegisteredRoots
             )
         }
         .sheet(item: $store.preparedCleanup) { prepared in
@@ -658,19 +659,21 @@ private struct ComparisonRootManagerSheet: View {
     let onSetActive: (String, Bool) -> Void
     let onSetPurpose: (String, RootUserPurpose) -> Void
     let onRemove: (String) -> Void
+    let onReorder: ([String]) -> Void
 
     @State private var removalRequest: RootRemovalRequest?
+    @State private var orderedRootIDs: [String] = []
+    @State private var targetedRootID: String?
 
-    private var sortedRoots: [RegisteredRootReport] {
-        roots.sorted {
-            if $0.state != $1.state {
-                return $0.state == .active
-            }
-            if $0.label != $1.label {
-                return $0.label.localizedStandardCompare($1.label) == .orderedAscending
-            }
-            return $0.canonicalPath < $1.canonicalPath
+    private var displayedRoots: [RegisteredRootReport] {
+        let byID = Dictionary(uniqueKeysWithValues: roots.map { ($0.rootID, $0) })
+        var seen = Set<String>()
+        var ordered = orderedRootIDs.compactMap { rootID -> RegisteredRootReport? in
+            guard seen.insert(rootID).inserted else { return nil }
+            return byID[rootID]
         }
+        ordered.append(contentsOf: roots.filter { seen.insert($0.rootID).inserted })
+        return ordered
     }
 
     var body: some View {
@@ -684,8 +687,14 @@ private struct ComparisonRootManagerSheet: View {
 
             ScrollView {
                 LazyVStack(spacing: 10) {
-                    ForEach(sortedRoots, id: \.rootID) { root in
+                    ForEach(displayedRoots, id: \.rootID) { root in
                         rootRow(root)
+                            .dropDestination(for: String.self) { items, _ in
+                                guard let sourceRootID = items.first else { return false }
+                                return moveRoot(sourceRootID, to: root.rootID)
+                            } isTargeted: { isTargeted in
+                                targetedRootID = isTargeted ? root.rootID : nil
+                            }
                     }
                 }
                 .padding(.vertical, 1)
@@ -711,6 +720,16 @@ private struct ComparisonRootManagerSheet: View {
         }
         .padding(22)
         .frame(width: 700)
+        .onAppear {
+            orderedRootIDs = roots.map(\.rootID)
+        }
+        .onChange(of: roots.map(\.rootID)) { _, newRootIDs in
+            let valid = Set(newRootIDs)
+            var seen = Set<String>()
+            var next = orderedRootIDs.filter { valid.contains($0) && seen.insert($0).inserted }
+            next.append(contentsOf: newRootIDs.filter { seen.insert($0).inserted })
+            orderedRootIDs = next
+        }
         .alert(item: $removalRequest) { request in
             Alert(
                 title: Text("‘\(request.label)’ 폴더 등록을 해제할까요?"),
@@ -726,31 +745,36 @@ private struct ComparisonRootManagerSheet: View {
     @ViewBuilder
     private func rootRow(_ root: RegisteredRootReport) -> some View {
         HStack(spacing: 14) {
-            Image(systemName: root.isAvailable ? "folder.fill" : "folder.badge.questionmark")
-                .font(.system(size: 21))
-                .foregroundStyle(root.isAvailable ? .secondary : .tertiary)
-                .frame(width: 28)
+            HStack(spacing: 14) {
+                Image(systemName: root.isAvailable ? "folder.fill" : "folder.badge.questionmark")
+                    .font(.system(size: 21))
+                    .foregroundStyle(root.isAvailable ? .secondary : .tertiary)
+                    .frame(width: 28)
 
-            VStack(alignment: .leading, spacing: 3) {
-                HStack(spacing: 6) {
-                    Text(root.label)
-                        .font(.headline)
-                        .lineLimit(1)
-                    if !root.isAvailable {
-                        Text("오프라인")
-                            .font(.caption2.weight(.medium))
-                            .foregroundStyle(.secondary)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(.background.secondary, in: Capsule())
+                VStack(alignment: .leading, spacing: 3) {
+                    HStack(spacing: 6) {
+                        Text(root.label)
+                            .font(.headline)
+                            .lineLimit(1)
+                        if !root.isAvailable {
+                            Text("오프라인")
+                                .font(.caption2.weight(.medium))
+                                .foregroundStyle(.secondary)
+                                .padding(.horizontal, 6)
+                                .padding(.vertical, 2)
+                                .background(.background.secondary, in: Capsule())
+                        }
                     }
+                    Text(root.canonicalPath)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
                 }
-                Text(root.canonicalPath)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-                    .lineLimit(1)
-                    .truncationMode(.middle)
             }
+            .contentShape(Rectangle())
+            .help("드래그하여 순서 변경")
+            .draggable(root.rootID)
 
             Spacer(minLength: 14)
 
@@ -786,7 +810,29 @@ private struct ComparisonRootManagerSheet: View {
             .help("등록 해제")
         }
         .padding(12)
-        .background(.background.secondary, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
+        .background(
+            targetedRootID == root.rootID ? AnyShapeStyle(.quaternary) : AnyShapeStyle(.background.secondary),
+            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
+        )
+    }
+
+    private func moveRoot(_ sourceRootID: String, to targetRootID: String) -> Bool {
+        guard sourceRootID != targetRootID else { return false }
+        if orderedRootIDs.isEmpty {
+            orderedRootIDs = roots.map(\.rootID)
+        }
+        guard let sourceIndex = orderedRootIDs.firstIndex(of: sourceRootID),
+              let targetIndex = orderedRootIDs.firstIndex(of: targetRootID)
+        else { return false }
+
+        var next = orderedRootIDs
+        let moved = next.remove(at: sourceIndex)
+        let insertionIndex = min(targetIndex, next.count)
+        next.insert(moved, at: insertionIndex)
+        orderedRootIDs = next
+        targetedRootID = nil
+        onReorder(next)
+        return true
     }
 }
 

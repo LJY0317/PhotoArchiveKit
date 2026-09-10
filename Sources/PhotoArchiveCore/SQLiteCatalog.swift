@@ -1889,6 +1889,24 @@ final class SQLiteCatalog {
         }
     }
 
+    func rootDisplayOrder() throws -> [String] {
+        guard let encoded = try setting("root_display_order_v1"),
+              let data = encoded.data(using: .utf8),
+              let decoded = try? JSONDecoder().decode([String].self, from: data)
+        else {
+            return []
+        }
+        return decoded
+    }
+
+    func setRootDisplayOrder(_ rootIDs: [String]) throws {
+        let data = try JSONEncoder().encode(rootIDs)
+        guard let encoded = String(data: data, encoding: .utf8) else {
+            throw CatalogError.invalidCatalogValue("root display order could not be encoded")
+        }
+        try setSetting("root_display_order_v1", value: encoded)
+    }
+
     func rootRegistryRows(includeHistory: Bool) throws -> [RootRegistryRow] {
         let whereClause = includeHistory
             ? ""

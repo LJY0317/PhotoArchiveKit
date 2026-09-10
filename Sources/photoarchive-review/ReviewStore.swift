@@ -100,12 +100,7 @@ final class ReviewStore: ObservableObject {
     }
 
     var activeRegisteredRoots: [RegisteredRootReport] {
-        registeredRoots
-            .filter { $0.state == .active }
-            .sorted {
-                if $0.label != $1.label { return $0.label.localizedStandardCompare($1.label) == .orderedAscending }
-                return $0.canonicalPath < $1.canonicalPath
-            }
+        registeredRoots.filter { $0.state == .active }
     }
 
     var currentSnapshotRootIDs: Set<String> {
@@ -212,6 +207,16 @@ final class ReviewStore: ObservableObject {
             statusMessage = nil
         } catch {
             statusMessage = "폴더 등록을 해제하지 못했습니다: \(error.localizedDescription)"
+        }
+    }
+
+    func reorderRegisteredRoots(_ rootIDs: [String]) {
+        guard !isScanning else { return }
+        do {
+            registeredRoots = try RootRegistry.setDisplayOrder(rootIDs: rootIDs)
+            statusMessage = nil
+        } catch {
+            statusMessage = "폴더 순서를 저장하지 못했습니다: \(error.localizedDescription)"
         }
     }
 

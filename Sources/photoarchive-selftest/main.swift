@@ -339,6 +339,23 @@ struct PhotoArchiveSelfTest {
             "the read-only consumer purpose should map to the non-mutating reference role"
         )
 
+        let displayOrderCatalog = temporary.appendingPathComponent("display-order.sqlite3")
+        let displayOrderURLs = ["One", "Two", "Three"].map {
+            temporary.appendingPathComponent("DisplayOrder\($0)", isDirectory: true)
+        }
+        for url in displayOrderURLs {
+            try fileManager.createDirectory(at: url, withIntermediateDirectories: true)
+            _ = try RootRegistry.addComparisonRoot(url: url, catalogURL: displayOrderCatalog)
+        }
+        let initialDisplayRoots = try RootRegistry.list(catalogURL: displayOrderCatalog)
+        let reversedRootIDs = initialDisplayRoots.reversed().map(\.rootID)
+        _ = try RootRegistry.setDisplayOrder(rootIDs: reversedRootIDs, catalogURL: displayOrderCatalog)
+        let reorderedDisplayRoots = try RootRegistry.list(catalogURL: displayOrderCatalog)
+        try require(
+            reorderedDisplayRoots.map(\.rootID) == reversedRootIDs,
+            "consumer folder display order should persist across registry reloads"
+        )
+
         let autoTakeoutRoot = temporary.appendingPathComponent("AutoTakeoutRoot", isDirectory: true)
         let autoTakeoutCatalog = temporary.appendingPathComponent("auto-takeout.sqlite3")
         try fileManager.createDirectory(at: autoTakeoutRoot, withIntermediateDirectories: true)
