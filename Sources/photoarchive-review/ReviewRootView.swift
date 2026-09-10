@@ -44,9 +44,9 @@ struct ReviewRootView: View {
                 Button {
                     isComparisonLocationsPresented.toggle()
                 } label: {
-                    Label("비교 위치", systemImage: "folder.badge.gearshape")
+                    Label("비교 폴더", systemImage: "folder.badge.gearshape")
                 }
-                .help("비교할 위치를 선택하거나 새 폴더를 추가합니다")
+                .help("비교할 폴더를 선택하거나 새 폴더를 추가합니다")
                 .disabled(store.isScanning)
                 .popover(isPresented: $isComparisonLocationsPresented, arrowEdge: .top) {
                     ComparisonLocationsPopover(
@@ -76,7 +76,7 @@ struct ReviewRootView: View {
                     Label("검토 화면 새로고침", systemImage: "arrow.clockwise")
                 }
                 .disabled(store.isLoading || store.isScanning)
-                .help("파일을 다시 검사하지 않고 최근 검사 결과를 화면에 다시 불러옵니다")
+                .help("파일을 다시 스캔하지 않고 최근 결과를 화면에 다시 불러옵니다")
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .photoArchiveReloadReview)) { _ in
@@ -187,8 +187,11 @@ struct ReviewRootView: View {
 
     private var sidebar: some View {
         VStack(spacing: 0) {
-            if let presentation = store.presentation {
-                ReviewSummaryHeader(presentation: presentation)
+            if store.presentation != nil {
+                ReviewSummaryHeader(
+                    itemCount: store.visibleItems.count,
+                    selectedRootLabels: store.selectedRootLabels
+                )
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .padding(.horizontal, 14)
                     .padding(.top, 12)
@@ -222,6 +225,11 @@ struct ReviewRootView: View {
                 "검토 데이터를 열 수 없습니다",
                 systemImage: "exclamationmark.triangle",
                 description: Text(message)
+            )
+        } else if store.selectedRootIDs.isEmpty {
+            ContentUnavailableView(
+                "비교할 폴더를 선택하세요",
+                systemImage: "folder"
             )
         } else if let item = store.selectedItem {
             ReviewDetailView(
@@ -502,18 +510,18 @@ private struct ComparisonLocationsPopover: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             VStack(alignment: .leading, spacing: 2) {
-                Text("비교 위치")
+                Text("비교 폴더")
                     .font(.headline)
-                Text("\(selectedRootIDs.count)개 위치 선택됨")
+                Text("\(selectedRootIDs.count)개 폴더 선택됨")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
 
             if roots.isEmpty {
                 ContentUnavailableView(
-                    "등록된 위치가 없습니다",
+                    "등록된 폴더가 없습니다",
                     systemImage: "folder",
-                    description: Text("폴더를 추가해 비교 위치를 등록하세요.")
+                    description: Text("비교할 폴더를 추가하세요.")
                 )
                 .frame(width: 290, height: 120)
             } else {
@@ -539,7 +547,6 @@ private struct ComparisonLocationsPopover: View {
                         .disabled(
                             isScanning
                                 || (!root.isAvailable && !isSelected)
-                                || (isSelected && selectedRootIDs.count == 1)
                         )
                         .help(rootUserPurposeDescription(root.usageRole.userPurpose))
                     }
@@ -556,22 +563,33 @@ private struct ComparisonLocationsPopover: View {
                 .buttonStyle(.plain)
 
                 Button(action: onManage) {
-                    Label("비교 위치 관리…", systemImage: "slider.horizontal.3")
+                    Label("폴더 상세 설정…", systemImage: "slider.horizontal.3")
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
                 .buttonStyle(.plain)
 
                 Divider()
 
-                Button(action: onScan) {
-                    Label(
-                        selectedRootsNeedScan ? "선택한 위치 검사" : "선택한 위치 다시 검사",
-                        systemImage: "arrow.triangle.2.circlepath"
-                    )
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                if selectedRootsNeedScan {
+                    Text("새로 선택한 폴더가 아직 스캔되지 않았습니다.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+
+                    Button(action: onScan) {
+                        Label("선택한 폴더 스캔", systemImage: "arrow.triangle.2.circlepath")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(selectedRootIDs.isEmpty || isScanning)
+                } else {
+                    Button(action: onScan) {
+                        Label("선택한 폴더 다시 스캔", systemImage: "arrow.triangle.2.circlepath")
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                    .buttonStyle(.plain)
+                    .disabled(selectedRootIDs.isEmpty || isScanning)
                 }
-                .buttonStyle(.plain)
-                .disabled(selectedRootIDs.isEmpty || isScanning)
             }
         }
         .padding(14)
@@ -618,9 +636,9 @@ private struct ComparisonRootManagerSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             VStack(alignment: .leading, spacing: 5) {
-                Text("비교 위치 관리")
+                Text("폴더 상세 설정")
                     .font(.title2.weight(.semibold))
-                Text("비교에 사용할 위치와 용도를 관리합니다.")
+                Text("등록한 폴더의 사용 여부와 용도를 변경합니다.")
                     .foregroundStyle(.secondary)
             }
 
@@ -649,8 +667,8 @@ private struct ComparisonRootManagerSheet: View {
         .frame(width: 700)
         .alert(item: $removalRequest) { request in
             Alert(
-                title: Text("‘\(request.label)’ 등록을 해제할까요?"),
-                message: Text("PhotoArchiveKit의 현재 등록과 catalog 관측 정보가 정리됩니다. 원본 폴더와 media 파일은 변경되지 않습니다."),
+                title: Text("‘\(request.label)’ 폴더 등록을 해제할까요?"),
+                message: Text("PhotoArchiveKit에서 등록만 해제합니다. 폴더와 사진은 그대로 유지됩니다."),
                 primaryButton: .destructive(Text("등록 해제")) {
                     onRemove(request.rootID)
                 },
@@ -700,36 +718,26 @@ private struct ComparisonRootManagerSheet: View {
             .toggleStyle(.switch)
             .disabled(isWorking)
 
-            Picker(
-                "용도",
+            RootPurposePopUpButton(
                 selection: Binding(
                     get: { root.usageRole.userPurpose },
                     set: { onSetPurpose(root.rootID, $0) }
-                )
-            ) {
-                ForEach(RootUserPurpose.allCases, id: \.self) { purpose in
-                    Text(rootUserPurposeLabel(purpose))
-                        .help(rootUserPurposeDescription(purpose))
-                        .tag(purpose)
-                }
-            }
-            .labelsHidden()
+                ),
+                isEnabled: !isWorking
+            )
             .frame(width: 135)
-            .disabled(isWorking)
-            .help(rootUserPurposeDescription(root.usageRole.userPurpose))
 
-            Menu {
-                Button("등록 해제…", role: .destructive) {
-                    removalRequest = RootRemovalRequest(rootID: root.rootID, label: root.label)
-                }
+            Button {
+                removalRequest = RootRemovalRequest(rootID: root.rootID, label: root.label)
             } label: {
-                Image(systemName: "ellipsis.circle")
+                Image(systemName: "minus.circle")
                     .imageScale(.large)
+                    .foregroundStyle(.secondary)
             }
-            .menuStyle(.borderlessButton)
+            .buttonStyle(.plain)
             .fixedSize()
             .disabled(isWorking)
-            .help("이 비교 위치를 관리합니다")
+            .help("등록 해제")
         }
         .padding(12)
         .background(.background.secondary, in: RoundedRectangle(cornerRadius: 12, style: .continuous))
@@ -749,9 +757,9 @@ private struct AddComparisonRootSheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 20) {
             VStack(alignment: .leading, spacing: 6) {
-                Text("비교 위치 추가")
+                Text("비교 폴더 추가")
                     .font(.title2.weight(.semibold))
-                Text("이 폴더를 비교 위치에 추가합니다.")
+                Text("이 폴더를 비교에 추가합니다.")
                     .foregroundStyle(.secondary)
             }
 
@@ -776,16 +784,8 @@ private struct AddComparisonRootSheet: View {
                 HStack(spacing: 14) {
                     Text("용도")
                         .foregroundStyle(.secondary)
-                    Picker("용도", selection: $purpose) {
-                        ForEach(RootUserPurpose.allCases, id: \.self) { value in
-                            Text(rootUserPurposeLabel(value))
-                                .help(rootUserPurposeDescription(value))
-                                .tag(value)
-                        }
-                    }
-                    .labelsHidden()
-                    .frame(maxWidth: .infinity)
-                    .help(rootUserPurposeDescription(purpose))
+                    RootPurposePopUpButton(selection: $purpose, isEnabled: !isWorking)
+                        .frame(width: 180)
                 }
                 .padding(.top, 10)
             }
@@ -824,22 +824,23 @@ private struct AddComparisonRootSheet: View {
 }
 
 private struct ReviewSummaryHeader: View {
-    let presentation: DuplicateReviewPresentation
+    let itemCount: Int
+    let selectedRootLabels: [String]
 
     var body: some View {
         HStack(alignment: .firstTextBaseline) {
             VStack(alignment: .leading, spacing: 2) {
                 Text("중복 사진 검토")
                     .font(.headline)
-                Text("중복 항목 \(presentation.items.count)개")
+                Text("중복 항목 \(itemCount)개")
                     .font(.caption)
                     .foregroundStyle(.secondary)
-                if !presentation.scopeRootLabels.isEmpty {
-                    Text(presentation.scopeRootLabels.joined(separator: " + "))
+                if !selectedRootLabels.isEmpty {
+                    Text(selectedRootLabels.joined(separator: " + "))
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                         .lineLimit(1)
-                        .help("현재 비교에 포함된 위치")
+                        .help("현재 비교에 포함된 폴더")
                 }
             }
         }
@@ -876,13 +877,13 @@ private struct ReviewSidebarRow: View {
 
             Spacer(minLength: 8)
             if selectedCleanupCount > 0 {
-                Label("\(selectedCleanupCount)", systemImage: "trash.fill")
-                    .labelStyle(.titleAndIcon)
+                HStack(spacing: 4) {
+                    Image(systemName: "trash")
+                        .foregroundStyle(.red)
+                    Text("\(selectedCleanupCount)")
+                        .foregroundStyle(.secondary)
+                }
                     .font(.caption.monospacedDigit())
-                    .foregroundStyle(.red)
-                    .padding(.horizontal, 6)
-                    .padding(.vertical, 2)
-                    .background(Color.red.opacity(0.12), in: Capsule())
                     .help("삭제 대상으로 선택한 사본 \(selectedCleanupCount)개")
             }
 
@@ -1947,9 +1948,63 @@ private func rootUserPurposeDescription(_ purpose: RootUserPurpose) -> String {
     case .standard:
         return "일반적인 사진 폴더입니다. 중복을 비교하고 정리할 수 있습니다."
     case .archive:
-        return "오래 보관할 사진을 둡니다. 중복을 정리할 때 이 위치의 사본을 우선 남깁니다."
+        return "오래 보관할 사진을 둡니다. 중복을 정리할 때 이 폴더의 사본을 우선 남깁니다."
     case .readOnly:
-        return "비교에는 사용하지만 이 위치의 파일은 이동하거나 삭제하지 않습니다."
+        return "비교에는 사용하지만 이 폴더의 파일은 이동하거나 삭제하지 않습니다."
+    }
+}
+
+private struct RootPurposePopUpButton: NSViewRepresentable {
+    @Binding var selection: RootUserPurpose
+    let isEnabled: Bool
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(parent: self)
+    }
+
+    func makeNSView(context: Context) -> NSPopUpButton {
+        let button = NSPopUpButton(frame: .zero, pullsDown: false)
+        button.controlSize = .regular
+        button.target = context.coordinator
+        button.action = #selector(Coordinator.selectionChanged(_:))
+        button.setAccessibilityLabel("용도")
+        configure(button)
+        return button
+    }
+
+    func updateNSView(_ button: NSPopUpButton, context: Context) {
+        context.coordinator.parent = self
+        configure(button)
+    }
+
+    private func configure(_ button: NSPopUpButton) {
+        button.removeAllItems()
+        for purpose in RootUserPurpose.allCases {
+            button.addItem(withTitle: rootUserPurposeLabel(purpose))
+            guard let item = button.lastItem else { continue }
+            item.representedObject = purpose.rawValue
+            item.toolTip = rootUserPurposeDescription(purpose)
+        }
+        if let index = RootUserPurpose.allCases.firstIndex(of: selection) {
+            button.selectItem(at: index)
+        }
+        button.isEnabled = isEnabled
+        button.toolTip = rootUserPurposeDescription(selection)
+    }
+
+    final class Coordinator: NSObject {
+        var parent: RootPurposePopUpButton
+
+        init(parent: RootPurposePopUpButton) {
+            self.parent = parent
+        }
+
+        @MainActor @objc func selectionChanged(_ sender: NSPopUpButton) {
+            guard let rawValue = sender.selectedItem?.representedObject as? String,
+                  let purpose = RootUserPurpose(rawValue: rawValue)
+            else { return }
+            parent.selection = purpose
+        }
     }
 }
 

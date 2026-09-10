@@ -96,7 +96,7 @@ final class ReviewStore: ObservableObject {
     }
 
     var recommendedCleanupSelectionTitle: String {
-        recommendedCleanupSelectionIsApplied ? "삭제 대상 모두 해제" : "추천 삭제 대상 모두 선택"
+        recommendedCleanupSelectionIsApplied ? "삭제 선택 모두 해제" : "추천 삭제 대상 모두 선택"
     }
 
     var activeRegisteredRoots: [RegisteredRootReport] {
@@ -110,6 +110,12 @@ final class ReviewStore: ObservableObject {
 
     var currentSnapshotRootIDs: Set<String> {
         Set(presentation?.scopeRoots.map(\.id) ?? [])
+    }
+
+    var selectedRootLabels: [String] {
+        activeRegisteredRoots
+            .filter { selectedRootIDs.contains($0.rootID) }
+            .map(\.label)
     }
 
     var selectedRootsNeedScan: Bool {
@@ -147,15 +153,11 @@ final class ReviewStore: ObservableObject {
     func toggleRoot(_ rootID: String) {
         statusMessage = nil
         if selectedRootIDs.contains(rootID) {
-            guard selectedRootIDs.count > 1 else { return }
             selectedRootIDs.remove(rootID)
         } else {
             selectedRootIDs.insert(rootID)
         }
         resetReviewChoicesForRootChange()
-        if selectedRootsNeedScan {
-            statusMessage = "아직 검사하지 않은 위치가 선택되었습니다. ‘선택한 위치 다시 검사’를 실행하면 함께 비교합니다."
-        }
     }
 
     func setRootActive(_ rootID: String, isActive: Bool) {
@@ -173,7 +175,7 @@ final class ReviewStore: ObservableObject {
             resetReviewChoicesForRootChange()
             statusMessage = nil
         } catch {
-            statusMessage = "비교 위치 상태를 바꾸지 못했습니다: \(error.localizedDescription)"
+            statusMessage = "폴더 설정을 바꾸지 못했습니다: \(error.localizedDescription)"
         }
     }
 
@@ -195,7 +197,7 @@ final class ReviewStore: ObservableObject {
 
             statusMessage = nil
         } catch {
-            statusMessage = "비교 위치 용도를 바꾸지 못했습니다: \(error.localizedDescription)"
+            statusMessage = "폴더 용도를 바꾸지 못했습니다: \(error.localizedDescription)"
         }
     }
 
@@ -209,18 +211,13 @@ final class ReviewStore: ObservableObject {
             resetReviewChoicesForRootChange()
             statusMessage = nil
         } catch {
-            statusMessage = "비교 위치 등록을 해제하지 못했습니다: \(error.localizedDescription)"
+            statusMessage = "폴더 등록을 해제하지 못했습니다: \(error.localizedDescription)"
         }
     }
 
     private func ensureUsableRootSelection() {
         let activeIDs = Set(activeRegisteredRoots.map(\.rootID))
         selectedRootIDs.formIntersection(activeIDs)
-        guard selectedRootIDs.isEmpty else { return }
-        if let fallback = activeRegisteredRoots.first(where: \.isAvailable)
-            ?? activeRegisteredRoots.first {
-            selectedRootIDs.insert(fallback.rootID)
-        }
     }
 
     private func resetReviewChoicesForRootChange() {
@@ -238,20 +235,20 @@ final class ReviewStore: ObservableObject {
         guard !isScanning else { return false }
         let roots = activeRegisteredRoots.filter { selectedRootIDs.contains($0.rootID) }
         guard !roots.isEmpty else {
-            statusMessage = "비교할 위치를 하나 이상 선택하세요."
+            statusMessage = "비교할 폴더를 하나 이상 선택하세요."
             return false
         }
         let unavailable = roots.filter { !$0.isAvailable }
         guard unavailable.isEmpty else {
             let names = unavailable.map(\.label).joined(separator: ", ")
-            statusMessage = "현재 사용할 수 없는 위치가 있습니다: \(names)"
+            statusMessage = "현재 사용할 수 없는 폴더가 있습니다: \(names)"
             return false
         }
 
         isScanning = true
         scanProgress = ScanProgress(stage: .enumerating, completedUnitCount: 0)
         errorMessage = nil
-        statusMessage = "선택한 \(roots.count)개 위치를 비교하는 중입니다…"
+        statusMessage = "선택한 \(roots.count)개 폴더를 스캔하는 중입니다…"
         let scanRoots = roots.map {
             ScanRoot(
                 url: URL(fileURLWithPath: $0.canonicalPath, isDirectory: true),
@@ -305,7 +302,7 @@ final class ReviewStore: ObservableObject {
                     selectedRootIDs.insert(result.root.rootID)
                     resetReviewChoicesForRootChange()
                 }
-                statusMessage = "이미 추가된 위치입니다."
+                statusMessage = "이미 추가된 폴더입니다."
                 return true
             }
             selectedRootIDs.insert(result.root.rootID)
@@ -328,7 +325,7 @@ final class ReviewStore: ObservableObject {
             selectedRootIDs.insert(root.rootID)
             resetReviewChoicesForRootChange()
         }
-        statusMessage = "이미 추가된 위치입니다."
+        statusMessage = "이미 추가된 폴더입니다."
     }
 
     private func registeredRoot(at url: URL) -> RegisteredRootReport? {
