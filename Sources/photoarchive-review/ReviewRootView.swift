@@ -9,6 +9,7 @@ struct ReviewRootView: View {
     @State private var isComparisonLocationsPresented = false
     @State private var isRootManagerPresented = false
     @State private var returnsToRootManagerAfterAdd = false
+    @State private var folderNotice: String?
 
     var body: some View {
         ReviewWindowLayout {
@@ -54,6 +55,7 @@ struct ReviewRootView: View {
                         selectedRootIDs: store.selectedRootIDs,
                         selectedRootsNeedScan: store.selectedRootsNeedScan,
                         isScanning: store.isScanning,
+                        noticeMessage: folderNotice,
                         onToggle: store.toggleRoot,
                         onAddFolder: {
                             isComparisonLocationsPresented = false
@@ -109,6 +111,7 @@ struct ReviewRootView: View {
             ComparisonRootManagerSheet(
                 roots: store.registeredRoots,
                 isWorking: store.isScanning,
+                noticeMessage: folderNotice,
                 onClose: { isRootManagerPresented = false },
                 onAddFolder: {
                     isRootManagerPresented = false
@@ -164,8 +167,11 @@ struct ReviewRootView: View {
         let standardized = url.standardizedFileURL
         if store.isRegisteredRoot(standardized) {
             store.selectRegisteredRoot(at: standardized)
+            showFolderNotice("이미 등록된 폴더입니다.")
             if returnToManager {
                 scheduleRootManagerPresentation()
+            } else {
+                scheduleComparisonFoldersPresentation()
             }
             return
         }
@@ -182,6 +188,21 @@ struct ReviewRootView: View {
     private func scheduleRootManagerPresentation() {
         DispatchQueue.main.async {
             isRootManagerPresented = true
+        }
+    }
+
+    private func scheduleComparisonFoldersPresentation() {
+        DispatchQueue.main.async {
+            isComparisonLocationsPresented = true
+        }
+    }
+
+    private func showFolderNotice(_ message: String) {
+        folderNotice = message
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3) {
+            if folderNotice == message {
+                folderNotice = nil
+            }
         }
     }
 
@@ -231,6 +252,11 @@ struct ReviewRootView: View {
                 "비교할 폴더를 선택하세요",
                 systemImage: "folder"
             )
+        } else if store.selectedRootIDs.isEmpty {
+            ContentUnavailableView(
+                "비교할 폴더를 선택하세요",
+                systemImage: "folder"
+            )
         } else if let item = store.selectedItem {
             ReviewDetailView(
                 item: item,
@@ -243,11 +269,17 @@ struct ReviewRootView: View {
                 columnToggleHelp: { store.columnToggleHelp($0, item: item) },
                 cleanupToggleHelp: { store.cleanupToggleHelp($0, item: item) }
             )
+        } else if !store.searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            ContentUnavailableView(
+                "검색 결과가 없습니다",
+                systemImage: "magnifyingglass",
+                description: Text("현재 검색 조건에 맞는 중복 항목이 없습니다.")
+            )
         } else {
             ContentUnavailableView(
-                "검토할 중복이 없습니다",
+                "중복 항목이 없습니다",
                 systemImage: "checkmark.circle",
-                description: Text("현재 검색 조건에 맞는 중복 항목이 없습니다.")
+                description: Text("선택한 폴더에서 중복 항목을 찾지 못했습니다.")
             )
         }
     }
@@ -502,6 +534,7 @@ private struct ComparisonLocationsPopover: View {
     let selectedRootIDs: Set<String>
     let selectedRootsNeedScan: Bool
     let isScanning: Bool
+    let noticeMessage: String?
     let onToggle: (String) -> Void
     let onAddFolder: () -> Void
     let onManage: () -> Void
@@ -570,6 +603,12 @@ private struct ComparisonLocationsPopover: View {
 
                 Divider()
 
+                if let noticeMessage {
+                    Label(noticeMessage, systemImage: "checkmark.circle")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+
                 if selectedRootsNeedScan {
                     Text("새로 선택한 폴더가 아직 스캔되지 않았습니다.")
                         .font(.caption)
@@ -613,6 +652,7 @@ private struct RootRemovalRequest: Identifiable {
 private struct ComparisonRootManagerSheet: View {
     let roots: [RegisteredRootReport]
     let isWorking: Bool
+    let noticeMessage: String?
     let onClose: () -> Void
     let onAddFolder: () -> Void
     let onSetActive: (String, Bool) -> Void
@@ -651,6 +691,12 @@ private struct ComparisonRootManagerSheet: View {
                 .padding(.vertical, 1)
             }
             .frame(minHeight: 260, maxHeight: 440)
+
+            if let noticeMessage {
+                Label(noticeMessage, systemImage: "checkmark.circle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
 
             HStack {
                 Button(action: onAddFolder) {

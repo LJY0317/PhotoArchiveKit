@@ -302,7 +302,7 @@ final class ReviewStore: ObservableObject {
                     selectedRootIDs.insert(result.root.rootID)
                     resetReviewChoicesForRootChange()
                 }
-                statusMessage = "이미 추가된 폴더입니다."
+                statusMessage = "이미 등록된 폴더입니다."
                 return true
             }
             selectedRootIDs.insert(result.root.rootID)
@@ -325,7 +325,7 @@ final class ReviewStore: ObservableObject {
             selectedRootIDs.insert(root.rootID)
             resetReviewChoicesForRootChange()
         }
-        statusMessage = "이미 추가된 폴더입니다."
+        statusMessage = nil
     }
 
     private func registeredRoot(at url: URL) -> RegisteredRootReport? {
