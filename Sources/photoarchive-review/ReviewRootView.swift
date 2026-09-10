@@ -196,7 +196,10 @@ struct ReviewRootView: View {
             }
 
             List(store.visibleItems, selection: $store.selection) { item in
-                ReviewSidebarRow(item: item)
+                ReviewSidebarRow(
+                    item: item,
+                    selectedCleanupCount: store.cleanupCopyIDsByItem[item.id, default: []].count
+                )
                     .tag(item.id)
             }
             .listStyle(.sidebar)
@@ -371,6 +374,9 @@ private struct ReviewCleanupConfirmationSheet: View {
                     .font(.title2.weight(.semibold))
                 Text(summaryTitle)
                     .foregroundStyle(.secondary)
+                Text(recoveryHint)
+                    .font(.callout)
+                    .foregroundStyle(.secondary)
                 if report.destinationKind == .customQuarantine {
                     Text(destinationTitle)
                         .font(.caption)
@@ -447,6 +453,15 @@ private struct ReviewCleanupConfirmationSheet: View {
         case .customQuarantine:
             guard let path = report.targetPath else { return "사용자 지정 격리 폴더" }
             return "사용자 지정 격리 폴더 · \(URL(fileURLWithPath: path).lastPathComponent)"
+        }
+    }
+
+    private var recoveryHint: String {
+        switch report.destinationKind {
+        case .systemTrash:
+            return "필요하면 휴지통에서 다시 복원할 수 있습니다."
+        case .customQuarantine:
+            return "필요하면 격리 폴더에서 다시 복원할 수 있습니다."
         }
     }
 
@@ -833,6 +848,7 @@ private struct ReviewSummaryHeader: View {
 
 private struct ReviewSidebarRow: View {
     let item: DuplicateReviewPresentationItem
+    let selectedCleanupCount: Int
 
     var body: some View {
         HStack(spacing: 10) {
@@ -859,6 +875,17 @@ private struct ReviewSidebarRow: View {
             }
 
             Spacer(minLength: 8)
+            if selectedCleanupCount > 0 {
+                Label("\(selectedCleanupCount)", systemImage: "trash.fill")
+                    .labelStyle(.titleAndIcon)
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.red)
+                    .padding(.horizontal, 6)
+                    .padding(.vertical, 2)
+                    .background(Color.red.opacity(0.12), in: Capsule())
+                    .help("삭제 대상으로 선택한 사본 \(selectedCleanupCount)개")
+            }
+
             Label("\(copyCount)", systemImage: "doc.on.doc")
                 .labelStyle(.titleAndIcon)
                 .font(.caption.monospacedDigit())

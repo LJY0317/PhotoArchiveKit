@@ -96,7 +96,7 @@ final class ReviewStore: ObservableObject {
     }
 
     var recommendedCleanupSelectionTitle: String {
-        recommendedCleanupSelectionIsApplied ? "전체 선택 해제" : "추천 외 모두 선택"
+        recommendedCleanupSelectionIsApplied ? "삭제 대상 모두 해제" : "추천 삭제 대상 모두 선택"
     }
 
     var activeRegisteredRoots: [RegisteredRootReport] {
