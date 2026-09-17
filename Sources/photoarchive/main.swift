@@ -978,7 +978,7 @@ struct PhotoArchiveCLI {
                 throw CLIError("duplicate-review requires --output PATH.")
             }
             let scanner = try ArchiveScanner(catalogURL: catalogURL)
-            guard let report = try scanner.latestReusableActiveRootsScanReport() else {
+            guard let report = try scanner.latestReusableActiveRootsDuplicateReviewScanReport() else {
                 throw CLIError(
                     "No reusable complete scan snapshot matches the currently active roots. "
                         + "Run duplicate-review with --refresh once to refresh the catalog."
@@ -2007,8 +2007,10 @@ struct PhotoArchiveCLI {
         } else if command == "duplicate-review" {
             operationNotes = """
             duplicate-review normally reuses the latest complete catalog snapshot whose roots
-            still match the active root registry, so opening a previously computed exact review
-            does not reread the whole media library. Before presenting an old decision, it cheaply
+            still match the active root registry and whose session records that exact duplicate
+            comparison was performed. Scans created with --no-exact-duplicates and legacy sessions
+            without that capability record are not treated as zero-duplicate reviews; use --refresh
+            to create current exact evidence. Before presenting an old decision, it cheaply
             checks current size, modification time, filesystem identity, and stable root marker
             identity where available. Changed groups are marked STALE; unavailable roots are OFFLINE.
             comparison.txt explains exact-byte evidence, original target size, metadata differences,

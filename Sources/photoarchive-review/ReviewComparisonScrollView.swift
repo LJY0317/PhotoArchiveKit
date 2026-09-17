@@ -2,8 +2,9 @@ import AppKit
 import SwiftUI
 
 /// Own the scroll container; SwiftUI continues to own the comparison Grid.
-/// Legacy scrollers reserve space outside the document, including above the
-/// window's bottom action bar, and remain usable with a wheel-only mouse.
+/// The legacy vertical scroller remains outside the document and usable with a
+/// wheel-only mouse. The horizontal scroller is installed only for real overflow
+/// so an unused scroller slot does not leave a strip above the bottom action bar.
 struct ReviewComparisonScrollView<Content: View>: NSViewRepresentable {
     let documentID: String
     @ViewBuilder var content: () -> Content
@@ -43,6 +44,7 @@ final class ComparisonScrollContainer<Content: View>: NSScrollView {
     private var documentID: String
     private var hasScheduledDocumentResize = false
     private var isResizingDocument = false
+    private var isUpdatingHorizontalScroller = false
 
     init(content: Content, documentID: String) {
         hostingView = ComparisonHostingView(rootView: content)
@@ -50,7 +52,7 @@ final class ComparisonScrollContainer<Content: View>: NSScrollView {
         super.init(frame: .zero)
         borderType = .noBorder
         drawsBackground = false
-        hasHorizontalScroller = true
+        hasHorizontalScroller = false
         hasVerticalScroller = true
         scrollerStyle = .legacy
         autohidesScrollers = false
@@ -65,7 +67,6 @@ final class ComparisonScrollContainer<Content: View>: NSScrollView {
         hostingView.layoutDidComplete = { [weak self] in
             self?.resizeDocumentAfterHostedLayout()
         }
-        horizontalScroller?.toolTip = "좌우로 드래그하거나 Shift + 마우스 휠로 비교 열을 이동합니다."
         resizeDocument(resetPosition: true)
     }
 
@@ -77,6 +78,17 @@ final class ComparisonScrollContainer<Content: View>: NSScrollView {
         hostingView.rootView = content
         hostingView.layoutSubtreeIfNeeded()
         resizeDocument(resetPosition: changedGroup)
+    }
+
+    override func layout() {
+        super.layout()
+        updateHorizontalScrollerAvailability()
+        updateTopFade()
+    }
+
+    override func reflectScrolledClipView(_ cView: NSClipView) {
+        super.reflectScrolledClipView(cView)
+        updateTopFade()
     }
 
     private func scheduleDocumentResize() {
@@ -121,6 +133,37 @@ final class ComparisonScrollContainer<Content: View>: NSScrollView {
                 NSRect(origin: origin, size: contentView.bounds.size)
             ).origin)
         }
+        updateHorizontalScrollerAvailability(documentWidth: size.width)
         reflectScrolledClipView(contentView)
+        updateTopFade()
+    }
+
+    private func updateHorizontalScrollerAvailability(documentWidth: CGFloat? = nil) {
+        guard !isUpdatingHorizontalScroller, bounds.width > 0 else { return }
+        let width = documentWidth ?? documentView?.frame.width ?? 0
+        let needsHorizontalScroller = width > contentView.bounds.width + 0.5
+        guard hasHorizontalScroller != needsHorizontalScroller else { return }
+
+        isUpdatingHorizontalScroller = true
+        let origin = contentView.bounds.origin
+        hasHorizontalScroller = needsHorizontalScroller
+        if needsHorizontalScroller {
+            horizontalScroller?.toolTip = "좌우로 드래그하거나 Shift + 마우스 휠로 비교 열을 이동합니다."
+        }
+        tile()
+        contentView.scroll(to: contentView.constrainBoundsRect(
+            NSRect(origin: origin, size: contentView.bounds.size)
+        ).origin)
+        reflectScrolledClipView(contentView)
+        updateTopFade()
+        isUpdatingHorizontalScroller = false
+    }
+
+    private func updateTopFade() {
+        ReviewScrollEdgeFade.update(
+            in: self,
+            occlusionHeight: ReviewScrollEdgeFade.defaultLength,
+            fadeLength: ReviewScrollEdgeFade.defaultLength
+        )
     }
 }

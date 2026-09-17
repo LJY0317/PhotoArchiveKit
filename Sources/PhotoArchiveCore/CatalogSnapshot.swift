@@ -193,6 +193,8 @@ public enum CatalogSnapshotRestorer {
         destinationCatalogURL: URL,
         rootBindings: [CatalogRootBinding] = []
     ) throws -> CatalogSnapshotReport {
+        let operationLock = try PhotoArchiveOperationLock.acquire(catalogURL: destinationCatalogURL)
+        defer { operationLock.release() }
         let prepared = try prepare(
             snapshotURL: snapshotURL,
             destinationCatalogURL: destinationCatalogURL,

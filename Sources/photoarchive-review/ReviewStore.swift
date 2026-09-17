@@ -18,6 +18,16 @@ struct PreparedReviewCleanup: Identifiable {
     let selectedCopyCount: Int
 }
 
+func folderSyncConfirmationItemCount(_ journal: FolderSyncJournal) -> Int {
+    let confirmationItemCount = journal.items.count(where: {
+        $0.state == .confirmationRequired
+    })
+    return max(
+        confirmationItemCount,
+        journal.pendingDeletionPlan?.logicalItemCount ?? 0
+    )
+}
+
 @MainActor
 final class ReviewStore: ObservableObject {
     @Published var presentation: DuplicateReviewPresentation?
@@ -38,6 +48,26 @@ final class ReviewStore: ObservableObject {
     @Published private(set) var cleanupDestinationSetting = DuplicateCleanupDestinationSetting.systemTrash
     @Published var removeAllConfirmation: RemoveAllCleanupConfirmation?
     @Published private(set) var explicitlyRemoveAllItemIDs = Set<String>()
+    @Published private(set) var syncConnections: [FolderSyncConnection] = []
+    @Published private(set) var syncDriveRemotes: [RcloneDriveRemote] = []
+    @Published private(set) var isLoadingSyncRemotes = false
+    @Published private(set) var isSyncing = false
+    @Published private(set) var syncProgress: FolderSyncProgress?
+    @Published var syncErrorMessage: String?
+    @Published private(set) var syncPendingDeletionPlans: [String: FolderSyncDeletionPlan] = [:]
+    @Published private(set) var syncConfirmationItemCounts: [String: Int] = [:]
+    @Published private(set) var syncConflictItemsByConnection: [String: [FolderSyncConflictItem]] = [:]
+    @Published private(set) var syncRecoveryItemsByConnection: [String: [FolderSyncRecoveryItem]] = [:]
+    @Published private(set) var isLoadingSyncConflicts = false
+    @Published private(set) var isResolvingSyncConflict = false
+    @Published private(set) var isLoadingSyncRecovery = false
+    @Published private(set) var isRestoringSyncRecovery = false
+    @Published private(set) var isCleaningSyncRecovery = false
+    private var hasLoadedRootSelection = false
+    private var completedScanRootIDs = Set<String>()
+    private var reloadState = ReviewReloadApplicationGate()
+    private var activeScanGeneration = ReviewGenerationGate()
+    private let syncService = RcloneBisyncService()
 
     init() {
         reload()
@@ -96,7 +126,7 @@ final class ReviewStore: ObservableObject {
     }
 
     var recommendedCleanupSelectionTitle: String {
-        recommendedCleanupSelectionIsApplied ? "삭제 선택 모두 해제" : "추천 삭제 대상 모두 선택"
+        recommendedCleanupSelectionIsApplied ? "추천 모두 해제" : "추천 모두 선택"
     }
 
     var activeRegisteredRoots: [RegisteredRootReport] {
@@ -114,7 +144,18 @@ final class ReviewStore: ObservableObject {
     }
 
     var selectedRootsNeedScan: Bool {
-        !selectedRootIDs.isEmpty && !selectedRootIDs.isSubset(of: currentSnapshotRootIDs)
+        selectedRootsNeedInitialScan(
+            selected: selectedRootIDs,
+            completed: completedScanRootIDs
+        )
+    }
+
+    var selectedRootsNeedCurrentComparison: Bool {
+        reviewSelectionNeedsCurrentComparison(
+            selected: selectedRootIDs,
+            completed: completedScanRootIDs,
+            snapshot: currentSnapshotRootIDs
+        )
     }
 
     var selectedItem: DuplicateReviewPresentationItem? {
@@ -127,77 +168,114 @@ final class ReviewStore: ObservableObject {
         return visibleItems.firstIndex(where: { $0.id == item.id })
     }
 
+    var hasFilesystemOperationInProgress: Bool {
+        isScanning || isSyncing || isPreparingCleanup || isApplyingCleanup
+            || isResolvingSyncConflict || isRestoringSyncRecovery || isCleaningSyncRecovery
+    }
+
+    func syncConnection(for rootID: String) -> FolderSyncConnection? {
+        syncConnections.first(where: { $0.rootID == rootID })
+    }
+
     func reload() {
-        isLoading = true
+        guard !isScanning, !isSyncing else { return }
+        let generation = reloadState.begin()
+        isLoading = reloadState.isLoading
         errorMessage = nil
         statusMessage = nil
-        cleanupDestinationSetting = (try? PhotoArchiveSettingsStore.load())?.duplicateCleanupDestination
-            ?? .systemTrash
-        do {
-            registeredRoots = try RootRegistry.list()
-            let next = try DuplicateReviewPresentationBuilder.latest()
-            installPresentation(next, selectAllScopeRoots: true)
-        } catch {
-            presentation = nil
-            selection = nil
-            errorMessage = error.localizedDescription
+        Task { [weak self] in
+            guard let self else { return }
+            do {
+                let loaded = try await Task.detached(priority: .userInitiated) {
+                    try Self.loadReviewState()
+                }.value
+                guard self.reloadState.completeIfCurrent(generation) else { return }
+                self.isLoading = self.reloadState.isLoading
+                self.registeredRoots = loaded.registeredRoots
+                self.completedScanRootIDs = loaded.completedScanRootIDs
+                self.cleanupDestinationSetting = loaded.cleanupDestinationSetting
+                self.syncConnections = loaded.syncConnections
+                self.refreshSyncJournalState()
+                self.syncErrorMessage = loaded.syncLoadErrorMessage
+                if let next = loaded.presentation {
+                    self.installPresentation(next, selectAllScopeRoots: !self.hasLoadedRootSelection)
+                } else {
+                    self.presentation = nil
+                    self.selection = nil
+                    self.resetReviewChoicesForRootChange()
+                }
+                self.ensureUsableRootSelection()
+            } catch {
+                guard self.reloadState.completeIfCurrent(generation) else { return }
+                self.isLoading = self.reloadState.isLoading
+                self.presentation = nil
+                self.selection = nil
+                self.resetReviewChoicesForRootChange()
+                self.errorMessage = error.localizedDescription
+            }
         }
-        isLoading = false
+    }
+
+    @discardableResult
+    private func invalidatePendingReload() -> Bool {
+        let interruptedReload = reloadState.invalidate()
+        isLoading = reloadState.isLoading
+        return interruptedReload
+    }
+
+    private func restartInterruptedReload(_ interruptedReload: Bool) {
+        if interruptedReload {
+            reload()
+        }
     }
 
     func toggleRoot(_ rootID: String) {
+        guard !isScanning, !isSyncing else { return }
         statusMessage = nil
         if selectedRootIDs.contains(rootID) {
             selectedRootIDs.remove(rootID)
         } else {
+            if let root = registeredRoots.first(where: { $0.rootID == rootID }),
+               root.state != .active {
+                let interruptedReload = invalidatePendingReload()
+                do {
+                    _ = try RootRegistry.setState(target: rootID, state: .active)
+                    registeredRoots = try RootRegistry.list()
+                    restartInterruptedReload(interruptedReload)
+                } catch {
+                    restartInterruptedReload(interruptedReload)
+                    statusMessage = "폴더를 비교 대상으로 활성화하지 못했습니다: \(error.localizedDescription)"
+                    return
+                }
+            }
             selectedRootIDs.insert(rootID)
         }
         resetReviewChoicesForRootChange()
     }
 
-    func setRootActive(_ rootID: String, isActive: Bool) {
-        guard !isScanning else { return }
-        do {
-            _ = try RootRegistry.setState(
-                target: rootID,
-                state: isActive ? .active : .inactive
-            )
-            registeredRoots = try RootRegistry.list()
-            if !isActive {
-                selectedRootIDs.remove(rootID)
-            }
-            ensureUsableRootSelection()
-            resetReviewChoicesForRootChange()
-            statusMessage = nil
-        } catch {
-            statusMessage = "폴더 설정을 바꾸지 못했습니다: \(error.localizedDescription)"
-        }
-    }
-
     func setRootUserPurpose(_ rootID: String, purpose: RootUserPurpose) {
-        guard !isScanning else { return }
+        guard !isScanning, !isSyncing else { return }
+        if purpose == .readOnly, syncConnection(for: rootID) != nil {
+            statusMessage = "동기화가 연결된 폴더는 먼저 동기화 연결을 정리해야 읽기 전용으로 바꿀 수 있습니다."
+            return
+        }
+        let interruptedReload = invalidatePendingReload()
         do {
             _ = try RootRegistry.setUserPurpose(target: rootID, purpose: purpose)
-            registeredRoots = try RootRegistry.list()
-
-            let previousSelectedRootIDs = selectedRootIDs
-            if let next = try? DuplicateReviewPresentationBuilder.latest() {
-                installPresentation(next, selectAllScopeRoots: false)
-                let scopeRootIDs = Set(next.scopeRoots.map(\.id))
-                selectedRootIDs = previousSelectedRootIDs.intersection(scopeRootIDs)
-                ensureUsableRootSelection()
-            } else {
-                resetReviewChoicesForRootChange()
-            }
-
-            statusMessage = nil
+            reload()
         } catch {
+            restartInterruptedReload(interruptedReload)
             statusMessage = "폴더 용도를 바꾸지 못했습니다: \(error.localizedDescription)"
         }
     }
 
     func unregisterRoot(_ rootID: String) {
-        guard !isScanning else { return }
+        guard !isScanning, !isSyncing else { return }
+        if syncConnection(for: rootID) != nil {
+            statusMessage = "동기화가 연결된 폴더는 현재 등록 해제할 수 없습니다."
+            return
+        }
+        let interruptedReload = invalidatePendingReload()
         do {
             _ = try RootRegistry.remove(target: rootID)
             registeredRoots = try RootRegistry.list()
@@ -205,17 +283,22 @@ final class ReviewStore: ObservableObject {
             ensureUsableRootSelection()
             resetReviewChoicesForRootChange()
             statusMessage = nil
+            restartInterruptedReload(interruptedReload)
         } catch {
+            restartInterruptedReload(interruptedReload)
             statusMessage = "폴더 등록을 해제하지 못했습니다: \(error.localizedDescription)"
         }
     }
 
     func reorderRegisteredRoots(_ rootIDs: [String]) {
-        guard !isScanning else { return }
+        guard !isScanning, !isSyncing else { return }
+        let interruptedReload = invalidatePendingReload()
         do {
             registeredRoots = try RootRegistry.setDisplayOrder(rootIDs: rootIDs)
             statusMessage = nil
+            restartInterruptedReload(interruptedReload)
         } catch {
+            restartInterruptedReload(interruptedReload)
             statusMessage = "폴더 순서를 저장하지 못했습니다: \(error.localizedDescription)"
         }
     }
@@ -237,7 +320,7 @@ final class ReviewStore: ObservableObject {
 
     @discardableResult
     func scanSelectedRoots() async -> Bool {
-        guard !isScanning else { return false }
+        guard !isScanning, !isSyncing else { return false }
         let roots = activeRegisteredRoots.filter { selectedRootIDs.contains($0.rootID) }
         guard !roots.isEmpty else {
             statusMessage = "비교할 폴더를 하나 이상 선택하세요."
@@ -250,6 +333,8 @@ final class ReviewStore: ObservableObject {
             return false
         }
 
+        invalidatePendingReload()
+        let scanGeneration = activeScanGeneration.begin()
         isScanning = true
         scanProgress = ScanProgress(stage: .enumerating, completedUnitCount: 0)
         errorMessage = nil
@@ -264,7 +349,10 @@ final class ReviewStore: ObservableObject {
 
         let progressHandler: ScanProgressHandler = { [weak self] progress in
             Task { @MainActor [weak self] in
-                guard let self, self.isScanning else { return }
+                guard let self,
+                      self.isScanning,
+                      self.activeScanGeneration.accepts(scanGeneration)
+                else { return }
                 self.scanProgress = progress
             }
         }
@@ -276,13 +364,16 @@ final class ReviewStore: ObservableObject {
                     progressHandler: progressHandler
                 )
             }.value
+            guard activeScanGeneration.accepts(scanGeneration) else { return false }
             registeredRoots = try RootRegistry.list()
+            completedScanRootIDs.formUnion(next.scopeRoots.map(\.id))
             installPresentation(next, selectAllScopeRoots: true)
             statusMessage = "비교가 완료되었습니다 · 중복 항목 \(next.items.count)개"
             scanProgress = nil
             isScanning = false
             return true
         } catch {
+            guard activeScanGeneration.accepts(scanGeneration) else { return false }
             statusMessage = "비교하지 못했습니다: \(error.localizedDescription)"
             scanProgress = nil
             isScanning = false
@@ -295,11 +386,13 @@ final class ReviewStore: ObservableObject {
         url: URL,
         purpose: RootUserPurpose
     ) async -> Bool {
-        guard !isScanning else { return false }
+        guard !isScanning, !isSyncing else { return false }
+        var interruptedReload = invalidatePendingReload()
         do {
             let result = try await Task.detached(priority: .userInitiated) {
                 try RootRegistry.addComparisonRoot(url: url, purpose: purpose)
             }.value
+            interruptedReload = invalidatePendingReload() || interruptedReload
             registeredRoots = try RootRegistry.list()
             if result.wasAlreadyRegistered {
                 if result.root.state == .active,
@@ -307,16 +400,25 @@ final class ReviewStore: ObservableObject {
                     selectedRootIDs.insert(result.root.rootID)
                     resetReviewChoicesForRootChange()
                 }
+                restartInterruptedReload(interruptedReload)
                 statusMessage = "이미 등록된 폴더입니다."
                 return true
             }
             selectedRootIDs.insert(result.root.rootID)
             statusMessage = nil
         } catch {
+            interruptedReload = invalidatePendingReload() || interruptedReload
+            restartInterruptedReload(interruptedReload)
             statusMessage = "폴더를 추가하지 못했습니다: \(error.localizedDescription)"
             return false
         }
-        return await scanSelectedRoots()
+        let scanned = await scanSelectedRoots()
+        if !scanned {
+            let scanStatusMessage = statusMessage
+            restartInterruptedReload(interruptedReload)
+            statusMessage = scanStatusMessage
+        }
+        return scanned
     }
 
     func isRegisteredRoot(_ url: URL) -> Bool {
@@ -346,6 +448,298 @@ final class ReviewStore: ObservableObject {
             .decomposedStringWithCanonicalMapping
     }
 
+    func loadSyncDriveRemotes() async {
+        guard !isLoadingSyncRemotes, !isSyncing else { return }
+        isLoadingSyncRemotes = true
+        syncErrorMessage = nil
+        let service = syncService
+        do {
+            let remotes = try await Task.detached(priority: .userInitiated) {
+                try service.driveRemotes()
+            }.value
+            syncDriveRemotes = remotes.sorted {
+                $0.displayName.localizedStandardCompare($1.displayName) == .orderedAscending
+            }
+            if syncDriveRemotes.isEmpty {
+                syncErrorMessage = "연결된 Google Drive를 찾지 못했습니다. Google Drive 연결 설정을 확인한 뒤 다시 시도해 주세요."
+            }
+        } catch {
+            syncDriveRemotes = []
+            syncErrorMessage = error.localizedDescription
+        }
+        isLoadingSyncRemotes = false
+    }
+
+    @discardableResult
+    func createSyncConnection(
+        rootID: String,
+        remoteName: String,
+        remoteDisplayName: String?,
+        remotePath: String
+    ) -> FolderSyncConnection? {
+        guard !hasFilesystemOperationInProgress else { return nil }
+        syncErrorMessage = nil
+        do {
+            let connection = try FolderSyncConnectionManager.create(
+                rootID: rootID,
+                remoteName: remoteName,
+                remoteDisplayName: remoteDisplayName,
+                remotePath: remotePath
+            )
+            syncConnections.removeAll { $0.id == connection.id || $0.rootID == rootID }
+            syncConnections.append(connection)
+            refreshSyncJournalState()
+            return connection
+        } catch {
+            syncErrorMessage = error.localizedDescription
+            return nil
+        }
+    }
+
+    func runSync(
+        connectionID: String,
+        confirmInitialSync: Bool,
+        approvedDeletionPlanID: String? = nil
+    ) async {
+        guard !hasFilesystemOperationInProgress,
+              let connection = syncConnections.first(where: { $0.id == connectionID })
+        else { return }
+
+        invalidatePendingReload()
+        isSyncing = true
+        syncProgress = FolderSyncProgress(stage: .checking)
+        syncErrorMessage = nil
+        statusMessage = "폴더를 동기화하는 중입니다…"
+        let service = syncService
+        let progressHandler: FolderSyncProgressHandler = { [weak self] progress in
+            Task { @MainActor [weak self] in
+                guard let self, self.isSyncing else { return }
+                self.syncProgress = progress
+            }
+        }
+
+        do {
+            let report = try await Task.detached(priority: .userInitiated) {
+                try await service.synchronize(
+                    connection: connection,
+                    confirmInitialSync: confirmInitialSync,
+                    approvedDeletionPlanID: approvedDeletionPlanID,
+                    progressHandler: progressHandler
+                )
+            }.value
+            syncConnections.removeAll { $0.id == report.connection.id }
+            syncConnections.append(report.connection)
+            refreshSyncJournalState()
+            isSyncing = false
+            syncProgress = nil
+
+            if currentSnapshotRootIDs.contains(report.connection.rootID) {
+                presentation = nil
+                selection = nil
+                resetReviewChoicesForRootChange()
+            }
+            statusMessage = report.conflictPreserved
+                ? "동기화가 완료되었습니다. 충돌한 파일은 양쪽 사본을 보존했습니다."
+                : "동기화가 완료되었습니다."
+        } catch is CancellationError {
+            refreshSyncConnectionsFromDisk()
+            isSyncing = false
+            syncProgress = nil
+            statusMessage = "동기화를 취소했습니다."
+        } catch {
+            refreshSyncConnectionsFromDisk()
+            isSyncing = false
+            syncProgress = nil
+            syncErrorMessage = error.localizedDescription
+            statusMessage = "동기화를 완료하지 못했습니다."
+        }
+    }
+
+    func removeSyncConnection(connectionID: String) {
+        guard !hasFilesystemOperationInProgress else { return }
+        syncErrorMessage = nil
+        do {
+            try FolderSyncConnectionStore.remove(connectionID: connectionID)
+            syncConnections.removeAll { $0.id == connectionID }
+            syncPendingDeletionPlans[connectionID] = nil
+            syncConfirmationItemCounts[connectionID] = nil
+            syncConflictItemsByConnection[connectionID] = nil
+            syncRecoveryItemsByConnection[connectionID] = nil
+            statusMessage = "동기화 연결 정보를 제거했습니다. 폴더와 복구 자료는 그대로 유지됩니다."
+        } catch {
+            syncErrorMessage = error.localizedDescription
+        }
+    }
+
+    func cancelSync() {
+        guard isSyncing else { return }
+        syncService.cancelCurrentRun()
+    }
+
+    private func refreshSyncConnectionsFromDisk() {
+        do {
+            syncConnections = try FolderSyncConnectionStore.loadRecoveringInterrupted()
+            refreshSyncJournalState()
+        } catch {
+            syncErrorMessage = error.localizedDescription
+        }
+    }
+
+    private func refreshSyncJournalState() {
+        var plans: [String: FolderSyncDeletionPlan] = [:]
+        var counts: [String: Int] = [:]
+        for connection in syncConnections {
+            guard let journal = try? FolderSyncJournalStore.load(connection: connection) else {
+                counts[connection.id] = 0
+                continue
+            }
+            if let plan = journal.pendingDeletionPlan {
+                plans[connection.id] = plan
+            }
+            counts[connection.id] = folderSyncConfirmationItemCount(journal)
+        }
+        syncPendingDeletionPlans = plans
+        syncConfirmationItemCounts = counts
+    }
+
+    func syncConfirmationItemCount(connectionID: String) -> Int {
+        syncConfirmationItemCounts[connectionID] ?? 0
+    }
+
+    func syncConflictItems(connectionID: String) -> [FolderSyncConflictItem] {
+        syncConflictItemsByConnection[connectionID] ?? []
+    }
+
+    func loadSyncConflictItems(connectionID: String) async {
+        guard !isLoadingSyncConflicts,
+              let connection = syncConnections.first(where: { $0.id == connectionID })
+        else { return }
+        isLoadingSyncConflicts = true
+        defer { isLoadingSyncConflicts = false }
+        let service = syncService
+        do {
+            let items = try await Task.detached(priority: .userInitiated) {
+                try service.conflictItems(connection: connection)
+            }.value
+            syncConflictItemsByConnection[connectionID] = items
+        } catch {
+            syncErrorMessage = error.localizedDescription
+        }
+    }
+
+    func resolveSyncConflict(
+        connectionID: String,
+        itemID: String,
+        choice: FolderSyncConflictChoice,
+        expectedFingerprint: String
+    ) async {
+        guard !hasFilesystemOperationInProgress,
+              let connection = syncConnections.first(where: { $0.id == connectionID })
+        else { return }
+        guard RcloneBisyncService.productionApplyAvailable else {
+            syncErrorMessage = "파일을 안전하게 반영하는 기능을 준비하고 있습니다. 현재는 선택한 내용을 적용할 수 없습니다."
+            return
+        }
+
+        isResolvingSyncConflict = true
+        syncErrorMessage = nil
+        defer { isResolvingSyncConflict = false }
+        let service = syncService
+        do {
+            try await Task.detached(priority: .userInitiated) {
+                try await service.resolveConflict(
+                    connection: connection,
+                    itemID: itemID,
+                    choice: choice,
+                    expectedFingerprint: expectedFingerprint
+                )
+            }.value
+            refreshSyncConnectionsFromDisk()
+            await loadSyncConflictItems(connectionID: connectionID)
+            await loadSyncRecoveryItems(connectionID: connectionID)
+            statusMessage = "선택한 내용을 반영했습니다."
+        } catch {
+            refreshSyncConnectionsFromDisk()
+            syncErrorMessage = error.localizedDescription
+            statusMessage = "선택한 내용을 반영하지 못했습니다. 다시 확인해 주세요."
+            await loadSyncConflictItems(connectionID: connectionID)
+        }
+    }
+
+    func syncRecoverySummary(connectionID: String) -> FolderSyncRecoverySummary? {
+        guard let items = syncRecoveryItemsByConnection[connectionID] else { return nil }
+        return FolderSyncRecoverySummary(items: items)
+    }
+
+    func syncRecoveryItems(connectionID: String) -> [FolderSyncRecoveryItem] {
+        syncRecoveryItemsByConnection[connectionID] ?? []
+    }
+
+    func loadSyncRecoveryItems(connectionID: String) async {
+        guard !isLoadingSyncRecovery,
+              let connection = syncConnections.first(where: { $0.id == connectionID })
+        else { return }
+        isLoadingSyncRecovery = true
+        defer { isLoadingSyncRecovery = false }
+        let service = syncService
+        do {
+            let items = try await Task.detached(priority: .userInitiated) {
+                try service.recoveryItems(connection: connection)
+            }.value
+            syncRecoveryItemsByConnection[connectionID] = items
+        } catch {
+            // A disconnected Drive must not erase the already-known local
+            // state or turn recovery inventory into a sync mutation.
+            syncErrorMessage = error.localizedDescription
+        }
+    }
+
+    func restoreSyncRecoveryItem(
+        connectionID: String,
+        itemID: String
+    ) async {
+        guard !hasFilesystemOperationInProgress,
+              let connection = syncConnections.first(where: { $0.id == connectionID }),
+              let item = syncRecoveryItemsByConnection[connectionID]?.first(where: { $0.id == itemID })
+        else { return }
+        isRestoringSyncRecovery = true
+        syncErrorMessage = nil
+        defer { isRestoringSyncRecovery = false }
+        let service = syncService
+        do {
+            try await Task.detached(priority: .userInitiated) {
+                try service.restoreRecoveryItem(item, connection: connection)
+            }.value
+            statusMessage = "복구 사본을 원래 위치에 복원했습니다. 복구 사본은 그대로 보관합니다."
+            await loadSyncRecoveryItems(connectionID: connectionID)
+        } catch {
+            syncErrorMessage = error.localizedDescription
+        }
+    }
+
+    func discardSyncRecoveryItem(
+        connectionID: String,
+        itemID: String
+    ) async {
+        guard !hasFilesystemOperationInProgress,
+              let connection = syncConnections.first(where: { $0.id == connectionID }),
+              let item = syncRecoveryItemsByConnection[connectionID]?.first(where: { $0.id == itemID })
+        else { return }
+        isCleaningSyncRecovery = true
+        syncErrorMessage = nil
+        defer { isCleaningSyncRecovery = false }
+        let service = syncService
+        do {
+            try await Task.detached(priority: .userInitiated) {
+                try service.discardRecoveryItem(item, connection: connection)
+            }.value
+            statusMessage = "복구 사본을 휴지통으로 옮겼습니다. 원래 위치의 파일은 변경하지 않았습니다."
+            await loadSyncRecoveryItems(connectionID: connectionID)
+        } catch {
+            syncErrorMessage = error.localizedDescription
+        }
+    }
+
     func isMarkedForCleanup(
         _ copy: DuplicateReviewPresentationCopy,
         item: DuplicateReviewPresentationItem
@@ -354,7 +748,7 @@ final class ReviewStore: ObservableObject {
     }
 
     func toggleRecommendedCleanupSelection() {
-        guard !isScanning && !isPreparingCleanup && !isApplyingCleanup else { return }
+        guard !isScanning && !isSyncing && !isPreparingCleanup && !isApplyingCleanup else { return }
         let items = itemsInSelectedRoots
         let targets = recommendedCleanupTargetsByItem
         guard !targets.isEmpty else { return }
@@ -484,7 +878,7 @@ final class ReviewStore: ObservableObject {
     }
 
     func prepareSelectedCleanup() async {
-        guard !isPreparingCleanup && !isApplyingCleanup else { return }
+        guard !isSyncing && !isPreparingCleanup && !isApplyingCleanup else { return }
         guard let presentation else { return }
         let decisions = selectedCleanupDecisions(in: presentation)
         guard !decisions.isEmpty else {
@@ -546,7 +940,7 @@ final class ReviewStore: ObservableObject {
     }
 
     func applyPreparedCleanup() async {
-        guard !isApplyingCleanup, let preparedCleanup else { return }
+        guard !isSyncing, !isApplyingCleanup, let preparedCleanup else { return }
         isApplyingCleanup = true
         cleanupErrorMessage = nil
         statusMessage = "선택한 파일을 이동하는 중입니다…"
@@ -638,6 +1032,8 @@ final class ReviewStore: ObservableObject {
     ) {
         let previousSelection = selection
         presentation = next
+        hasLoadedRootSelection = true
+        preparedCleanup = nil
         if selectAllScopeRoots {
             selectedRootIDs = Set(next.scopeRoots.map(\.id))
         }
@@ -678,6 +1074,44 @@ final class ReviewStore: ObservableObject {
             report: report,
             plan: plan,
             detailsByResourceID: details
+        )
+    }
+
+    nonisolated private static func loadReviewState() throws -> (
+        registeredRoots: [RegisteredRootReport],
+        completedScanRootIDs: Set<String>,
+        cleanupDestinationSetting: DuplicateCleanupDestinationSetting,
+        syncConnections: [FolderSyncConnection],
+        syncLoadErrorMessage: String?,
+        presentation: DuplicateReviewPresentation?
+    ) {
+        let registeredRoots = try RootRegistry.list()
+        let scanner = try ArchiveScanner()
+        let completedScanRootIDs = try scanner.completedScanRootIDs()
+        let cleanupDestinationSetting = (try? PhotoArchiveSettingsStore.load())?.duplicateCleanupDestination
+            ?? .systemTrash
+        let syncConnections: [FolderSyncConnection]
+        let syncLoadErrorMessage: String?
+        do {
+            syncConnections = try FolderSyncConnectionStore.loadRecoveringInterrupted()
+            syncLoadErrorMessage = nil
+        } catch {
+            syncConnections = []
+            syncLoadErrorMessage = "동기화 상태를 읽지 못했습니다: \(error.localizedDescription)"
+        }
+        let presentation: DuplicateReviewPresentation?
+        do {
+            presentation = try DuplicateReviewPresentationBuilder.latest()
+        } catch DuplicateReviewPresentationError.noReusableSnapshot {
+            presentation = nil
+        }
+        return (
+            registeredRoots,
+            completedScanRootIDs,
+            cleanupDestinationSetting,
+            syncConnections,
+            syncLoadErrorMessage,
+            presentation
         )
     }
 }

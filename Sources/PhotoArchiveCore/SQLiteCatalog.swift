@@ -66,6 +66,7 @@ struct CachedMetadataEvidence {
     let modifiedAt: Date?
     let fileSystemIdentifier: String?
     let captureTime: CaptureTime?
+    let probeCaptureTimeKnown: Bool
     let identifierFingerprint: Data?
     let timedMetadataStatus: LivePhotoTimedMetadataStatus
     let metadataProbeFailed: Bool
@@ -101,6 +102,7 @@ private struct CachedScanSessionRow {
     let startedAt: Date
     let completedAt: Date
     let rootCount: Int
+    let exactDuplicatesComputed: Bool?
     let resourceCount: Int
     let assetCount: Int
     let warningCount: Int
@@ -350,6 +352,43 @@ final class SQLiteCatalog {
         return id
     }
 
+    func persistScanSessionRoots(sessionID: String, roots: [RootDescriptor]) throws {
+        for root in roots {
+            try run(
+                "INSERT OR IGNORE INTO scan_session_roots (scan_session_id, root_id) VALUES (?, ?)",
+                bindings: [.text(sessionID), .text(root.id)]
+            )
+        }
+    }
+
+    func completedScanRootIDs() throws -> Set<String> {
+        try withStatement(
+            """
+            SELECT DISTINCT ssr.root_id
+            FROM scan_session_roots ssr
+            JOIN scan_sessions ss ON ss.id = ssr.scan_session_id
+            WHERE ss.status = 'complete'
+            UNION
+            SELECT DISTINCT r.root_id
+            FROM resources r
+            JOIN scan_sessions ss ON ss.id = r.last_seen_session
+            WHERE ss.status = 'complete'
+            """,
+            bindings: []
+        ) { statement in
+            var rootIDs = Set<String>()
+            while true {
+                let result = sqlite3_step(statement)
+                if result == SQLITE_DONE { break }
+                guard result == SQLITE_ROW,
+                      let rootText = sqlite3_column_text(statement, 0)
+                else { throw sqliteError(sql: "SELECT completed scan root IDs") }
+                rootIDs.insert(String(cString: rootText))
+            }
+            return rootIDs
+        }
+    }
+
     func recoverInterruptedScans(completedAt: Date) throws -> Int {
         try run(
             """
@@ -365,16 +404,19 @@ final class SQLiteCatalog {
     func finishScan(
         sessionID: String,
         completedAt: Date,
+        exactDuplicatesComputed: Bool,
         summary: ScanSummary
     ) throws {
         try run(
             """
             UPDATE scan_sessions
-            SET completed_at = ?, status = 'complete', resource_count = ?, asset_count = ?, warning_count = ?
+            SET completed_at = ?, status = 'complete', exact_duplicates_computed = ?,
+                resource_count = ?, asset_count = ?, warning_count = ?
             WHERE id = ?
             """,
             bindings: [
                 .double(completedAt.timeIntervalSince1970),
+                .int64(exactDuplicatesComputed ? 1 : 0),
                 .int64(Int64(summary.resourceCount)),
                 .int64(Int64(summary.logicalAssetCount)),
                 .int64(Int64(summary.warningCount)),
@@ -498,18 +540,44 @@ final class SQLiteCatalog {
                     .text(sessionID)
                 ]
             )
+            let probeCaptureTime = resources[index].probeCaptureTime
+            let probeCaptureLocalTime: SQLiteBinding = probeCaptureTime?.localTimestamp
+                .map(SQLiteBinding.text) ?? .null
+            let probeCaptureUTCOffset: SQLiteBinding = probeCaptureTime?.utcOffset
+                .map(SQLiteBinding.text) ?? .null
+            let probeCaptureInstant: SQLiteBinding = probeCaptureTime?.instant
+                .map { .double($0.timeIntervalSince1970) } ?? .null
+            let probeCaptureSource: SQLiteBinding = probeCaptureTime
+                .map { .text($0.source.rawValue) } ?? .null
+            let probeCaptureConfidence: SQLiteBinding = probeCaptureTime
+                .map { .text($0.confidence.rawValue) } ?? .null
             try run(
                 """
-                INSERT INTO resource_metadata_cache_state (resource_id, probe_version, last_seen_session)
-                VALUES (?, ?, ?)
+                INSERT INTO resource_metadata_cache_state (
+                    resource_id, probe_version, last_seen_session, probe_capture_recorded,
+                    probe_capture_local_time, probe_capture_utc_offset, probe_capture_instant,
+                    probe_capture_source, probe_capture_confidence
+                )
+                VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?)
                 ON CONFLICT(resource_id) DO UPDATE SET
                     probe_version = excluded.probe_version,
-                    last_seen_session = excluded.last_seen_session
+                    last_seen_session = excluded.last_seen_session,
+                    probe_capture_recorded = excluded.probe_capture_recorded,
+                    probe_capture_local_time = excluded.probe_capture_local_time,
+                    probe_capture_utc_offset = excluded.probe_capture_utc_offset,
+                    probe_capture_instant = excluded.probe_capture_instant,
+                    probe_capture_source = excluded.probe_capture_source,
+                    probe_capture_confidence = excluded.probe_capture_confidence
                 """,
                 bindings: [
                     .text(resourceID),
                     .int64(Int64(MetadataProbe.cacheVersion)),
-                    .text(sessionID)
+                    .text(sessionID),
+                    probeCaptureLocalTime,
+                    probeCaptureUTCOffset,
+                    probeCaptureInstant,
+                    probeCaptureSource,
+                    probeCaptureConfidence
                 ]
             )
             try run(
@@ -849,7 +917,8 @@ final class SQLiteCatalog {
 
     func reuseCachedMetadata(
         pendingFiles: [PendingFile],
-        probeVersion: Int
+        probeVersion: Int,
+        takeoutSidecarIndex: TakeoutSidecarIndex
     ) throws -> (resources: [ProbedResource], remaining: [PendingFile]) {
         let rootIDs = Set(pendingFiles.map { $0.root.id })
         var indexByRootID: [String: CachedMetadataIndex] = [:]
@@ -889,11 +958,17 @@ final class SQLiteCatalog {
 
             guard let evidence,
                   !evidence.metadataProbeFailed,
-                  evidence.captureTime?.source != .googleTakeoutPhotoTakenTime,
+                  evidence.probeCaptureTimeKnown,
                   evidence.mediaKind == pending.type.mediaKind,
                   evidence.byteSize == pending.byteSize,
                   modificationTimesMatch(evidence.modifiedAt, pending.modifiedAt)
             else {
+                remaining.append(pending)
+                continue
+            }
+
+            if evidence.captureTime?.source == .googleTakeoutPhotoTakenTime,
+               !takeoutSidecarIndex.hasCaptureTime(for: pending.url) {
                 remaining.append(pending)
                 continue
             }
@@ -917,6 +992,7 @@ final class SQLiteCatalog {
                 addedAt: pending.addedAt,
                 fileSystemIdentifier: pending.fileSystemIdentifier,
                 captureTime: evidence.captureTime,
+                probeCaptureTime: evidence.captureTime,
                 rawLivePhotoIdentifier: nil,
                 livePhotoTimedMetadataStatus: evidence.timedMetadataStatus,
                 metadataProbeFailed: false,
@@ -940,7 +1016,10 @@ final class SQLiteCatalog {
                    r.capture_local_time, r.capture_utc_offset, r.capture_instant,
                    r.capture_source, r.capture_confidence,
                    r.live_identifier_fingerprint, r.metadata_probe_failed,
-                   rfi.filesystem_identifier, rlms.status
+                   rfi.filesystem_identifier, rlms.status,
+                   rmcs.probe_capture_recorded, rmcs.probe_capture_local_time,
+                   rmcs.probe_capture_utc_offset, rmcs.probe_capture_instant,
+                   rmcs.probe_capture_source, rmcs.probe_capture_confidence
             FROM resources r
             JOIN resource_metadata_cache_state rmcs ON rmcs.resource_id = r.id
             LEFT JOIN resource_file_ids rfi ON rfi.resource_id = r.id
@@ -963,22 +1042,54 @@ final class SQLiteCatalog {
                     throw sqliteError(sql: "SELECT cached metadata index")
                 }
 
-                let captureTime: CaptureTime?
-                if let sourceText = sqlite3_column_text(statement, 7),
-                   let confidenceText = sqlite3_column_text(statement, 8),
-                   let source = CaptureTimeSource(rawValue: String(cString: sourceText)),
-                   let confidence = CaptureTimeConfidence(rawValue: String(cString: confidenceText)) {
-                    captureTime = CaptureTime(
-                        localTimestamp: sqlite3_column_text(statement, 4).map { String(cString: $0) },
-                        utcOffset: sqlite3_column_text(statement, 5).map { String(cString: $0) },
-                        instant: sqlite3_column_type(statement, 6) == SQLITE_NULL
+                func captureTime(
+                    localColumn: Int32,
+                    offsetColumn: Int32,
+                    instantColumn: Int32,
+                    sourceColumn: Int32,
+                    confidenceColumn: Int32
+                ) -> CaptureTime? {
+                    guard let sourceText = sqlite3_column_text(statement, sourceColumn),
+                          let confidenceText = sqlite3_column_text(statement, confidenceColumn),
+                          let source = CaptureTimeSource(rawValue: String(cString: sourceText)),
+                          let confidence = CaptureTimeConfidence(rawValue: String(cString: confidenceText))
+                    else { return nil }
+                    return CaptureTime(
+                        localTimestamp: sqlite3_column_text(statement, localColumn).map { String(cString: $0) },
+                        utcOffset: sqlite3_column_text(statement, offsetColumn).map { String(cString: $0) },
+                        instant: sqlite3_column_type(statement, instantColumn) == SQLITE_NULL
                             ? nil
-                            : Date(timeIntervalSince1970: sqlite3_column_double(statement, 6)),
+                            : Date(timeIntervalSince1970: sqlite3_column_double(statement, instantColumn)),
                         source: source,
                         confidence: confidence
                     )
+                }
+
+                let catalogCaptureTime = captureTime(
+                    localColumn: 4,
+                    offsetColumn: 5,
+                    instantColumn: 6,
+                    sourceColumn: 7,
+                    confidenceColumn: 8
+                )
+                let probeCaptureTimeRecorded = sqlite3_column_int64(statement, 13) != 0
+                let cachedProbeCaptureTime: CaptureTime?
+                let probeCaptureTimeKnown: Bool
+                if probeCaptureTimeRecorded {
+                    cachedProbeCaptureTime = captureTime(
+                        localColumn: 14,
+                        offsetColumn: 15,
+                        instantColumn: 16,
+                        sourceColumn: 17,
+                        confidenceColumn: 18
+                    )
+                    probeCaptureTimeKnown = true
+                } else if catalogCaptureTime?.source == .googleTakeoutPhotoTakenTime {
+                    cachedProbeCaptureTime = nil
+                    probeCaptureTimeKnown = false
                 } else {
-                    captureTime = nil
+                    cachedProbeCaptureTime = catalogCaptureTime
+                    probeCaptureTimeKnown = true
                 }
 
                 let fingerprint: Data?
@@ -1001,7 +1112,8 @@ final class SQLiteCatalog {
                     byteSize: sqlite3_column_int64(statement, 2),
                     modifiedAt: modifiedAt,
                     fileSystemIdentifier: fileSystemIdentifier,
-                    captureTime: captureTime,
+                    captureTime: cachedProbeCaptureTime,
+                    probeCaptureTimeKnown: probeCaptureTimeKnown,
                     identifierFingerprint: fingerprint,
                     timedMetadataStatus: timedStatus,
                     metadataProbeFailed: sqlite3_column_int64(statement, 10) != 0
@@ -1465,9 +1577,16 @@ final class SQLiteCatalog {
                 completed_at REAL,
                 status TEXT NOT NULL,
                 root_count INTEGER NOT NULL DEFAULT 0,
+                exact_duplicates_computed INTEGER CHECK(exact_duplicates_computed IN (0, 1)),
                 resource_count INTEGER NOT NULL DEFAULT 0,
                 asset_count INTEGER NOT NULL DEFAULT 0,
                 warning_count INTEGER NOT NULL DEFAULT 0
+            );
+
+            CREATE TABLE IF NOT EXISTS scan_session_roots (
+                scan_session_id TEXT NOT NULL REFERENCES scan_sessions(id) ON DELETE CASCADE,
+                root_id TEXT NOT NULL REFERENCES source_roots(id) ON DELETE CASCADE,
+                PRIMARY KEY(scan_session_id, root_id)
             );
 
             CREATE TABLE IF NOT EXISTS resources (
@@ -1514,7 +1633,13 @@ final class SQLiteCatalog {
             CREATE TABLE IF NOT EXISTS resource_metadata_cache_state (
                 resource_id TEXT PRIMARY KEY REFERENCES resources(id) ON DELETE CASCADE,
                 probe_version INTEGER NOT NULL,
-                last_seen_session TEXT NOT NULL REFERENCES scan_sessions(id)
+                last_seen_session TEXT NOT NULL REFERENCES scan_sessions(id),
+                probe_capture_recorded INTEGER NOT NULL DEFAULT 0 CHECK(probe_capture_recorded IN (0, 1)),
+                probe_capture_local_time TEXT,
+                probe_capture_utc_offset TEXT,
+                probe_capture_instant REAL,
+                probe_capture_source TEXT,
+                probe_capture_confidence TEXT
             );
 
             CREATE TABLE IF NOT EXISTS resource_locations (
@@ -1627,6 +1752,8 @@ final class SQLiteCatalog {
 
             CREATE INDEX IF NOT EXISTS resources_last_seen_idx
                 ON resources(last_seen_session);
+            CREATE INDEX IF NOT EXISTS scan_session_roots_root_idx
+                ON scan_session_roots(root_id, scan_session_id);
             CREATE INDEX IF NOT EXISTS resources_size_idx
                 ON resources(byte_size);
             CREATE INDEX IF NOT EXISTS resources_live_fingerprint_idx
@@ -1676,6 +1803,31 @@ final class SQLiteCatalog {
 
         if try !table("resources", hasColumn: "added_at") {
             try execute("ALTER TABLE resources ADD COLUMN added_at REAL")
+        }
+        if try !table("scan_sessions", hasColumn: "exact_duplicates_computed") {
+            try execute(
+                "ALTER TABLE scan_sessions ADD COLUMN exact_duplicates_computed INTEGER CHECK(exact_duplicates_computed IN (0, 1))"
+            )
+        }
+        if try !table("resource_metadata_cache_state", hasColumn: "probe_capture_recorded") {
+            try execute(
+                "ALTER TABLE resource_metadata_cache_state ADD COLUMN probe_capture_recorded INTEGER NOT NULL DEFAULT 0 CHECK(probe_capture_recorded IN (0, 1))"
+            )
+        }
+        if try !table("resource_metadata_cache_state", hasColumn: "probe_capture_local_time") {
+            try execute("ALTER TABLE resource_metadata_cache_state ADD COLUMN probe_capture_local_time TEXT")
+        }
+        if try !table("resource_metadata_cache_state", hasColumn: "probe_capture_utc_offset") {
+            try execute("ALTER TABLE resource_metadata_cache_state ADD COLUMN probe_capture_utc_offset TEXT")
+        }
+        if try !table("resource_metadata_cache_state", hasColumn: "probe_capture_instant") {
+            try execute("ALTER TABLE resource_metadata_cache_state ADD COLUMN probe_capture_instant REAL")
+        }
+        if try !table("resource_metadata_cache_state", hasColumn: "probe_capture_source") {
+            try execute("ALTER TABLE resource_metadata_cache_state ADD COLUMN probe_capture_source TEXT")
+        }
+        if try !table("resource_metadata_cache_state", hasColumn: "probe_capture_confidence") {
+            try execute("ALTER TABLE resource_metadata_cache_state ADD COLUMN probe_capture_confidence TEXT")
         }
     }
 
@@ -1961,6 +2113,16 @@ final class SQLiteCatalog {
     }
 
     func latestReusableActiveRootsScanReport() throws -> ScanReport? {
+        try latestReusableActiveRootsScanReport(requiringExactDuplicates: false)
+    }
+
+    func latestReusableActiveRootsDuplicateReviewScanReport() throws -> ScanReport? {
+        try latestReusableActiveRootsScanReport(requiringExactDuplicates: true)
+    }
+
+    private func latestReusableActiveRootsScanReport(
+        requiringExactDuplicates: Bool
+    ) throws -> ScanReport? {
         let activeRoots = try rootRegistryRows(includeHistory: false)
             .filter { $0.state == .active }
         guard !activeRoots.isEmpty else { return nil }
@@ -1968,9 +2130,16 @@ final class SQLiteCatalog {
         let activeRootIDs = Set(activeRoots.map(\.rootID))
         let sessions = try cachedCompletedScanSessions(limit: 32)
         for session in sessions where session.rootCount == activeRoots.count {
+            if requiringExactDuplicates && session.exactDuplicatesComputed != true {
+                continue
+            }
             let observation = try cachedSessionObservationSummary(sessionID: session.sessionID)
+            let sessionRootIDs = try cachedSessionRootIDs(
+                sessionID: session.sessionID,
+                fallback: observation.rootIDs
+            )
             guard observation.resourceCount == session.resourceCount,
-                  observation.rootIDs == activeRootIDs
+                  sessionRootIDs == activeRootIDs
             else {
                 continue
             }
@@ -1986,21 +2155,46 @@ final class SQLiteCatalog {
 
         let activeRootIDs = Set(activeRoots.map(\.rootID))
         let sessions = try cachedCompletedScanSessions(limit: 64)
-        for session in sessions {
+        for session in sessions where session.exactDuplicatesComputed == true {
             let observation = try cachedSessionObservationSummary(sessionID: session.sessionID)
+            let sessionRootIDs = try cachedSessionRootIDs(
+                sessionID: session.sessionID,
+                fallback: observation.rootIDs
+            )
             guard observation.resourceCount == session.resourceCount,
-                  !observation.rootIDs.isEmpty,
-                  observation.rootIDs.isSubset(of: activeRootIDs),
-                  try cachedSessionExactDuplicateGroupCount(sessionID: session.sessionID) > 0
+                  !sessionRootIDs.isEmpty,
+                  sessionRootIDs.isSubset(of: activeRootIDs)
             else {
                 continue
             }
 
-            let roots = activeRoots.filter { observation.rootIDs.contains($0.rootID) }
-            guard roots.count == observation.rootIDs.count else { continue }
+            let roots = activeRoots.filter { sessionRootIDs.contains($0.rootID) }
+            guard roots.count == sessionRootIDs.count else { continue }
             return try cachedScanReport(session: session, roots: roots)
         }
         return nil
+    }
+
+    private func cachedSessionRootIDs(
+        sessionID: String,
+        fallback: Set<String>
+    ) throws -> Set<String> {
+        let stored = try withStatement(
+            "SELECT root_id FROM scan_session_roots WHERE scan_session_id = ?",
+            bindings: [.text(sessionID)]
+        ) { statement in
+            var values = Set<String>()
+            while true {
+                let result = sqlite3_step(statement)
+                if result == SQLITE_DONE { break }
+                guard result == SQLITE_ROW,
+                      let rootText = sqlite3_column_text(statement, 0)
+                else { throw sqliteError(sql: "SELECT cached scan session roots") }
+                values.insert(String(cString: rootText))
+            }
+            return values
+        }
+        return stored.isEmpty ? fallback : stored
     }
 
     func duplicateReviewExpectedResourceEvidence(
@@ -2147,7 +2341,8 @@ final class SQLiteCatalog {
     private func cachedCompletedScanSessions(limit: Int) throws -> [CachedScanSessionRow] {
         try withStatement(
             """
-            SELECT id, started_at, completed_at, root_count, resource_count, asset_count, warning_count
+            SELECT id, started_at, completed_at, root_count, exact_duplicates_computed,
+                   resource_count, asset_count, warning_count
             FROM scan_sessions
             WHERE status = 'complete' AND completed_at IS NOT NULL
             ORDER BY completed_at DESC
@@ -2169,9 +2364,12 @@ final class SQLiteCatalog {
                     startedAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 1)),
                     completedAt: Date(timeIntervalSince1970: sqlite3_column_double(statement, 2)),
                     rootCount: Int(sqlite3_column_int64(statement, 3)),
-                    resourceCount: Int(sqlite3_column_int64(statement, 4)),
-                    assetCount: Int(sqlite3_column_int64(statement, 5)),
-                    warningCount: Int(sqlite3_column_int64(statement, 6))
+                    exactDuplicatesComputed: sqlite3_column_type(statement, 4) == SQLITE_NULL
+                        ? nil
+                        : sqlite3_column_int64(statement, 4) != 0,
+                    resourceCount: Int(sqlite3_column_int64(statement, 5)),
+                    assetCount: Int(sqlite3_column_int64(statement, 6)),
+                    warningCount: Int(sqlite3_column_int64(statement, 7))
                 ))
             }
             return rows

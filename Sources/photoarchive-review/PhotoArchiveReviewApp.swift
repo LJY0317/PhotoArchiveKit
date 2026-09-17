@@ -34,10 +34,19 @@ final class PhotoArchiveReviewAppDelegate: NSObject, NSApplicationDelegate {
 struct PhotoArchiveReviewApp: App {
     @NSApplicationDelegateAdaptor(PhotoArchiveReviewAppDelegate.self) private var appDelegate
 
+    private var usesSyncUIFixture: Bool {
+        ProcessInfo.processInfo.environment["PHOTOARCHIVE_SYNC_UI_FIXTURE"] == "1"
+            || CommandLine.arguments.contains("--sync-ui-fixture")
+    }
+
     var body: some Scene {
         WindowGroup("PhotoArchiveKit") {
-            ReviewRootView()
-                .frame(minWidth: 980, minHeight: 640)
+            if usesSyncUIFixture {
+                FolderSyncUIFixtureView()
+            } else {
+                ReviewRootView()
+                    .frame(minWidth: 980, minHeight: 640)
+            }
         }
         .defaultSize(width: 1240, height: 800)
         .commands {

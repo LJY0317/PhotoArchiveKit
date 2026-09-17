@@ -3,18 +3,29 @@ import PhotoArchiveCore
 import QuickLookThumbnailing
 import SwiftUI
 
+private enum ReviewKeyboardRegion: Hashable {
+    case sidebar
+    case detail
+}
+
 struct ReviewRootView: View {
     @StateObject private var store = ReviewStore()
     @State private var addRootRequest: AddComparisonRootRequest?
     @State private var isComparisonLocationsPresented = false
     @State private var isRootManagerPresented = false
     @State private var returnsToRootManagerAfterAdd = false
+    @State private var syncRequest: FolderSyncRequest?
+    @State private var returnsToRootManagerAfterSync = false
     @State private var folderNotice: String?
+    @State private var keyboardRegion: ReviewKeyboardRegion = .sidebar
+    @State private var detailFocusedCopyID: String?
 
     var body: some View {
         ReviewWindowLayout {
             sidebar
-                .navigationSplitViewColumnWidth(min: 250, ideal: 290, max: 360)
+                .simultaneousGesture(
+                    TapGesture().onEnded { keyboardRegion = .sidebar }
+                )
         } detail: {
             VStack(spacing: 0) {
                 if store.isScanning {
@@ -22,9 +33,18 @@ struct ReviewRootView: View {
                 }
                 detail
             }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .background(ReviewVisualStyle.detailSurface.ignoresSafeArea())
+            .simultaneousGesture(
+                TapGesture().onEnded { keyboardRegion = .detail }
+            )
         } actions: {
             ReviewActionBar(store: store)
         }
+        .background(
+            ReviewArrowKeyMonitor(onMove: handleArrowKey)
+                .allowsHitTesting(false)
+        )
         .toolbar {
             ToolbarItemGroup(placement: .navigation) {
                 Button(action: store.selectPrevious) {
@@ -39,24 +59,40 @@ struct ReviewRootView: View {
                     store.selectedIndex == nil
                         || store.selectedIndex == max(0, store.visibleItems.count - 1)
                 )
+
+                Button {
+                    NotificationCenter.default.post(
+                        name: .photoArchiveToggleSidebar,
+                        object: nil
+                    )
+                } label: {
+                    Label("사이드바 보기 또는 숨기기", systemImage: "sidebar.left")
+                }
+                .help("사이드바 보기 또는 숨기기")
             }
 
-            ToolbarItem {
+            if #available(macOS 26.0, *) {
+                ToolbarSpacer(.flexible)
+            }
+
+            ToolbarItemGroup(placement: .primaryAction) {
                 Button {
                     isComparisonLocationsPresented.toggle()
                 } label: {
                     Label("비교 폴더", systemImage: "folder.badge.gearshape")
                 }
                 .help("비교할 폴더를 선택하거나 새 폴더를 추가합니다")
-                .disabled(store.isScanning)
+                .disabled(store.hasFilesystemOperationInProgress)
                 .popover(isPresented: $isComparisonLocationsPresented, arrowEdge: .top) {
                     ComparisonLocationsPopover(
-                        roots: store.activeRegisteredRoots,
+                        roots: store.registeredRoots,
                         selectedRootIDs: store.selectedRootIDs,
                         selectedRootsNeedScan: store.selectedRootsNeedScan,
-                        isScanning: store.isScanning,
+                        selectedRootsNeedCurrentComparison: store.selectedRootsNeedCurrentComparison,
+                        isScanning: store.hasFilesystemOperationInProgress,
                         noticeMessage: folderNotice,
                         onToggle: store.toggleRoot,
+                        onReorder: store.reorderRegisteredRoots,
                         onAddFolder: {
                             isComparisonLocationsPresented = false
                             chooseComparisonFolder()
@@ -71,14 +107,18 @@ struct ReviewRootView: View {
                         }
                     )
                 }
-            }
 
-            ToolbarItem(placement: .primaryAction) {
                 Button(action: store.reload) {
                     Label("검토 화면 새로고침", systemImage: "arrow.clockwise")
                 }
-                .disabled(store.isLoading || store.isScanning)
+                .disabled(store.isLoading || store.hasFilesystemOperationInProgress)
                 .help("파일을 다시 스캔하지 않고 최근 결과를 화면에 다시 불러옵니다")
+
+                ReviewToolbarSearchField(
+                    text: $store.searchText,
+                    prompt: "파일명 또는 위치 검색"
+                )
+                .frame(width: 300)
             }
         }
         .onReceive(NotificationCenter.default.publisher(for: .photoArchiveReloadReview)) { _ in
@@ -110,7 +150,8 @@ struct ReviewRootView: View {
         .sheet(isPresented: $isRootManagerPresented) {
             ComparisonRootManagerSheet(
                 roots: store.registeredRoots,
-                isWorking: store.isScanning,
+                selectedRootIDs: store.selectedRootIDs,
+                isWorking: store.hasFilesystemOperationInProgress,
                 noticeMessage: folderNotice,
                 onClose: { isRootManagerPresented = false },
                 onAddFolder: {
@@ -119,11 +160,33 @@ struct ReviewRootView: View {
                         chooseComparisonFolder(returnToManager: true)
                     }
                 },
-                onSetActive: store.setRootActive,
+                onToggle: store.toggleRoot,
                 onSetPurpose: store.setRootUserPurpose,
+                onSync: { rootID in
+                    isRootManagerPresented = false
+                    returnsToRootManagerAfterSync = true
+                    DispatchQueue.main.async {
+                        syncRequest = FolderSyncRequest(rootID: rootID)
+                    }
+                },
                 onRemove: store.unregisterRoot,
                 onReorder: store.reorderRegisteredRoots
             )
+        }
+        .sheet(item: $syncRequest) { request in
+            if let root = store.registeredRoots.first(where: { $0.rootID == request.rootID }) {
+                FolderSyncSheet(
+                    store: store,
+                    root: root,
+                    onClose: {
+                        syncRequest = nil
+                        if returnsToRootManagerAfterSync {
+                            returnsToRootManagerAfterSync = false
+                            scheduleRootManagerPresentation()
+                        }
+                    }
+                )
+            }
         }
         .sheet(item: $store.preparedCleanup) { prepared in
             ReviewCleanupConfirmationSheet(
@@ -148,7 +211,124 @@ struct ReviewRootView: View {
                 }
             )
         }
+        .onAppear {
+            synchronizeDetailKeyboardFocus()
+        }
+        .onChange(of: store.selection) { _, _ in
+            synchronizeDetailKeyboardFocus()
+        }
     }
+
+    private var keyboardCopies: [DuplicateReviewPresentationCopy] {
+        guard let item = store.selectedItem else { return [] }
+        if !item.copies.isEmpty { return item.copies }
+        return item.preferredResources.map {
+            DuplicateReviewPresentationCopy(
+                id: "fallback-keeper:\($0.id)",
+                isKeeper: true,
+                resources: [$0]
+            )
+        } + item.candidateResources.map {
+            DuplicateReviewPresentationCopy(
+                id: "fallback-candidate:\($0.id)",
+                isKeeper: false,
+                resources: [$0]
+            )
+        }
+    }
+
+    private func synchronizeDetailKeyboardFocus() {
+        let copies = keyboardCopies
+        guard !copies.isEmpty else {
+            detailFocusedCopyID = nil
+            return
+        }
+        if let detailFocusedCopyID,
+           copies.contains(where: { $0.id == detailFocusedCopyID }) {
+            return
+        }
+        detailFocusedCopyID = copies.first?.id
+    }
+
+    private func handleArrowKey(_ direction: MoveCommandDirection) -> Bool {
+        switch keyboardRegion {
+        case .sidebar:
+            return handleSidebarMove(direction)
+        case .detail:
+            return handleDetailMove(direction)
+        }
+    }
+
+    private func handleSidebarMove(_ direction: MoveCommandDirection) -> Bool {
+        switch direction {
+        case .up:
+            if store.selectedIndex == nil {
+                store.selection = store.visibleItems.first?.id
+            } else {
+                store.selectPrevious()
+            }
+            return true
+        case .down:
+            if store.selectedIndex == nil {
+                store.selection = store.visibleItems.first?.id
+            } else {
+                store.selectNext()
+            }
+            return true
+        case .right:
+            synchronizeDetailKeyboardFocus()
+            keyboardRegion = .detail
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func handleDetailMove(_ direction: MoveCommandDirection) -> Bool {
+        let copies = keyboardCopies
+        guard !copies.isEmpty else {
+            if direction == .left {
+                keyboardRegion = .sidebar
+                return true
+            }
+            return false
+        }
+
+        let currentIndex = detailFocusedCopyID.flatMap { focusedID in
+            copies.firstIndex(where: { $0.id == focusedID })
+        }
+
+        switch direction {
+        case .left:
+            guard let currentIndex else {
+                detailFocusedCopyID = copies.first?.id
+                return true
+            }
+            if currentIndex > 0 {
+                detailFocusedCopyID = copies[currentIndex - 1].id
+            } else {
+                keyboardRegion = .sidebar
+            }
+            return true
+        case .right:
+            guard let currentIndex else {
+                detailFocusedCopyID = copies.first?.id
+                return true
+            }
+            if currentIndex + 1 < copies.count {
+                detailFocusedCopyID = copies[currentIndex + 1].id
+            }
+            return true
+        default:
+            return false
+        }
+    }
+
+    private func focusDetailCopy(_ copyID: String) {
+        detailFocusedCopyID = copyID
+        keyboardRegion = .detail
+    }
+
 
     private func chooseComparisonFolder(returnToManager: Bool = false) {
         let panel = NSOpenPanel()
@@ -208,30 +388,34 @@ struct ReviewRootView: View {
     }
 
     private var sidebar: some View {
-        VStack(spacing: 0) {
-            if store.presentation != nil {
-                ReviewSummaryHeader(
-                    itemCount: store.visibleItems.count,
-                    selectedRootLabels: store.selectedRootLabels
-                )
+        ReviewSidebarScrollView(scrollTargetID: store.selection) {
+            LazyVStack(spacing: 2) {
+                if store.presentation != nil {
+                    ReviewSummaryHeader(
+                        itemCount: store.visibleItems.count,
+                        selectedRootLabels: store.selectedRootLabels
+                    )
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 14)
                     .padding(.top, 12)
-                    .padding(.bottom, 10)
-            }
+                    .padding(.horizontal, 14)
+                    .padding(.bottom, 8)
+                }
 
-            List(store.visibleItems, selection: $store.selection) { item in
-                ReviewSidebarRow(
-                    item: item,
-                    selectedCleanupCount: store.cleanupCopyIDsByItem[item.id, default: []].count
-                )
-                    .tag(item.id)
+                ForEach(store.visibleItems) { item in
+                    ReviewSidebarItem(
+                        item: item,
+                        selectedCleanupCount: store.cleanupCopyIDsByItem[item.id, default: []].count,
+                        isSelected: store.selection == item.id,
+                        isKeyboardFocused: keyboardRegion == .sidebar && store.selection == item.id,
+                        onSelect: {
+                            keyboardRegion = .sidebar
+                            store.selection = item.id
+                        }
+                    )
+                    .id(item.id)
+                }
             }
-            .listStyle(.sidebar)
-            .searchable(text: $store.searchText, prompt: "파일명 또는 위치 검색")
-            .safeAreaInset(edge: .bottom) {
-                Color.clear.frame(height: 36)
-            }
+            .padding(.bottom, 8)
         }
     }
 
@@ -253,22 +437,23 @@ struct ReviewRootView: View {
                 "비교할 폴더를 선택하세요",
                 systemImage: "folder"
             )
-        } else if store.selectedRootIDs.isEmpty {
+        } else if store.selectedRootsNeedCurrentComparison {
             ContentUnavailableView(
-                "비교할 폴더를 선택하세요",
-                systemImage: "folder"
+                "선택한 폴더는 재스캔이 필요합니다.",
+                systemImage: "clock.arrow.circlepath",
+                description: Text("최신 결과를 보려면 다시 스캔해 주세요.")
             )
         } else if let item = store.selectedItem {
             ReviewDetailView(
                 item: item,
-                index: (store.selectedIndex ?? 0) + 1,
-                total: store.visibleItems.count,
                 cleanupCopyIDs: store.cleanupCopyIDsByItem[item.id, default: []],
                 onToggleCleanupFromColumn: { store.toggleCleanupFromColumn($0, item: item) },
                 onToggleCleanupFromButton: { store.toggleCleanupFromButton($0, item: item) },
                 canToggleCleanup: { store.canToggleCleanup($0, item: item) },
                 columnToggleHelp: { store.columnToggleHelp($0, item: item) },
-                cleanupToggleHelp: { store.cleanupToggleHelp($0, item: item) }
+                cleanupToggleHelp: { store.cleanupToggleHelp($0, item: item) },
+                focusedCopyID: keyboardRegion == .detail ? detailFocusedCopyID : nil,
+                onFocusCopy: focusDetailCopy
             )
         } else if !store.searchText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             ContentUnavailableView(
@@ -286,11 +471,84 @@ struct ReviewRootView: View {
     }
 }
 
+private struct ReviewArrowKeyMonitor: NSViewRepresentable {
+    let onMove: (MoveCommandDirection) -> Bool
+
+    func makeNSView(context: Context) -> ReviewArrowKeyMonitorView {
+        let view = ReviewArrowKeyMonitorView()
+        view.onMove = onMove
+        return view
+    }
+
+    func updateNSView(_ nsView: ReviewArrowKeyMonitorView, context: Context) {
+        nsView.onMove = onMove
+    }
+}
+
+private final class ReviewArrowKeyMonitorView: NSView {
+    var onMove: ((MoveCommandDirection) -> Bool)?
+    private var eventMonitor: Any?
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        if newWindow == nil, let eventMonitor {
+            NSEvent.removeMonitor(eventMonitor)
+            self.eventMonitor = nil
+        }
+        super.viewWillMove(toWindow: newWindow)
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        installMonitorIfNeeded()
+    }
+
+    private func installMonitorIfNeeded() {
+        guard eventMonitor == nil else { return }
+        eventMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self,
+                  let window = self.window,
+                  window.isKeyWindow,
+                  NSApp.keyWindow === window,
+                  !self.isEditingText(in: window),
+                  event.modifierFlags.intersection([.command, .option, .control, .shift]).isEmpty,
+                  let direction = self.direction(for: event),
+                  self.onMove?(direction) == true
+            else {
+                return event
+            }
+            return nil
+        }
+    }
+
+    private func isEditingText(in window: NSWindow) -> Bool {
+        if window.firstResponder is NSTextView { return true }
+        if window.firstResponder is NSTextField { return true }
+        return false
+    }
+
+    private func direction(for event: NSEvent) -> MoveCommandDirection? {
+        switch event.keyCode {
+        case 123: return .left
+        case 124: return .right
+        case 125: return .down
+        case 126: return .up
+        default: return nil
+        }
+    }
+}
+
 private struct ReviewActionBar: View {
     @ObservedObject var store: ReviewStore
 
     var body: some View {
         HStack(spacing: 12) {
+            if let selectedIndex = store.selectedIndex,
+               !store.visibleItems.isEmpty {
+                Text("\(selectedIndex + 1) / \(store.visibleItems.count)")
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+
             if let status = store.statusMessage, !store.isScanning {
                 Text(status)
                     .font(.caption)
@@ -300,10 +558,25 @@ private struct ReviewActionBar: View {
 
             Spacer()
 
-            Button(store.recommendedCleanupSelectionTitle) {
-                store.toggleRecommendedCleanupSelection()
+            Toggle(
+                isOn: Binding(
+                    get: { store.recommendedCleanupSelectionIsApplied },
+                    set: { _ in store.toggleRecommendedCleanupSelection() }
+                )
+            ) {
+                Label(
+                    store.recommendedCleanupSelectionTitle,
+                    systemImage: store.recommendedCleanupSelectionIsApplied
+                        ? "checkmark.circle.fill"
+                        : "checkmark.circle"
+                )
             }
-            .buttonStyle(.bordered)
+            .toggleStyle(.button)
+            .modifier(
+                ReviewSelectionActionButtonStyle(
+                    isSelected: store.recommendedCleanupSelectionIsApplied
+                )
+            )
             .disabled(
                 !store.canToggleRecommendedCleanupSelection
                     || store.isScanning
@@ -324,7 +597,11 @@ private struct ReviewActionBar: View {
                     )
                 }
             }
-            .buttonStyle(.borderedProminent)
+            .modifier(
+                ReviewDestructiveActionButtonStyle(
+                    isActive: store.selectedCleanupItemCount > 0
+                )
+            )
             .disabled(
                 store.selectedCleanupItemCount == 0
                     || store.isScanning
@@ -335,8 +612,189 @@ private struct ReviewActionBar: View {
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 9)
-        .background(.bar)
-        .overlay(alignment: .top) { Divider() }
+        .frame(maxWidth: .infinity)
+    }
+}
+
+private struct ReviewToolbarSearchField: NSViewRepresentable {
+    @Binding var text: String
+    let prompt: String
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(text: $text)
+    }
+
+    func makeNSView(context: Context) -> NSSearchField {
+        let searchField = NSSearchField(frame: .zero)
+        searchField.delegate = context.coordinator
+        searchField.placeholderString = prompt
+        searchField.sendsSearchStringImmediately = true
+        searchField.sendsWholeSearchString = false
+        searchField.controlSize = .regular
+        searchField.stringValue = text
+        return searchField
+    }
+
+    func updateNSView(_ nsView: NSSearchField, context: Context) {
+        context.coordinator.text = $text
+        nsView.placeholderString = prompt
+        if nsView.stringValue != text {
+            nsView.stringValue = text
+        }
+    }
+
+    final class Coordinator: NSObject, NSSearchFieldDelegate {
+        var text: Binding<String>
+
+        init(text: Binding<String>) {
+            self.text = text
+        }
+
+        func controlTextDidChange(_ notification: Notification) {
+            guard let field = notification.object as? NSSearchField else { return }
+            text.wrappedValue = field.stringValue
+        }
+    }
+}
+
+private struct ReviewActionButtonStyle: ViewModifier {
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(macOS 26.0, *) {
+            content
+                .buttonStyle(.glass)
+                .controlSize(.regular)
+        } else {
+            content
+                .buttonStyle(.bordered)
+                .controlSize(.regular)
+        }
+    }
+}
+
+private struct ReviewPrimaryActionButtonStyle: ViewModifier {
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(macOS 26.1, *) {
+            content
+                .buttonStyle(
+                    .glass(
+                        .regular
+                            .tint(ReviewVisualStyle.selectionAccent)
+                            .interactive()
+                    )
+                )
+                .controlSize(.regular)
+                .foregroundStyle(.white)
+        } else if #available(macOS 26.0, *) {
+            content
+                .buttonStyle(.glassProminent)
+                .controlSize(.regular)
+                .tint(ReviewVisualStyle.selectionAccent)
+                .foregroundStyle(.white)
+        } else {
+            content
+                .buttonStyle(.borderedProminent)
+                .controlSize(.regular)
+                .tint(ReviewVisualStyle.selectionAccent)
+                .foregroundStyle(.white)
+        }
+    }
+}
+
+private struct ReviewSelectionActionButtonStyle: ViewModifier {
+    let isSelected: Bool
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if #available(macOS 26.1, *), isSelected {
+            content
+                .buttonStyle(
+                    .glass(
+                        .regular
+                            .tint(ReviewVisualStyle.selectionAccent)
+                            .interactive()
+                    )
+                )
+                .controlSize(.regular)
+                .foregroundStyle(.white)
+        } else if isSelected {
+            content.modifier(ReviewPrimaryActionButtonStyle())
+        } else {
+            content.modifier(ReviewActionButtonStyle())
+        }
+    }
+}
+
+private struct ReviewDestructiveActionButtonStyle: ViewModifier {
+    let isActive: Bool
+
+    @ViewBuilder
+    func body(content: Content) -> some View {
+        if isActive {
+            if #available(macOS 26.1, *) {
+                content
+                    .buttonStyle(
+                        .glass(
+                            .regular
+                                .tint(Color.red.opacity(0.24))
+                                .interactive()
+                        )
+                    )
+                    .controlSize(.regular)
+                    .foregroundStyle(.red)
+            } else {
+                content
+                    .buttonStyle(.bordered)
+                    .controlSize(.regular)
+                    .tint(.red)
+                    .foregroundStyle(.red)
+            }
+        } else {
+            content.modifier(ReviewActionButtonStyle())
+        }
+    }
+}
+
+private struct ReviewEqualWidthActionLayout: Layout {
+    var spacing: CGFloat = 8
+
+    func sizeThatFits(
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) -> CGSize {
+        guard !subviews.isEmpty else { return .zero }
+        let sizes = subviews.map { $0.sizeThatFits(.unspecified) }
+        let itemWidth = sizes.map(\.width).max() ?? 0
+        let itemHeight = sizes.map(\.height).max() ?? 0
+        return CGSize(
+            width: itemWidth * CGFloat(subviews.count) + spacing * CGFloat(max(subviews.count - 1, 0)),
+            height: itemHeight
+        )
+    }
+
+    func placeSubviews(
+        in bounds: CGRect,
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) {
+        guard !subviews.isEmpty else { return }
+        let availableWidth = max(
+            bounds.width - spacing * CGFloat(max(subviews.count - 1, 0)),
+            0
+        )
+        let itemWidth = availableWidth / CGFloat(subviews.count)
+        var x = bounds.minX
+        for subview in subviews {
+            subview.place(
+                at: CGPoint(x: x, y: bounds.minY),
+                anchor: .topLeading,
+                proposal: ProposedViewSize(width: itemWidth, height: bounds.height)
+            )
+            x += itemWidth + spacing
+        }
     }
 }
 
@@ -412,8 +870,9 @@ private struct ReviewCleanupConfirmationSheet: View {
         VStack(alignment: .leading, spacing: 20) {
             VStack(alignment: .leading, spacing: 6) {
                 Text(destinationActionTitle)
-                    .font(.title2.weight(.semibold))
+                    .font(.title3.weight(.semibold))
                 Text(summaryTitle)
+                    .font(.body)
                     .foregroundStyle(.secondary)
                 Text(recoveryHint)
                     .font(.callout)
@@ -468,14 +927,22 @@ private struct ReviewCleanupConfirmationSheet: View {
                         .foregroundStyle(.secondary)
                 }
                 Spacer()
-                Button("취소", action: onCancel)
-                    .keyboardShortcut(.cancelAction)
-                    .disabled(isApplying)
-                Button(applyButtonTitle, action: onApply)
-                    .buttonStyle(.borderedProminent)
-                    .tint(report.removeAllItemCount > 0 || report.nonRedundantResourceCount > 0 ? .red : nil)
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(isApplying)
+                ReviewEqualWidthActionLayout {
+                    Button(action: onCancel) {
+                        Text("취소")
+                            .frame(maxWidth: .infinity)
+                    }
+                        .modifier(ReviewActionButtonStyle())
+                        .keyboardShortcut(.cancelAction)
+                        .disabled(isApplying)
+                    Button(action: onApply) {
+                        Text(applyButtonTitle)
+                            .frame(maxWidth: .infinity)
+                    }
+                        .modifier(ReviewDestructiveActionButtonStyle(isActive: true))
+                        .keyboardShortcut(.defaultAction)
+                        .disabled(isApplying)
+                }
             }
         }
         .padding(22)
@@ -530,19 +997,26 @@ private struct AddComparisonRootRequest: Identifiable {
     let url: URL
 }
 
+private struct FolderSyncRequest: Identifiable {
+    let rootID: String
+    var id: String { rootID }
+}
+
 private struct ComparisonLocationsPopover: View {
     let roots: [RegisteredRootReport]
     let selectedRootIDs: Set<String>
     let selectedRootsNeedScan: Bool
+    let selectedRootsNeedCurrentComparison: Bool
     let isScanning: Bool
     let noticeMessage: String?
     let onToggle: (String) -> Void
+    let onReorder: ([String]) -> Void
     let onAddFolder: () -> Void
     let onManage: () -> Void
     let onScan: () -> Void
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        VStack(alignment: .leading, spacing: 8) {
             VStack(alignment: .leading, spacing: 2) {
                 Text("비교 폴더")
                     .font(.headline)
@@ -557,39 +1031,27 @@ private struct ComparisonLocationsPopover: View {
                     systemImage: "folder",
                     description: Text("비교할 폴더를 추가하세요.")
                 )
-                .frame(width: 290, height: 120)
+                .frame(width: 280, height: 96)
             } else {
-                VStack(alignment: .leading, spacing: 8) {
-                    ForEach(roots, id: \.rootID) { root in
-                        let isSelected = selectedRootIDs.contains(root.rootID)
-                        Toggle(
-                            isOn: Binding(
-                                get: { isSelected },
-                                set: { _ in onToggle(root.rootID) }
-                            )
-                        ) {
-                            VStack(alignment: .leading, spacing: 1) {
-                                Text(root.label)
-                                    .lineLimit(1)
-                                Text(rootSubtitle(root))
-                                    .font(.caption)
-                                    .foregroundStyle(root.isAvailable ? .secondary : .tertiary)
-                                    .lineLimit(1)
-                            }
-                        }
-                        .toggleStyle(.checkbox)
-                        .disabled(
-                            isScanning
-                                || (!root.isAvailable && !isSelected)
+                ReviewRootList(
+                    entries: roots.map { root in
+                        ReviewRootListEntry(
+                            id: root.rootID, title: root.label, subtitle: rootSubtitle(root),
+                            selected: selectedRootIDs.contains(root.rootID),
+                            toggleEnabled: root.isAvailable || selectedRootIDs.contains(root.rootID),
+                            purposeIndex: nil
                         )
-                        .help(rootUserPurposeDescription(root.usageRole.userPurpose))
-                    }
-                }
+                    },
+                    isEnabled: !isScanning,
+                    onToggle: { id, _ in onToggle(id) },
+                    onReorder: onReorder
+                )
+                .frame(height: min(CGFloat(roots.count) * 38, 266))
             }
 
             Divider()
 
-            VStack(alignment: .leading, spacing: 8) {
+            VStack(alignment: .leading, spacing: 6) {
                 Button(action: onAddFolder) {
                     Label("폴더 추가…", systemImage: "folder.badge.plus")
                         .frame(maxWidth: .infinity, alignment: .leading)
@@ -620,9 +1082,15 @@ private struct ComparisonLocationsPopover: View {
                         Label("선택한 폴더 스캔", systemImage: "arrow.triangle.2.circlepath")
                             .frame(maxWidth: .infinity)
                     }
-                    .buttonStyle(.borderedProminent)
+                    .modifier(ReviewPrimaryActionButtonStyle())
                     .disabled(selectedRootIDs.isEmpty || isScanning)
                 } else {
+                    if selectedRootsNeedCurrentComparison {
+                        Text("최신 결과를 보려면 선택한 폴더를 다시 스캔해 주세요.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
                     Button(action: onScan) {
                         Label("선택한 폴더 다시 스캔", systemImage: "arrow.triangle.2.circlepath")
                             .frame(maxWidth: .infinity, alignment: .leading)
@@ -632,8 +1100,8 @@ private struct ComparisonLocationsPopover: View {
                 }
             }
         }
-        .padding(14)
-        .frame(width: 320)
+        .padding(12)
+        .frame(width: 304)
     }
 
     private func rootSubtitle(_ root: RegisteredRootReport) -> String {
@@ -652,54 +1120,56 @@ private struct RootRemovalRequest: Identifiable {
 
 private struct ComparisonRootManagerSheet: View {
     let roots: [RegisteredRootReport]
+    let selectedRootIDs: Set<String>
     let isWorking: Bool
     let noticeMessage: String?
     let onClose: () -> Void
     let onAddFolder: () -> Void
-    let onSetActive: (String, Bool) -> Void
+    let onToggle: (String) -> Void
     let onSetPurpose: (String, RootUserPurpose) -> Void
+    let onSync: (String) -> Void
     let onRemove: (String) -> Void
     let onReorder: ([String]) -> Void
 
     @State private var removalRequest: RootRemovalRequest?
-    @State private var orderedRootIDs: [String] = []
-    @State private var targetedRootID: String?
-
-    private var displayedRoots: [RegisteredRootReport] {
-        let byID = Dictionary(uniqueKeysWithValues: roots.map { ($0.rootID, $0) })
-        var seen = Set<String>()
-        var ordered = orderedRootIDs.compactMap { rootID -> RegisteredRootReport? in
-            guard seen.insert(rootID).inserted else { return nil }
-            return byID[rootID]
-        }
-        ordered.append(contentsOf: roots.filter { seen.insert($0.rootID).inserted })
-        return ordered
-    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            VStack(alignment: .leading, spacing: 5) {
+        VStack(alignment: .leading, spacing: 14) {
+            VStack(alignment: .leading, spacing: 3) {
                 Text("폴더 상세 설정")
-                    .font(.title2.weight(.semibold))
-                Text("등록한 폴더의 사용 여부와 용도를 변경합니다.")
+                    .font(.title3.weight(.semibold))
+                Text("비교에 포함할 폴더와 순서·용도를 변경합니다.")
                     .foregroundStyle(.secondary)
             }
 
-            ScrollView {
-                LazyVStack(spacing: 10) {
-                    ForEach(displayedRoots, id: \.rootID) { root in
-                        rootRow(root)
-                            .dropDestination(for: String.self) { items, _ in
-                                guard let sourceRootID = items.first else { return false }
-                                return moveRoot(sourceRootID, to: root.rootID)
-                            } isTargeted: { isTargeted in
-                                targetedRootID = isTargeted ? root.rootID : nil
-                            }
-                    }
-                }
-                .padding(.vertical, 1)
-            }
-            .frame(minHeight: 260, maxHeight: 440)
+            ReviewRootList(
+                entries: roots.map { root in
+                    ReviewRootListEntry(
+                        id: root.rootID,
+                        title: root.label + (root.isAvailable ? "" : " · 오프라인"),
+                        subtitle: root.canonicalPath,
+                        selected: selectedRootIDs.contains(root.rootID),
+                        toggleEnabled: root.isAvailable || selectedRootIDs.contains(root.rootID),
+                        purposeIndex: [RootUserPurpose.standard, .archive, .readOnly]
+                            .firstIndex(of: root.usageRole.userPurpose)
+                    )
+                },
+                isEnabled: !isWorking,
+                onToggle: { id, _ in onToggle(id) },
+                onPurpose: { id, index in
+                    let purposes: [RootUserPurpose] = [.standard, .archive, .readOnly]
+                    guard purposes.indices.contains(index) else { return }
+                    onSetPurpose(id, purposes[index])
+                },
+                onSync: onSync,
+                onRemove: { id in
+                    guard let root = roots.first(where: { $0.rootID == id }) else { return }
+                    removalRequest = RootRemovalRequest(rootID: id, label: root.label)
+                },
+                purposeDescriptions: [RootUserPurpose.standard, .archive, .readOnly].map(rootUserPurposeDescription),
+                onReorder: onReorder
+            )
+            .frame(height: min(max(CGFloat(roots.count) * 56, 224), 380))
 
             if let noticeMessage {
                 Label(noticeMessage, systemImage: "checkmark.circle")
@@ -711,25 +1181,17 @@ private struct ComparisonRootManagerSheet: View {
                 Button(action: onAddFolder) {
                     Label("폴더 추가…", systemImage: "plus")
                 }
+                .modifier(ReviewActionButtonStyle())
                 .disabled(isWorking)
 
                 Spacer()
                 Button("완료", action: onClose)
+                    .modifier(ReviewActionButtonStyle())
                     .keyboardShortcut(.defaultAction)
             }
         }
-        .padding(22)
-        .frame(width: 700)
-        .onAppear {
-            orderedRootIDs = roots.map(\.rootID)
-        }
-        .onChange(of: roots.map(\.rootID)) { _, newRootIDs in
-            let valid = Set(newRootIDs)
-            var seen = Set<String>()
-            var next = orderedRootIDs.filter { valid.contains($0) && seen.insert($0).inserted }
-            next.append(contentsOf: newRootIDs.filter { seen.insert($0).inserted })
-            orderedRootIDs = next
-        }
+        .padding(20)
+        .frame(width: 650)
         .alert(item: $removalRequest) { request in
             Alert(
                 title: Text("‘\(request.label)’ 폴더 등록을 해제할까요?"),
@@ -742,97 +1204,925 @@ private struct ComparisonRootManagerSheet: View {
         }
     }
 
-    @ViewBuilder
-    private func rootRow(_ root: RegisteredRootReport) -> some View {
-        HStack(spacing: 14) {
-            HStack(spacing: 14) {
-                Image(systemName: root.isAvailable ? "folder.fill" : "folder.badge.questionmark")
-                    .font(.system(size: 21))
-                    .foregroundStyle(root.isAvailable ? .secondary : .tertiary)
-                    .frame(width: 28)
+}
 
-                VStack(alignment: .leading, spacing: 3) {
-                    HStack(spacing: 6) {
-                        Text(root.label)
-                            .font(.headline)
-                            .lineLimit(1)
-                        if !root.isAvailable {
-                            Text("오프라인")
-                                .font(.caption2.weight(.medium))
-                                .foregroundStyle(.secondary)
-                                .padding(.horizontal, 6)
-                                .padding(.vertical, 2)
-                                .background(.background.secondary, in: Capsule())
-                        }
-                    }
-                    Text(root.canonicalPath)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .lineLimit(1)
-                        .truncationMode(.middle)
-                }
-            }
-            .contentShape(Rectangle())
-            .help("드래그하여 순서 변경")
-            .draggable(root.rootID)
+private struct FolderSyncSheet: View {
+    @ObservedObject var store: ReviewStore
+    let root: RegisteredRootReport
+    let onClose: () -> Void
 
-            Spacer(minLength: 14)
+    @State private var remoteName = ""
+    @State private var remotePath: String
+    @State private var hasRequestedRemotes = false
+    @State private var showsInitialSyncConfirmation = false
+    @State private var showsDisconnectConfirmation = false
+    @State private var showsDeletionPlan = false
+    @State private var showsConflictItems = false
+    @State private var showsRecoveryItems = false
 
-            Toggle(
-                "사용 중",
-                isOn: Binding(
-                    get: { root.state == .active },
-                    set: { onSetActive(root.rootID, $0) }
-                )
-            )
-            .toggleStyle(.switch)
-            .disabled(isWorking)
-
-            RootPurposePopUpButton(
-                selection: Binding(
-                    get: { root.usageRole.userPurpose },
-                    set: { onSetPurpose(root.rootID, $0) }
-                ),
-                isEnabled: !isWorking
-            )
-            .frame(width: 135)
-
-            Button {
-                removalRequest = RootRemovalRequest(rootID: root.rootID, label: root.label)
-            } label: {
-                Image(systemName: "minus.circle")
-                    .imageScale(.large)
-                    .foregroundStyle(.secondary)
-            }
-            .buttonStyle(.plain)
-            .fixedSize()
-            .disabled(isWorking)
-            .help("등록 해제")
-        }
-        .padding(12)
-        .background(
-            targetedRootID == root.rootID ? AnyShapeStyle(.quaternary) : AnyShapeStyle(.background.secondary),
-            in: RoundedRectangle(cornerRadius: 12, style: .continuous)
-        )
+    init(store: ReviewStore, root: RegisteredRootReport, onClose: @escaping () -> Void) {
+        self.store = store
+        self.root = root
+        self.onClose = onClose
+        _remotePath = State(initialValue: root.label)
     }
 
-    private func moveRoot(_ sourceRootID: String, to targetRootID: String) -> Bool {
-        guard sourceRootID != targetRootID else { return false }
-        if orderedRootIDs.isEmpty {
-            orderedRootIDs = roots.map(\.rootID)
-        }
-        guard let sourceIndex = orderedRootIDs.firstIndex(of: sourceRootID),
-              let targetIndex = orderedRootIDs.firstIndex(of: targetRootID)
-        else { return false }
+    private var connection: FolderSyncConnection? {
+        store.syncConnection(for: root.rootID)
+    }
 
-        var next = orderedRootIDs
-        let moved = next.remove(at: sourceIndex)
-        let insertionIndex = min(targetIndex, next.count)
-        next.insert(moved, at: insertionIndex)
-        orderedRootIDs = next
-        targetedRootID = nil
-        onReorder(next)
-        return true
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Google Drive 동기화")
+                    .font(.title3.weight(.semibold))
+                Text("\(root.label) 폴더와 Google Drive를 양방향으로 연결합니다.")
+                    .foregroundStyle(.secondary)
+            }
+
+            if let connection {
+                connectedContent(connection)
+            } else if root.usageRole.userPurpose == .readOnly {
+                Label(
+                    "읽기 전용 폴더는 양방향 동기화할 수 없습니다.",
+                    systemImage: "lock"
+                )
+                .foregroundStyle(.secondary)
+            } else {
+                setupContent
+            }
+
+            if let message = store.syncErrorMessage {
+                Label(message, systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            HStack {
+                Spacer()
+                Button("완료", action: onClose)
+                    .modifier(ReviewActionButtonStyle())
+                    .keyboardShortcut(.defaultAction)
+                    .disabled(store.isSyncing)
+            }
+        }
+        .padding(20)
+        .frame(width: 520)
+        .task(id: connection?.id) {
+            if let connection {
+                await store.loadSyncConflictItems(connectionID: connection.id)
+                await store.loadSyncRecoveryItems(connectionID: connection.id)
+            } else if root.usageRole.userPurpose != .readOnly, !hasRequestedRemotes {
+                hasRequestedRemotes = true
+                await store.loadSyncDriveRemotes()
+                if remoteName.isEmpty {
+                    remoteName = store.syncDriveRemotes.first?.name ?? ""
+                }
+            }
+        }
+        .alert("첫 동기화를 시작할까요?", isPresented: $showsInitialSyncConfirmation) {
+            Button("취소", role: .cancel) {}
+            Button("동기화 시작") {
+                guard let connection else { return }
+                Task {
+                    await store.runSync(
+                        connectionID: connection.id,
+                        confirmInitialSync: true
+                    )
+                }
+            }
+        } message: {
+            Text(
+                "한쪽에만 있는 파일은 양쪽에 합칩니다. 동일한 위치에 서로 다른 내용의 파일이 있으면 어느 쪽도 자동으로 덮어쓰지 않고 첫 동기화를 중단합니다."
+            )
+        }
+        .confirmationDialog(
+            "동기화 연결을 해제할까요?",
+            isPresented: $showsDisconnectConfirmation,
+            titleVisibility: .visible
+        ) {
+            if let connection {
+                Button("연결 해제", role: .destructive) {
+                    store.removeSyncConnection(connectionID: connection.id)
+                    hasRequestedRemotes = true
+                    Task {
+                        await store.loadSyncDriveRemotes()
+                        if remoteName.isEmpty {
+                            remoteName = store.syncDriveRemotes.first?.name ?? ""
+                        }
+                    }
+                }
+            }
+            Button("취소", role: .cancel) {}
+        } message: {
+            Text("연결 정보만 제거합니다. HDD와 Google Drive의 파일, 기존 복구 자료는 삭제하지 않습니다.")
+        }
+        .sheet(isPresented: $showsDeletionPlan) {
+            if let connection,
+               let plan = store.syncPendingDeletionPlans[connection.id] {
+                FolderSyncDeletionPlanSheet(
+                    connection: connection,
+                    plan: plan,
+                    canApprove: RcloneBisyncService.productionApplyAvailable
+                        && !store.hasFilesystemOperationInProgress,
+                    onApprove: {
+                        showsDeletionPlan = false
+                        Task {
+                            await store.runSync(
+                                connectionID: connection.id,
+                                confirmInitialSync: false,
+                                approvedDeletionPlanID: plan.id
+                            )
+                        }
+                    },
+                    onClose: { showsDeletionPlan = false }
+                )
+            }
+        }
+        .sheet(isPresented: $showsRecoveryItems) {
+            if let connection {
+                FolderSyncRecoveryItemsSheet(
+                    store: store,
+                    connection: connection,
+                    onClose: { showsRecoveryItems = false }
+                )
+            }
+        }
+        .sheet(isPresented: $showsConflictItems) {
+            if let connection {
+                FolderSyncConflictItemsSheet(
+                    store: store,
+                    connection: connection,
+                    onClose: { showsConflictItems = false }
+                )
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var setupContent: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            GroupBox {
+                VStack(alignment: .leading, spacing: 12) {
+                    if store.isLoadingSyncRemotes {
+                        HStack(spacing: 8) {
+                            ProgressView()
+                                .controlSize(.small)
+                            Text("Google Drive 연결을 확인하는 중…")
+                                .foregroundStyle(.secondary)
+                        }
+                    } else if store.syncDriveRemotes.isEmpty {
+                        VStack(alignment: .leading, spacing: 8) {
+                            Text("연결된 Google Drive를 찾지 못했습니다.")
+                            Text("Google Drive 연결을 설정한 뒤 다시 확인해 주세요.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Button("다시 확인") {
+                                Task { await store.loadSyncDriveRemotes() }
+                            }
+                        }
+                    } else {
+                        Picker("Google Drive", selection: $remoteName) {
+                            ForEach(store.syncDriveRemotes) { remote in
+                                Text(remote.displayName).tag(remote.name)
+                            }
+                        }
+
+                        TextField("Google Drive 폴더", text: $remotePath)
+                            .textFieldStyle(.roundedBorder)
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            Label(
+                "이 기능은 단순 백업이 아닙니다. 한쪽에서 추가·수정·이동·삭제하면 다른 쪽에도 반영됩니다.",
+                systemImage: "exclamationmark.shield"
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+
+            Text(
+                "동기화 중에는 동일한 파일을 다른 앱이나 기기에서 수정하지 마세요. 양쪽에서 바뀐 파일은 자동으로 덮어쓰지 않고 확인이 필요합니다."
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+
+            HStack {
+                Spacer()
+                Button("동기화 연결…") {
+                    let remote = store.syncDriveRemotes.first(where: { $0.name == remoteName })
+                    _ = store.createSyncConnection(
+                        rootID: root.rootID,
+                        remoteName: remoteName,
+                        remoteDisplayName: remote?.displayName,
+                        remotePath: remotePath
+                    )
+                }
+                .modifier(ReviewPrimaryActionButtonStyle())
+                .disabled(
+                    remoteName.isEmpty
+                        || remotePath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        || store.hasFilesystemOperationInProgress
+                )
+            }
+        }
+    }
+
+    @ViewBuilder
+    private func connectedContent(_ connection: FolderSyncConnection) -> some View {
+        let displayStatus = folderSyncDisplayStatus(connection.status)
+        let confirmationCount = store.syncConfirmationItemCount(connectionID: connection.id)
+        let recoverySummary = store.syncRecoverySummary(connectionID: connection.id)
+        VStack(alignment: .leading, spacing: 14) {
+            GroupBox {
+                Grid(alignment: .leading, horizontalSpacing: 18, verticalSpacing: 10) {
+                    GridRow {
+                        Text("연결")
+                            .foregroundStyle(.secondary)
+                        Text("\(root.label) ↔ \(connection.remoteDisplayName ?? "Google Drive")")
+                    }
+                    GridRow {
+                        Text("Google Drive 폴더")
+                            .foregroundStyle(.secondary)
+                        Text(connection.remotePath)
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                    GridRow {
+                        Text("상태")
+                            .foregroundStyle(.secondary)
+                        Label(
+                            folderSyncStatusText(displayStatus),
+                            systemImage: folderSyncStatusIcon(displayStatus)
+                        )
+                    }
+                    if let lastSuccessAt = connection.lastSuccessAt {
+                        GridRow {
+                            Text(
+                                displayStatus == .success || displayStatus == .ready
+                                    ? "마지막 동기화 완료"
+                                    : "이전 동기화 완료"
+                            )
+                                .foregroundStyle(.secondary)
+                            Text(lastSuccessAt, format: .dateTime.year().month().day().hour().minute())
+                        }
+                    }
+                    GridRow {
+                        Text("확인이 필요한 사진")
+                            .foregroundStyle(.secondary)
+                        Text("\(confirmationCount)개")
+                    }
+                    GridRow {
+                        Text("복구할 항목")
+                            .foregroundStyle(.secondary)
+                        if let recoverySummary {
+                            Text(
+                                "\(recoverySummary.itemCount)개 · "
+                                    + ByteCountFormatter.string(
+                                        fromByteCount: recoverySummary.totalBytes,
+                                        countStyle: .file
+                                    )
+                            )
+                        } else if store.isLoadingSyncRecovery {
+                            Text("확인 중…")
+                                .foregroundStyle(.secondary)
+                        } else {
+                            Text("확인 필요")
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            Text(folderSyncStatusDetail(displayStatus))
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if !RcloneBisyncService.productionApplyAvailable {
+                Label("파일을 안전하게 반영하는 기능을 준비하고 있습니다. 현재는 동기화를 실행할 수 없습니다.", systemImage: "lock.shield")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            if confirmationCount > 0
+                || store.syncPendingDeletionPlans[connection.id] != nil
+                || (recoverySummary?.itemCount ?? 0) > 0 {
+                HStack(spacing: 10) {
+                    if !store.syncConflictItems(connectionID: connection.id).isEmpty {
+                        Button("확인이 필요한 사진…") {
+                            showsConflictItems = true
+                        }
+                    }
+                    if store.syncPendingDeletionPlans[connection.id] != nil {
+                        Button("삭제할 항목 확인…") {
+                            showsDeletionPlan = true
+                        }
+                    }
+                    if (recoverySummary?.itemCount ?? 0) > 0 {
+                        Button("복구할 항목…") {
+                            showsRecoveryItems = true
+                        }
+                    }
+                }
+            }
+
+            if store.isSyncing {
+                HStack(spacing: 10) {
+                    ProgressView()
+                        .controlSize(.small)
+                    Text(syncProgressText(store.syncProgress?.stage))
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("취소", action: store.cancelSync)
+                }
+            } else {
+                HStack {
+                    Button("연결 해제…", role: .destructive) {
+                        showsDisconnectConfirmation = true
+                    }
+                    .disabled(store.hasFilesystemOperationInProgress)
+
+                    Spacer()
+                    Button("지금 동기화") {
+                        if connection.isInitialized {
+                            Task {
+                                await store.runSync(
+                                    connectionID: connection.id,
+                                    confirmInitialSync: false
+                                )
+                            }
+                        } else {
+                            showsInitialSyncConfirmation = true
+                        }
+                    }
+                    .modifier(ReviewPrimaryActionButtonStyle())
+                    .disabled(
+                        !RcloneBisyncService.productionApplyAvailable
+                            || store.hasFilesystemOperationInProgress
+                    )
+                    .help(
+                        RcloneBisyncService.productionApplyAvailable
+                            ? "두 위치의 변경 사항을 확인하고 반영합니다"
+                            : "파일을 안전하게 반영하는 기능을 준비하고 있습니다. 현재는 동기화를 실행할 수 없습니다."
+                    )
+                }
+            }
+        }
+    }
+
+    private func syncProgressText(_ stage: FolderSyncProgressStage?) -> String {
+        switch stage {
+        case .checking: return "연결과 폴더를 확인하는 중…"
+        case .preparing: return "안전한 동기화를 준비하는 중…"
+        case .preflight: return "변경 사항을 미리 확인하는 중…"
+        case .syncing: return "양쪽 변경 사항을 반영하는 중…"
+        case .finalizing: return "동기화 결과를 확인하는 중…"
+        case nil: return "동기화하는 중…"
+        }
+    }
+}
+
+private struct FolderSyncConflictItemsSheet: View {
+    @ObservedObject var store: ReviewStore
+    let connection: FolderSyncConnection
+    let onClose: () -> Void
+
+    var body: some View {
+        let items = store.syncConflictItems(connectionID: connection.id)
+        VStack(alignment: .leading, spacing: 16) {
+            Text("확인이 필요한 사진")
+                .font(.title3.weight(.semibold))
+            Text("양쪽의 동일한 사진이 각각 변경되었습니다. 자동으로 한쪽을 선택하지 않습니다.")
+                .foregroundStyle(.secondary)
+
+            if store.isLoadingSyncConflicts {
+                HStack(spacing: 8) {
+                    ProgressView().controlSize(.small)
+                    Text("현재 상태를 확인하는 중…")
+                        .foregroundStyle(.secondary)
+                }
+            } else if items.isEmpty {
+                Text("현재 이 화면에서 선택할 수 있는 항목이 없습니다.")
+                    .foregroundStyle(.secondary)
+            } else {
+                List(items) { item in
+                    VStack(alignment: .leading, spacing: 10) {
+                        HStack(spacing: 8) {
+                            Image(systemName: item.isLivePhoto ? "livephoto" : "photo")
+                            Text(item.relativePaths.first ?? "사진")
+                                .font(.headline)
+                        }
+                        Text("외장 드라이브 · \(item.externalDriveDescription)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Text("Google Drive · \(item.googleDriveDescription)")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+
+                        HStack(spacing: 8) {
+                            ForEach(item.availableChoices, id: \.self) { choice in
+                                Button(folderSyncConflictChoiceTitle(choice)) {
+                                    Task {
+                                        await store.resolveSyncConflict(
+                                            connectionID: connection.id,
+                                            itemID: item.id,
+                                            choice: choice,
+                                            expectedFingerprint: item.expectedFingerprint
+                                        )
+                                    }
+                                }
+                                .disabled(
+                                    !RcloneBisyncService.productionApplyAvailable
+                                        || store.hasFilesystemOperationInProgress
+                                )
+                                .help(folderSyncConflictChoiceHelp(choice))
+                            }
+                        }
+                    }
+                    .padding(.vertical, 4)
+                }
+                .frame(minHeight: 260)
+            }
+
+            if !RcloneBisyncService.productionApplyAvailable {
+                Label(
+                    "선택 기능은 준비되어 있지만, 현재 버전에서는 파일 반영을 아직 사용할 수 없습니다.",
+                    systemImage: "lock.shield"
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            }
+
+            HStack {
+                Button("다시 확인") {
+                    Task { await store.loadSyncConflictItems(connectionID: connection.id) }
+                }
+                .modifier(ReviewActionButtonStyle())
+                .disabled(store.isLoadingSyncConflicts || store.hasFilesystemOperationInProgress)
+                Spacer()
+                Button("완료", action: onClose)
+                    .modifier(ReviewActionButtonStyle())
+                    .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(20)
+        .frame(width: 720, height: 520)
+    }
+}
+
+private func folderSyncConflictChoiceTitle(_ choice: FolderSyncConflictChoice) -> String {
+    switch choice {
+    case .keepBoth: return "둘 다 보관"
+    case .useExternalDrive: return "외장 드라이브 버전 사용"
+    case .useGoogleDrive: return "Google Drive 버전 사용"
+    case .keepModified: return "수정본 보관"
+    case .deleteBoth: return "양쪽에서 삭제"
+    }
+}
+
+private func folderSyncConflictChoiceHelp(_ choice: FolderSyncConflictChoice) -> String {
+    switch choice {
+    case .keepBoth:
+        return "두 버전을 모두 남기며 기존 이름을 덮어쓰지 않습니다."
+    case .useExternalDrive:
+        return "외장 드라이브의 현재 내용을 Google Drive에도 사용합니다."
+    case .useGoogleDrive:
+        return "Google Drive의 현재 내용을 외장 드라이브에도 사용합니다."
+    case .keepModified:
+        return "남아 있는 수정본을 양쪽에 보관합니다."
+    case .deleteBoth:
+        return "양쪽에서 삭제하며 삭제 전 복구 사본을 보관합니다."
+    }
+}
+
+private struct FolderSyncDeletionPlanSheet: View {
+    let connection: FolderSyncConnection
+    let plan: FolderSyncDeletionPlan
+    let canApprove: Bool
+    let onApprove: () -> Void
+    let onClose: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 16) {
+            Text("삭제할 항목 확인")
+                .font(.title3.weight(.semibold))
+            Text("아래 항목은 반대쪽에서도 제거됩니다. 제거 전 사본은 복구 위치에 보관합니다.")
+                .foregroundStyle(.secondary)
+
+            List(plan.items) { item in
+                VStack(alignment: .leading, spacing: 4) {
+                    Text(item.isLivePhoto ? "Live Photo" : item.relativePaths.first ?? "항목")
+                        .font(.headline)
+                    Text(folderSyncLocationText(item.location))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    ForEach(item.relativePaths, id: \.self) { path in
+                        Text(path)
+                            .font(.caption.monospaced())
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                    }
+                }
+                .padding(.vertical, 3)
+            }
+            .frame(minHeight: 220)
+
+            if !plan.emptiedNonEmptyDirectories.isEmpty {
+                Label(
+                    "비어 있게 되는 폴더가 포함되어 있습니다.",
+                    systemImage: "exclamationmark.triangle"
+                )
+                .font(.caption)
+            }
+
+            HStack {
+                Spacer()
+                ReviewEqualWidthActionLayout {
+                    Button(action: onClose) {
+                        Text("취소")
+                            .frame(maxWidth: .infinity)
+                    }
+                        .modifier(ReviewActionButtonStyle())
+                    Button(action: onApprove) {
+                        Text("확인하고 동기화")
+                            .frame(maxWidth: .infinity)
+                    }
+                        .modifier(ReviewPrimaryActionButtonStyle())
+                        .disabled(!canApprove)
+                }
+            }
+        }
+        .padding(20)
+        .frame(width: 560, height: 430)
+    }
+}
+
+private struct FolderSyncRecoveryItemsSheet: View {
+    @ObservedObject var store: ReviewStore
+    let connection: FolderSyncConnection
+    let onClose: () -> Void
+    @State private var pendingCleanupItemID: String?
+
+    var body: some View {
+        let items = store.syncRecoveryItems(connectionID: connection.id)
+        let summary = FolderSyncRecoverySummary(items: items)
+        VStack(alignment: .leading, spacing: 16) {
+            Text("복구할 항목")
+                .font(.title3.weight(.semibold))
+            Text(
+                "\(summary.itemCount)개 · "
+                    + ByteCountFormatter.string(fromByteCount: summary.totalBytes, countStyle: .file)
+            )
+            .foregroundStyle(.secondary)
+
+            if items.isEmpty {
+                Text("보관된 복구 사본이 없습니다.")
+                    .foregroundStyle(.secondary)
+            } else {
+                List(items) { item in
+                    HStack(alignment: .top, spacing: 12) {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text(item.originalRelativePath)
+                                .lineLimit(1)
+                                .truncationMode(.middle)
+                            Text(recoveryLocationText(item))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Text(ByteCountFormatter.string(fromByteCount: item.byteSize, countStyle: .file))
+                                .font(.caption2)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        VStack(alignment: .trailing, spacing: 6) {
+                            if item.location == .externalDrive {
+                                Button("복원") {
+                                    Task {
+                                        await store.restoreSyncRecoveryItem(
+                                            connectionID: connection.id,
+                                            itemID: item.id
+                                        )
+                                    }
+                                }
+                                .disabled(store.hasFilesystemOperationInProgress)
+                            } else {
+                                Text("Google Drive 복원은 현재 사용할 수 없음")
+                                    .font(.caption2)
+                                    .foregroundStyle(.secondary)
+                            }
+                            Button("정리…", role: .destructive) {
+                                pendingCleanupItemID = item.id
+                            }
+                            .disabled(store.hasFilesystemOperationInProgress)
+                        }
+                    }
+                    .padding(.vertical, 3)
+                }
+                .frame(minHeight: 240)
+            }
+
+            HStack {
+                Button("다시 확인") {
+                    Task { await store.loadSyncRecoveryItems(connectionID: connection.id) }
+                }
+                .modifier(ReviewActionButtonStyle())
+                .disabled(store.isLoadingSyncRecovery)
+                Spacer()
+                Button("완료", action: onClose)
+                    .modifier(ReviewActionButtonStyle())
+                    .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(20)
+        .frame(width: 620, height: 460)
+        .alert(
+            "복구 사본을 정리할까요?",
+            isPresented: Binding(
+                get: { pendingCleanupItemID != nil },
+                set: { if !$0 { pendingCleanupItemID = nil } }
+            )
+        ) {
+            Button("취소", role: .cancel) {
+                pendingCleanupItemID = nil
+            }
+            Button("휴지통으로 이동", role: .destructive) {
+                guard let itemID = pendingCleanupItemID else { return }
+                pendingCleanupItemID = nil
+                Task {
+                    await store.discardSyncRecoveryItem(
+                        connectionID: connection.id,
+                        itemID: itemID
+                    )
+                }
+            }
+        } message: {
+            Text("선택한 복구 사본만 해당 위치의 휴지통으로 이동합니다. 원래 위치의 파일은 변경하지 않습니다.")
+        }
+    }
+
+    private func recoveryLocationText(_ item: FolderSyncRecoveryItem) -> String {
+        switch item.location {
+        case .externalDrive:
+            return "외장 드라이브에서 제거된 사본 · Mac 복구 저장소"
+        case .googleDrive:
+            return "Google Drive에서 제거된 사본 · Google Drive 복구 저장소"
+        }
+    }
+}
+
+private func folderSyncLocationText(_ location: FolderSyncLocation) -> String {
+    switch location {
+    case .externalDrive: return "외장 드라이브에서 제거"
+    case .googleDrive: return "Google Drive에서 제거"
+    }
+}
+
+private func folderSyncDisplayStatus(_ status: FolderSyncStatus) -> FolderSyncStatus {
+    guard !RcloneBisyncService.productionApplyAvailable else { return status }
+    switch status {
+    case .setupRequired, .ready, .success, .safetyUnavailable:
+        return .safetyUnavailable
+    default:
+        return status
+    }
+}
+
+func folderSyncStatusText(_ status: FolderSyncStatus) -> String {
+    switch status {
+    case .setupRequired: return "첫 동기화 필요"
+    case .ready: return "동기화 준비됨"
+    case .running: return "동기화 중"
+    case .success: return "동기화 완료"
+    case .failed: return "동기화 실패"
+    case .incomplete: return "일부 항목을 완료하지 못했습니다"
+    case .confirmationRequired: return "확인이 필요한 사진이 있습니다"
+    case .conflict: return "양쪽에서 변경된 사진이 있습니다"
+    case .initialConflict: return "첫 동기화에서 확인할 사진이 있습니다"
+    case .recoveryRequired: return "복구 필요"
+    case .driveUnavailable: return "외장 드라이브를 연결해주세요"
+    case .connectionCheckRequired: return "Google Drive에 연결하지 못했습니다"
+    case .livePhotoBlocked: return "확인이 필요한 Live Photo가 있습니다"
+    case .safetyUnavailable: return "동기화 준비 중"
+    case .cancelled: return "동기화 취소됨"
+    }
+}
+
+func folderSyncStatusIcon(_ status: FolderSyncStatus) -> String {
+    switch status {
+    case .success: return "checkmark.circle"
+    case .running: return "arrow.triangle.2.circlepath"
+    case .incomplete, .confirmationRequired, .conflict, .initialConflict,
+         .recoveryRequired, .connectionCheckRequired,
+         .livePhotoBlocked, .safetyUnavailable:
+        return "exclamationmark.triangle"
+    case .driveUnavailable: return "externaldrive.badge.questionmark"
+    case .setupRequired, .ready, .cancelled, .failed: return "circle"
+    }
+}
+
+func folderSyncStatusDetail(_ status: FolderSyncStatus) -> String {
+    switch status {
+    case .setupRequired:
+        return "첫 동기화에서는 한쪽에만 있는 파일만 합칠 수 있고, 동일한 위치의 내용이 다르면 중단합니다. 자동 동기화는 사용하지 않습니다."
+    case .success, .ready:
+        return "마지막으로 완료한 동기화 결과입니다. 자동 감시 상태를 뜻하지 않으며 현재 파일은 다음 동기화 때 다시 확인합니다."
+    case .running:
+        return "양쪽의 변경 사항을 확인하고 반영하고 있습니다."
+    case .incomplete:
+        return "일부 항목의 전송 또는 확인이 끝나지 않았습니다. 전체 동기화를 완료로 기록하지 않았으며 정상 원본은 그대로 둡니다."
+    case .confirmationRequired:
+        return "자동으로 결정하기 어려운 변경을 찾았습니다. 다른 구성요소까지 임의로 삭제하거나 한쪽 사본을 폐기하지 않았습니다."
+    case .conflict:
+        return "서로 충돌한 파일은 한쪽을 버리지 않고 양쪽 사본을 보존했습니다. 파일을 확인해 주세요."
+    case .initialConflict:
+        return "첫 동기화 전에 동일한 위치의 서로 다른 파일을 찾았습니다. 어느 쪽도 자동으로 덮어쓰지 않았습니다. 내용을 확인해 주세요."
+    case .recoveryRequired:
+        return "이전 실행에서 일부 파일이 이미 반영되었을 수 있습니다. 현재 상태를 확인하기 전에는 자동으로 다시 초기화하거나 재실행하지 않습니다."
+    case .driveUnavailable:
+        return "외장 드라이브를 다시 연결한 뒤 동기화해 주세요. 연결되지 않은 상태를 삭제로 처리하지 않습니다."
+    case .connectionCheckRequired:
+        return "Google Drive 연결 또는 대상 폴더를 확인한 뒤 다시 시도해 주세요."
+    case .livePhotoBlocked:
+        return "Live Photo 여부나 구성요소 관계를 안전하게 확인할 수 없는 항목을 찾았습니다. 파일을 임의로 변경하지 않고 확인을 기다립니다."
+    case .safetyUnavailable:
+        return "파일을 안전하게 반영하는 기능을 준비하고 있습니다. 현재는 동기화를 실행할 수 없습니다."
+    case .cancelled:
+        return "취소 전 일부 변경이 반영되었을 수 있습니다. 성공으로 기록하지 않았으며 현재 상태를 다시 확인해야 합니다."
+    case .failed:
+        return "동기화를 완료하지 못했습니다. 실패 전에 일부 변경이 반영되었을 수 있으며 자동으로 초기화하거나 재실행하지 않습니다."
+    }
+}
+
+struct FolderSyncUIFixtureView: View {
+    private let rows: [(FolderSyncStatus, String?)] = [
+        (.initialConflict, nil),
+        (.incomplete, nil),
+        (.confirmationRequired, nil),
+        (.conflict, nil),
+        (.livePhotoBlocked, nil),
+        (.driveUnavailable, nil),
+        (.cancelled, nil),
+        (.recoveryRequired, nil),
+        (.safetyUnavailable, nil),
+        (.success, "2026. 9. 12. 오후 8:00")
+    ]
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 18) {
+                Text("동기화 상태 격리 미리보기")
+                    .font(.title2.weight(.semibold))
+                Text("개인 catalog나 Google Drive 계정을 읽지 않는 synthetic UI fixture입니다.")
+                    .foregroundStyle(.secondary)
+
+                ForEach(Array(rows.enumerated()), id: \.offset) { _, row in
+                    GroupBox {
+                        VStack(alignment: .leading, spacing: 6) {
+                            Label(
+                                folderSyncStatusText(row.0),
+                                systemImage: folderSyncStatusIcon(row.0)
+                            )
+                            .font(.headline)
+                            Text(folderSyncStatusDetail(row.0))
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            if let lastSuccess = row.1 {
+                                Text("마지막 동기화 완료 · \(lastSuccess)")
+                                    .font(.caption)
+                            }
+                        }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+            }
+            .padding(24)
+        }
+        .frame(minWidth: 680, minHeight: 640)
+        .onAppear {
+            let arguments = CommandLine.arguments
+            let shouldValidate = ProcessInfo.processInfo.environment["PHOTOARCHIVE_SYNC_UI_FIXTURE_VALIDATE"] == "1"
+                || arguments.contains("--sync-ui-fixture-validate")
+            guard shouldValidate
+            else { return }
+            let statuses = Set(rows.map(\.0))
+            let required: Set<FolderSyncStatus> = [
+                .initialConflict,
+                .incomplete,
+                .confirmationRequired,
+                .conflict,
+                .livePhotoBlocked,
+                .driveUnavailable,
+                .cancelled,
+                .recoveryRequired,
+                .safetyUnavailable,
+                .success
+            ]
+            guard required.isSubset(of: statuses), rows.contains(where: { $0.1 != nil }) else {
+                FileHandle.standardError.write(Data("sync UI fixture is incomplete\n".utf8))
+                exit(1)
+            }
+            let consumerText = rows.flatMap { row in
+                [folderSyncStatusText(row.0), folderSyncStatusDetail(row.0)]
+            }.joined(separator: "\n")
+            let forbiddenTerms = [
+                "production", "preflight", "TOCTOU", "journal", "atomicity",
+                "bisync", "rclone", "transaction", "backend", "remote"
+            ]
+            guard !forbiddenTerms.contains(where: { consumerText.localizedCaseInsensitiveContains($0) }) else {
+                FileHandle.standardError.write(Data("sync UI exposes internal terminology\n".utf8))
+                exit(1)
+            }
+            guard folderSyncStatusText(.safetyUnavailable) == "동기화 준비 중",
+                  folderSyncStatusDetail(.safetyUnavailable)
+                    == "파일을 안전하게 반영하는 기능을 준비하고 있습니다. 현재는 동기화를 실행할 수 없습니다."
+            else {
+                FileHandle.standardError.write(Data("sync unavailable copy does not describe its state clearly\n".utf8))
+                exit(1)
+            }
+            guard !RcloneBisyncService.productionApplyAvailable else {
+                FileHandle.standardError.write(Data("sync production gate must remain disabled\n".utf8))
+                exit(1)
+            }
+            let conflictChoiceText = [
+                FolderSyncConflictChoice.keepBoth,
+                .useExternalDrive,
+                .useGoogleDrive,
+                .keepModified,
+                .deleteBoth
+            ].flatMap { choice in
+                [folderSyncConflictChoiceTitle(choice), folderSyncConflictChoiceHelp(choice)]
+            }.joined(separator: "\n")
+            guard [
+                "둘 다 보관",
+                "외장 드라이브 버전 사용",
+                "Google Drive 버전 사용",
+                "수정본 보관",
+                "양쪽에서 삭제"
+            ].allSatisfy({ conflictChoiceText.contains($0) }),
+            !forbiddenTerms.contains(where: {
+                conflictChoiceText.localizedCaseInsensitiveContains($0)
+            }) else {
+                FileHandle.standardError.write(Data("sync conflict choices are not consumer-safe\n".utf8))
+                exit(1)
+            }
+            let unavailableError = FolderSyncConnectionError.concurrentMutationSafetyUnavailable.localizedDescription
+            guard unavailableError.contains("파일을 안전하게 반영하는 기능을 준비하고 있습니다"),
+                  !forbiddenTerms.contains(where: { unavailableError.localizedCaseInsensitiveContains($0) })
+            else {
+                FileHandle.standardError.write(Data("sync unavailable error copy is not consumer-safe\n".utf8))
+                exit(1)
+            }
+            let implementationErrorText = [
+                FolderSyncConnectionError.unsupportedRclone("synthetic").localizedDescription,
+                FolderSyncConnectionError.rcloneNotInstalled.localizedDescription,
+                FolderSyncConnectionError.unsupportedBisyncLog.localizedDescription
+            ].joined(separator: "\n")
+            guard !forbiddenTerms.contains(where: {
+                implementationErrorText.localizedCaseInsensitiveContains($0)
+            }) else {
+                FileHandle.standardError.write(Data("sync error copy exposes implementation terminology\n".utf8))
+                exit(1)
+            }
+            let deletionItems = (0..<10).map { index in
+                FolderSyncDeletionItem(
+                    location: .googleDrive,
+                    relativePaths: ["fixture/item-\(index).jpg"],
+                    isLivePhoto: false
+                )
+            }
+            var deletionJournal = FolderSyncJournal(
+                connectionID: "fixture",
+                operationID: "fixture-operation",
+                currentAttemptID: "fixture-attempt",
+                startedAt: Date(),
+                phase: .confirmationRequired,
+                items: []
+            )
+            deletionJournal.pendingDeletionPlan = FolderSyncDeletionPlan(
+                items: deletionItems,
+                previousCompletedLogicalItemCountLowerBound: 50,
+                emptiedNonEmptyDirectories: []
+            )
+            guard folderSyncConfirmationItemCount(deletionJournal) == 10 else {
+                FileHandle.standardError.write(Data("sync deletion confirmation count is not consumer-correct\n".utf8))
+                exit(1)
+            }
+            if let index = arguments.firstIndex(of: "--sync-ui-fixture-result"),
+               arguments.indices.contains(index + 1) {
+                let resultURL = URL(fileURLWithPath: arguments[index + 1])
+                try? "passed\n".write(to: resultURL, atomically: true, encoding: .utf8)
+            }
+            print("PhotoArchiveKit isolated sync UI fixture rendered required states.")
+            DispatchQueue.main.async {
+                NSApp.terminate(nil)
+            }
+        }
     }
 }
 
@@ -850,8 +2140,9 @@ private struct AddComparisonRootSheet: View {
         VStack(alignment: .leading, spacing: 20) {
             VStack(alignment: .leading, spacing: 6) {
                 Text("비교 폴더 추가")
-                    .font(.title2.weight(.semibold))
+                    .font(.title3.weight(.semibold))
                 Text("이 폴더를 비교에 추가합니다.")
+                    .font(.callout)
                     .foregroundStyle(.secondary)
             }
 
@@ -899,15 +2190,24 @@ private struct AddComparisonRootSheet: View {
 
             HStack {
                 Spacer()
-                Button("취소", action: onCancel)
-                    .keyboardShortcut(.cancelAction)
+                ReviewEqualWidthActionLayout {
+                    Button(action: onCancel) {
+                        Text("취소")
+                            .frame(maxWidth: .infinity)
+                    }
+                        .modifier(ReviewActionButtonStyle())
+                        .keyboardShortcut(.cancelAction)
+                        .disabled(isWorking)
+                    Button {
+                        onRegisterAndScan(purpose)
+                    } label: {
+                        Text("추가하고 비교")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .modifier(ReviewPrimaryActionButtonStyle())
+                    .keyboardShortcut(.defaultAction)
                     .disabled(isWorking)
-                Button("추가하고 비교") {
-                    onRegisterAndScan(purpose)
                 }
-                .buttonStyle(.borderedProminent)
-                .keyboardShortcut(.defaultAction)
-                .disabled(isWorking)
             }
         }
         .padding(22)
@@ -922,20 +2222,98 @@ private struct ReviewSummaryHeader: View {
     var body: some View {
         HStack(alignment: .firstTextBaseline) {
             VStack(alignment: .leading, spacing: 2) {
-                Text("중복 사진 검토")
-                    .font(.headline)
+                Text("PhotoArchiveKit")
+                    .font(.title2.weight(.semibold))
+                    .padding(.bottom, 8)
+
                 Text("중복 항목 \(itemCount)개")
-                    .font(.caption)
+                    .font(.callout.weight(.semibold))
                     .foregroundStyle(.secondary)
                 if !selectedRootLabels.isEmpty {
                     Text(selectedRootLabels.joined(separator: " + "))
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
+                        .font(.callout.weight(.semibold))
+                        .foregroundStyle(.secondary)
                         .lineLimit(1)
                         .help("현재 비교에 포함된 폴더")
                 }
             }
         }
+    }
+}
+
+private struct ReviewSidebarItem: View {
+    let item: DuplicateReviewPresentationItem
+    let selectedCleanupCount: Int
+    let isSelected: Bool
+    let isKeyboardFocused: Bool
+    let onSelect: () -> Void
+    @State private var isHovering = false
+
+    var body: some View {
+        Button(action: onSelect) {
+            ReviewSidebarRow(
+                item: item,
+                selectedCleanupCount: selectedCleanupCount
+            )
+            .padding(.horizontal, 10)
+            .frame(
+                maxWidth: .infinity,
+                minHeight: ReviewSidebarLayoutMetrics.rowMinimumHeight,
+                alignment: .leading
+            )
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(
+            ReviewSidebarItemButtonStyle(
+                isSelected: isSelected,
+                isHovering: isHovering,
+                isKeyboardFocused: isKeyboardFocused
+            )
+        )
+        .padding(.leading, ReviewSidebarLayoutMetrics.rowHorizontalInset)
+        .padding(.trailing, ReviewSidebarLayoutMetrics.rowTrailingInset)
+        .onHover { isHovering = $0 }
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+}
+
+private struct ReviewSidebarItemButtonStyle: ButtonStyle {
+    let isSelected: Bool
+    let isHovering: Bool
+    let isKeyboardFocused: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .foregroundStyle(Color.primary)
+            .background(backgroundColor(isPressed: configuration.isPressed))
+            .clipShape(
+                RoundedRectangle(
+                    cornerRadius: ReviewSidebarLayoutMetrics.rowCornerRadius,
+                    style: .continuous
+                )
+            )
+            .overlay {
+                if isSelected && isKeyboardFocused {
+                    RoundedRectangle(
+                        cornerRadius: ReviewSidebarLayoutMetrics.rowCornerRadius,
+                        style: .continuous
+                    )
+                    .strokeBorder(ReviewVisualStyle.sidebarKeyboardFocus, lineWidth: 1)
+                }
+            }
+    }
+
+    private func backgroundColor(isPressed: Bool) -> Color {
+        if isPressed {
+            return ReviewVisualStyle.sidebarPressed
+        }
+        if isSelected {
+            return ReviewVisualStyle.sidebarSelection
+        }
+        if isHovering {
+            return ReviewVisualStyle.sidebarHover
+        }
+        return .clear
     }
 }
 
@@ -945,48 +2323,42 @@ private struct ReviewSidebarRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            Image(systemName: item.kind == .livePhotoAsset ? "livephoto" : "photo.stack")
-                .font(.system(size: 16, weight: .medium))
+            Image(systemName: hasCompleteLivePhoto ? "livephoto" : "photo.stack")
+                .font(
+                    hasCompleteLivePhoto
+                        ? .system(size: ReviewThumbnailBadgeMetrics.livePhotoSymbolSize, weight: .semibold)
+                        : .body
+                )
                 .frame(width: 24)
-                .foregroundStyle(item.kind == .livePhotoAsset ? .blue : .secondary)
-                .help(item.kind == .livePhotoAsset ? "Live Photo" : "완전히 같은 파일")
+                .foregroundStyle(hasCompleteLivePhoto ? Color.accentColor : Color.secondary)
+                .help(hasCompleteLivePhoto ? "완전한 Live Photo" : "동일한 파일")
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(primaryName)
                     .font(.body)
                     .lineLimit(1)
                 HStack(spacing: 5) {
-                    Text(item.kind == .livePhotoAsset ? "사진 파일이 완전히 같음" : "파일 내용이 완전히 같음")
+                    Text(identicalFilePhrase(for: item.allResources))
                         .font(.caption)
                         .foregroundStyle(.secondary)
-                        .help(
-                            item.kind == .livePhotoAsset
-                                ? "사진 파일 내용이 완전히 같습니다. Live Photo 비디오 포함 여부는 오른쪽에서 따로 확인할 수 있습니다."
-                                : "파일 내용이 완전히 같은 사본들입니다."
-                        )
+                        .help(duplicateSummaryHelp)
                 }
             }
 
             Spacer(minLength: 8)
-            if selectedCleanupCount > 0 {
-                HStack(spacing: 4) {
-                    Image(systemName: "trash")
-                        .foregroundStyle(.red)
-                    Text("\(selectedCleanupCount)")
-                        .foregroundStyle(.secondary)
+            HStack(spacing: 8) {
+                if selectedCleanupCount > 0 {
+                    Label("\(selectedCleanupCount)", systemImage: "trash")
+                        .labelStyle(.titleAndIcon)
+                        .help("삭제 대상으로 선택한 사본 \(selectedCleanupCount)개")
                 }
-                    .font(.caption.monospacedDigit())
-                    .help("삭제 대상으로 선택한 사본 \(selectedCleanupCount)개")
-            }
 
-            Label("\(copyCount)", systemImage: "doc.on.doc")
-                .labelStyle(.titleAndIcon)
-                .font(.caption.monospacedDigit())
-                .foregroundStyle(.secondary)
-                .padding(.horizontal, 6)
-                .padding(.vertical, 2)
-                .background(.quaternary, in: Capsule())
-                .help("이 중복 그룹에 존재하는 사본 \(copyCount)개")
+                Label("\(copyCount)", systemImage: "doc.on.doc")
+                    .labelStyle(.titleAndIcon)
+                    .help("이 중복 그룹에 존재하는 사본 \(copyCount)개")
+            }
+            .font(.caption.monospacedDigit())
+            .foregroundStyle(.secondary)
         }
         .padding(.vertical, 3)
     }
@@ -1001,18 +2373,30 @@ private struct ReviewSidebarRow: View {
         if !item.copies.isEmpty { return item.copies.count }
         return item.preferredResources.count + item.candidateResources.count
     }
+
+    private var hasCompleteLivePhoto: Bool {
+        item.copies.contains { $0.isCompleteLivePhotoOccurrence }
+    }
+
+    private var duplicateSummaryHelp: String {
+        let summary = identicalFilePhrase(for: item.allResources)
+        if item.kind == .livePhotoAsset {
+            return "\(summary)입니다. Live Photo의 사진·동영상 구성은 오른쪽에서 따로 확인할 수 있습니다."
+        }
+        return "\(summary)입니다."
+    }
 }
 
 private struct ReviewDetailView: View {
     let item: DuplicateReviewPresentationItem
-    let index: Int
-    let total: Int
     let cleanupCopyIDs: Set<String>
     let onToggleCleanupFromColumn: (DuplicateReviewPresentationCopy) -> Void
     let onToggleCleanupFromButton: (DuplicateReviewPresentationCopy) -> Void
     let canToggleCleanup: (DuplicateReviewPresentationCopy) -> Bool
     let columnToggleHelp: (DuplicateReviewPresentationCopy) -> String
     let cleanupToggleHelp: (DuplicateReviewPresentationCopy) -> String
+    let focusedCopyID: String?
+    let onFocusCopy: (String) -> Void
 
     var body: some View {
         GeometryReader { proxy in
@@ -1043,10 +2427,7 @@ private struct ReviewDetailView: View {
             let documentWidth = max(viewportWidth, gridWidth + horizontalPadding * 2)
 
             ReviewComparisonScrollView(documentID: item.id) {
-                VStack(alignment: .leading, spacing: 18) {
-                    header
-                        .frame(width: gridWidth, alignment: .leading)
-
+                VStack(alignment: .leading, spacing: 0) {
                     ReviewComparisonTable(
                         item: item,
                         copies: copies,
@@ -1058,7 +2439,9 @@ private struct ReviewDetailView: View {
                         onToggleCleanupFromButton: onToggleCleanupFromButton,
                         canToggleCleanup: canToggleCleanup,
                         columnToggleHelp: columnToggleHelp,
-                        cleanupToggleHelp: cleanupToggleHelp
+                        cleanupToggleHelp: cleanupToggleHelp,
+                        focusedCopyID: focusedCopyID,
+                        onFocusCopy: onFocusCopy
                     )
                     .frame(width: gridWidth, alignment: .topLeading)
                 }
@@ -1071,7 +2454,7 @@ private struct ReviewDetailView: View {
                 .frame(width: documentWidth, alignment: .top)
             }
         }
-        .background(Color(nsColor: .windowBackgroundColor))
+        .background(ReviewVisualStyle.detailSurface)
     }
 
     private var fallbackCopies: [DuplicateReviewPresentationCopy] {
@@ -1080,16 +2463,6 @@ private struct ReviewDetailView: View {
         } + item.candidateResources.map {
             DuplicateReviewPresentationCopy(id: "fallback-candidate:\($0.id)", isKeeper: false, resources: [$0])
         }
-    }
-
-    private var header: some View {
-        HStack(spacing: 8) {
-            Text("\(index) / \(total)")
-                .font(.callout.monospacedDigit())
-                .foregroundStyle(.secondary)
-            Spacer()
-        }
-        .frame(maxWidth: .infinity, alignment: .leading)
     }
 }
 
@@ -1105,6 +2478,8 @@ private struct ReviewComparisonTable: View {
     let canToggleCleanup: (DuplicateReviewPresentationCopy) -> Bool
     let columnToggleHelp: (DuplicateReviewPresentationCopy) -> String
     let cleanupToggleHelp: (DuplicateReviewPresentationCopy) -> String
+    let focusedCopyID: String?
+    let onFocusCopy: (String) -> Void
 
     @State private var hoveredCopyID: String?
     @State private var showsAdvancedInformation = false
@@ -1125,7 +2500,9 @@ private struct ReviewComparisonTable: View {
                     CopyHeaderCell(
                         copy: copy,
                         itemKind: item.kind,
-                        recommendationText: copy.isKeeper ? keeperRecommendationText(item.rationale) : nil,
+                        recommendationText: copy.isKeeper
+                            ? keeperRecommendationText(item.rationale, copy: copy)
+                            : nil,
                         columnWidth: columnWidth,
                         isMarkedForCleanup: cleanupCopyIDs.contains(copy.id),
                         onToggleCleanupFromColumn: { onToggleCleanupFromColumn(copy) },
@@ -1133,6 +2510,13 @@ private struct ReviewComparisonTable: View {
                         canToggleCleanup: canToggleCleanup(copy),
                         columnToggleHelp: columnToggleHelp(copy),
                         cleanupToggleHelp: cleanupToggleHelp(copy)
+                    )
+                    .background(
+                        ReviewCopyFocusRevealer(isFocused: focusedCopyID == copy.id)
+                            .allowsHitTesting(false)
+                    )
+                    .simultaneousGesture(
+                        TapGesture().onEnded { onFocusCopy(copy.id) }
                     )
                     .onHover { hovering in
                         if hovering {
@@ -1156,8 +2540,10 @@ private struct ReviewComparisonTable: View {
 
             metadataRows(rows, lastRowID: baseLastRowID, tracksColumnBottom: true)
 
-            advancedDisclosureButton
-                .gridCellColumns(copies.count + 1)
+            if !showsAdvancedInformation {
+                advancedDisclosureButton
+                    .gridCellColumns(copies.count + 1)
+            }
 
             if showsAdvancedInformation {
                 metadataRows(advancedRows, lastRowID: nil, tracksColumnBottom: false)
@@ -1182,7 +2568,7 @@ private struct ReviewComparisonTable: View {
             transaction.disablesAnimations = true
         }
         .padding(16)
-        .background(.background.secondary, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
+        .background(ReviewVisualStyle.comparisonSurface, in: RoundedRectangle(cornerRadius: 16, style: .continuous))
         .overlayPreferenceValue(ReviewColumnBoundsPreferenceKey.self) { bounds in
             GeometryReader { proxy in
                 ForEach(copies) { copy in
@@ -1194,6 +2580,7 @@ private struct ReviewComparisonTable: View {
                         let height = max(0, bottom.maxY - top.minY)
                         let isCleanup = cleanupCopyIDs.contains(copy.id)
                         let isHovered = hoveredCopyID == copy.id
+                        let isKeyboardFocused = focusedCopyID == copy.id
 
                         RoundedRectangle(cornerRadius: 14, style: .continuous)
                             .fill(isCleanup ? Color.red.opacity(0.018) : Color.clear)
@@ -1206,6 +2593,12 @@ private struct ReviewComparisonTable: View {
                                         ),
                                         lineWidth: isCleanup ? 1.5 : 1
                                     )
+                            }
+                            .overlay {
+                                if isKeyboardFocused {
+                                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                                        .strokeBorder(Color.accentColor.opacity(0.72), lineWidth: 2)
+                                }
                             }
                             .frame(width: top.width, height: height)
                             .position(x: top.midX, y: top.minY + height / 2)
@@ -1224,12 +2617,9 @@ private struct ReviewComparisonTable: View {
 
     private var advancedDisclosureButton: some View {
         Button {
-            setAdvancedInformationVisible(!showsAdvancedInformation)
+            setAdvancedInformationVisible(true)
         } label: {
-            Label(
-                showsAdvancedInformation ? "고급 정보 숨기기" : "고급 정보 보기",
-                systemImage: showsAdvancedInformation ? "chevron.up" : "chevron.down"
-            )
+            Label("고급 정보 보기", systemImage: "chevron.down")
             .font(.caption.weight(.medium))
             .foregroundStyle(.secondary)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -1277,6 +2667,9 @@ private struct ReviewComparisonTable: View {
                         canToggleCleanup: canToggleCleanup(copy),
                         cleanupToggleHelp: columnToggleHelp(copy)
                     )
+                    .simultaneousGesture(
+                        TapGesture().onEnded { onFocusCopy(copy.id) }
+                    )
                     .onHover { hovering in
                         if hovering {
                             hoveredCopyID = copy.id
@@ -1301,6 +2694,74 @@ private struct ReviewComparisonTable: View {
                     .allowsHitTesting(false)
             }
         }
+    }
+}
+
+private struct ReviewCopyFocusRevealer: NSViewRepresentable {
+    let isFocused: Bool
+
+    func makeNSView(context: Context) -> ReviewCopyFocusRevealView {
+        let view = ReviewCopyFocusRevealView()
+        view.isFocused = isFocused
+        return view
+    }
+
+    func updateNSView(_ nsView: ReviewCopyFocusRevealView, context: Context) {
+        nsView.isFocused = isFocused
+    }
+}
+
+private final class ReviewCopyFocusRevealView: NSView {
+    var isFocused = false {
+        didSet {
+            guard isFocused, !oldValue else { return }
+            scheduleReveal()
+        }
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        if isFocused { scheduleReveal() }
+    }
+
+    private func scheduleReveal() {
+        DispatchQueue.main.async { [weak self] in
+            self?.revealHorizontally()
+        }
+    }
+
+    private func revealHorizontally() {
+        guard isFocused else { return }
+        var ancestor = superview
+        var scrollView: NSScrollView?
+        while let current = ancestor {
+            if let match = current as? NSScrollView {
+                scrollView = match
+                break
+            }
+            ancestor = current.superview
+        }
+        guard let scrollView,
+              let documentView = scrollView.documentView else { return }
+
+        let target = convert(bounds, to: documentView)
+        let visible = scrollView.contentView.documentVisibleRect
+        let margin: CGFloat = 12
+        var targetX = visible.minX
+        if target.minX < visible.minX + margin {
+            targetX = target.minX - margin
+        } else if target.maxX > visible.maxX - margin {
+            targetX = target.maxX - visible.width + margin
+        } else {
+            return
+        }
+
+        let maximumX = max(0, documentView.frame.width - visible.width)
+        targetX = min(max(0, targetX), maximumX)
+        scrollView.contentView.scroll(
+            to: NSPoint(x: targetX, y: scrollView.contentView.bounds.origin.y)
+        )
+        scrollView.reflectScrolledClipView(scrollView.contentView)
     }
 }
 
@@ -1398,7 +2859,7 @@ private struct CopyHeaderCell: View {
                     .help("이 사본을 남기는 것을 추천합니다")
 
                 Text(recommendationText)
-                    .font(.caption2)
+                    .font(.caption)
                     .foregroundStyle(.secondary)
                     .lineLimit(2)
                     .fixedSize(horizontal: false, vertical: true)
@@ -1411,20 +2872,26 @@ private struct CopyHeaderCell: View {
 
     private var livePhotoThumbnailBadge: some View {
         Image(systemName: "livephoto")
-            .font(.system(size: 12, weight: .semibold))
+            .font(.system(size: ReviewThumbnailBadgeMetrics.livePhotoSymbolSize, weight: .semibold))
             .symbolRenderingMode(.monochrome)
             .foregroundStyle(.white)
-            .frame(width: 24, height: 24)
-            .background(Color.black.opacity(0.42), in: RoundedRectangle(cornerRadius: 7, style: .continuous))
-            .shadow(radius: 1, y: 0.5)
+            .frame(
+                width: ReviewThumbnailBadgeMetrics.overlayFrame,
+                height: ReviewThumbnailBadgeMetrics.overlayFrame
+            )
+            .shadow(color: .black.opacity(0.65), radius: 1.2, y: 0.5)
+            .shadow(color: .black.opacity(0.28), radius: 3, y: 1)
             .help("Live Photo")
     }
 
     private var cleanupThumbnailBadge: some View {
         Image(systemName: "trash.fill")
-            .font(.system(size: 13, weight: .bold))
+            .font(.system(size: ReviewThumbnailBadgeMetrics.cleanupSymbolSize, weight: .bold))
             .foregroundStyle(.white)
-            .frame(width: 30, height: 30)
+            .frame(
+                width: ReviewThumbnailBadgeMetrics.overlayFrame,
+                height: ReviewThumbnailBadgeMetrics.overlayFrame
+            )
             .background(.red, in: Circle())
             .shadow(radius: 1.5, y: 0.5)
             .help("삭제 대상으로 선택됨")
@@ -1464,8 +2931,13 @@ private struct CopyHeaderCell: View {
     }
 
     private var cleanupButton: some View {
-        Button(isMarkedForCleanup ? "선택 취소" : "삭제 대상으로 선택", action: onToggleCleanupFromButton)
-            .buttonStyle(.bordered)
+        Button(action: onToggleCleanupFromButton) {
+            Label(
+                isMarkedForCleanup ? "해제" : "선택",
+                systemImage: isMarkedForCleanup ? "xmark.circle.fill" : "trash"
+            )
+        }
+            .modifier(ReviewDestructiveActionButtonStyle(isActive: isMarkedForCleanup))
             .disabled(!canToggleCleanup)
             .help(cleanupToggleHelp)
     }
@@ -1534,7 +3006,7 @@ private struct ComparisonMetadataLabel: View {
             if let differenceLabel = row.differenceLabel {
                 Label(differenceLabel, systemImage: "arrow.left.arrow.right")
                     .font(.caption2.weight(.semibold))
-                    .foregroundStyle(.orange)
+                    .foregroundStyle(.secondary)
             }
         }
         .frame(width: width, alignment: .topLeading)
@@ -1580,7 +3052,7 @@ private struct ComparisonMetadataCell: View {
         .frame(width: width, alignment: .topLeading)
         .frame(maxHeight: .infinity, alignment: .topLeading)
         .background(
-            row.isDifferent ? Color.orange.opacity(0.055) : Color.clear,
+            row.isDifferent ? Color.secondary.opacity(0.045) : Color.clear,
             in: RoundedRectangle(cornerRadius: 8, style: .continuous)
         )
         .contentShape(Rectangle())
@@ -1601,10 +3073,10 @@ private extension View {
     func comparisonBadge() -> some View {
         self
             .font(.caption2.weight(.semibold))
-            .foregroundStyle(.orange)
+            .foregroundStyle(.secondary)
             .padding(.horizontal, 6)
             .padding(.vertical, 2)
-            .background(Color.orange.opacity(0.11), in: Capsule())
+            .background(Color.secondary.opacity(0.10), in: Capsule())
     }
 }
 
@@ -2038,9 +3510,9 @@ private func rootUserPurposeLabel(_ purpose: RootUserPurpose) -> String {
 private func rootUserPurposeDescription(_ purpose: RootUserPurpose) -> String {
     switch purpose {
     case .standard:
-        return "일반적인 사진 폴더입니다. 중복을 비교하고 정리할 수 있습니다."
+        return "일반적인 사진 폴더입니다. 중복 사진을 비교하고 정리할 수 있습니다."
     case .archive:
-        return "오래 보관할 사진을 둡니다. 중복을 정리할 때 이 폴더의 사본을 우선 남깁니다."
+        return "오래 보관할 사진을 둡니다. 중복 사진을 정리할 때 이 폴더의 사본을 우선 남깁니다."
     case .readOnly:
         return "비교에는 사용하지만 이 폴더의 파일은 이동하거나 삭제하지 않습니다."
     }
@@ -2199,7 +3671,7 @@ private struct ReviewThumbnail: View {
                 Image(nsImage: image)
                     .resizable()
                     .scaledToFit()
-                    .padding(6)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else if failed {
                 VStack(spacing: 8) {
                     Image(systemName: "doc")
@@ -2222,6 +3694,14 @@ private struct ReviewThumbnail: View {
     }
 }
 
+private enum ReviewThumbnailBadgeMetrics {
+    // These SF Symbols have different optical footprints. A slightly larger
+    // Live Photo symbol reads as the same visual weight as the filled trash.
+    static let livePhotoSymbolSize: CGFloat = 16
+    static let cleanupSymbolSize: CGFloat = 13
+    static let overlayFrame: CGFloat = 30
+}
+
 private enum ThumbnailProvider {
     static func thumbnail(for url: URL, size: CGSize) async -> NSImage? {
         let scale = await MainActor.run { NSScreen.main?.backingScaleFactor ?? 2 }
@@ -2242,7 +3722,7 @@ private enum ThumbnailProvider {
 private func mediaKindLabel(_ kind: MediaKind) -> String {
     switch kind {
     case .image: return "사진"
-    case .video: return "비디오"
+    case .video: return "동영상"
     case .sidecar: return "보조 파일"
     }
 }
@@ -2250,9 +3730,9 @@ private func mediaKindLabel(_ kind: MediaKind) -> String {
 private func resourceRoleLabel(_ role: ResourceRole) -> String {
     switch role {
     case .photo: return "Live Photo 사진"
-    case .pairedVideo: return "Live Photo 비디오"
+    case .pairedVideo: return "Live Photo 동영상"
     case .standaloneImage: return "일반 사진"
-    case .standaloneVideo: return "일반 비디오"
+    case .standaloneVideo: return "일반 동영상"
     case .sidecar: return "보조 파일"
     }
 }
@@ -2286,7 +3766,10 @@ private func captureConfidenceLabel(_ confidence: CaptureTimeConfidence) -> Stri
     }
 }
 
-private func keeperRecommendationText(_ rationale: DuplicateReviewPresentationRationale) -> String {
+private func keeperRecommendationText(
+    _ rationale: DuplicateReviewPresentationRationale,
+    copy: DuplicateReviewPresentationCopy
+) -> String {
     switch rationale {
     case .protectedOrPreferredRoot: return "더 안전하게 보관되는 위치에 있습니다"
     case .cleanerFilename: return "복사본 표시가 없는 파일명입니다"
@@ -2295,8 +3778,25 @@ private func keeperRecommendationText(_ rationale: DuplicateReviewPresentationRa
     case .matchingParentFolder: return "폴더 구성이 더 자연스럽습니다"
     case .strongerCaptureEvidence: return "촬영 시각 정보가 더 확실합니다"
     case .shallowerPath: return "더 찾기 쉬운 위치에 있습니다"
-    case .deterministicTieBreak: return "뚜렷한 차이가 없어 이 사본을 기본으로 추천합니다"
-    case .completeLivePhotoOccurrence: return "사진과 비디오가 함께 있는 Live Photo입니다"
+    case .deterministicTieBreak:
+        return "\(identicalFilePhrase(for: copy.resources))입니다."
+    case .completeLivePhotoOccurrence: return "완전한 Live Photo 조합을 보존할 수 있습니다"
+    case .clearerLivePhotoStructure: return "Live Photo 구성 관계가 더 명확한 사본입니다"
     case .sourceSemantics: return "출처 정보가 더 잘 보존되어 있습니다"
+    }
+}
+
+private func identicalFilePhrase(
+    for resources: [DuplicateReviewPresentationResource]
+) -> String {
+    let hasImage = resources.contains { $0.mediaKind == .image }
+    let hasVideo = resources.contains { $0.mediaKind == .video }
+    let hasSidecar = resources.contains { $0.mediaKind == .sidecar }
+
+    switch (hasImage, hasVideo, hasSidecar) {
+    case (true, false, false): return "동일한 사진 파일"
+    case (false, true, false): return "동일한 동영상 파일"
+    case (true, true, false): return "동일한 사진·동영상 파일 조합"
+    default: return "동일한 파일"
     }
 }

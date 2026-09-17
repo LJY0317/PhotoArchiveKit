@@ -121,6 +121,7 @@ struct MetadataProbe {
             addedAt: pending.addedAt,
             fileSystemIdentifier: pending.fileSystemIdentifier,
             captureTime: captureTime,
+            probeCaptureTime: captureTime,
             rawLivePhotoIdentifier: normalizedIdentifier(rawIdentifier),
             livePhotoTimedMetadataStatus: timedMetadataStatus,
             metadataProbeFailed: metadataProbeFailed,

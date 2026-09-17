@@ -207,6 +207,14 @@ public enum ArchiveCopyExecutor {
             destinationURL: destinationURL,
             catalogURL: catalogURL
         )
+        let operationLock = try PhotoArchiveOperationLock.acquire(catalogURL: prepared.catalogURL)
+        defer { operationLock.release() }
+        prepared = try prepare(
+            planURL: planURL,
+            rootBindings: rootBindings,
+            destinationURL: destinationURL,
+            catalogURL: catalogURL
+        )
         let fileManager = FileManager.default
 
         if prepared.existingManifest?.state == "complete" {
@@ -299,7 +307,7 @@ public enum ArchiveCopyExecutor {
         try? fileManager.removeItem(at: prepared.stagingRootURL)
 
         let scanner = try ArchiveScanner(catalogURL: prepared.catalogURL)
-        let archiveReport = try await scanner.scan(
+        let archiveReport = try await scanner.scanAssumingOperationLock(
             roots: [ScanRoot(
                 url: prepared.destinationURL,
                 label: prepared.destinationURL.lastPathComponent,

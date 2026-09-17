@@ -119,6 +119,8 @@ public enum QuarantineRestoreExecutor {
         manifestURL: URL,
         catalogURL: URL = PhotoArchivePaths.defaultCatalogURL
     ) throws -> QuarantineRestoreReport {
+        let operationLock = try PhotoArchiveOperationLock.acquire(catalogURL: catalogURL)
+        defer { operationLock.release() }
         let verified = try verify(manifestURL: manifestURL, catalogURL: catalogURL)
         let fileManager = FileManager.default
         let restoreStateURL = verified.manifestURL

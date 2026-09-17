@@ -88,6 +88,7 @@ struct ProbedResource: Sendable {
     let addedAt: Date?
     let fileSystemIdentifier: String?
     var captureTime: CaptureTime?
+    let probeCaptureTime: CaptureTime?
     var rawLivePhotoIdentifier: String?
     let livePhotoTimedMetadataStatus: LivePhotoTimedMetadataStatus
     let metadataProbeFailed: Bool

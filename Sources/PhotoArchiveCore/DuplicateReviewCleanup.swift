@@ -180,6 +180,8 @@ public enum DuplicateReviewCleanupExecutor {
         destination: DuplicateCleanupDestination,
         catalogURL: URL = PhotoArchivePaths.defaultCatalogURL
     ) throws -> DuplicateReviewCleanupReport {
+        let operationLock = try PhotoArchiveOperationLock.acquire(catalogURL: catalogURL)
+        defer { operationLock.release() }
         try validateDestination(destination, report: report)
         let verification = try verify(
             report: report,

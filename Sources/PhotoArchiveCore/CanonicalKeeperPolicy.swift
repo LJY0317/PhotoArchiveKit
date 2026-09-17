@@ -22,6 +22,15 @@ enum CanonicalKeeperPolicy {
         case preference
     }
 
+    enum OccurrencePreferenceRationale: Sendable, Equatable {
+        case completeLivePhotoOccurrence
+        case clearerLivePhotoStructure
+        case protectedOrPreferredRoot
+        case strongerCaptureEvidence
+        case shallowerPath
+        case deterministicTieBreak
+    }
+
     static func key(_ resource: ResourceReference) -> CanonicalResourceKey {
         CanonicalResourceKey(rootID: resource.rootID, relativePath: resource.relativePath)
     }
@@ -164,6 +173,33 @@ enum CanonicalKeeperPolicy {
         if lhsScore.captureRank != rhsScore.captureRank { return lhsScore.captureRank < rhsScore.captureRank }
         if lhsScore.pathDepth != rhsScore.pathDepth { return lhsScore.pathDepth < rhsScore.pathDepth }
         return occurrenceStableKey(lhs) < occurrenceStableKey(rhs)
+    }
+
+    static func occurrencePreferenceRationale(
+        preferred: LivePhotoOccurrenceReport,
+        candidate: LivePhotoOccurrenceReport,
+        rootsByID: [String: RootScanReport],
+        resourcesByKey: [CanonicalResourceKey: ScannedResourceReport]
+    ) -> OccurrencePreferenceRationale {
+        let preferredScore = occurrenceScore(
+            preferred,
+            rootsByID: rootsByID,
+            resourcesByKey: resourcesByKey
+        )
+        let candidateScore = occurrenceScore(
+            candidate,
+            rootsByID: rootsByID,
+            resourcesByKey: resourcesByKey
+        )
+        if preferredScore.statusRank != candidateScore.statusRank {
+            return preferred.status == .complete
+                ? .completeLivePhotoOccurrence
+                : .clearerLivePhotoStructure
+        }
+        if preferredScore.rootRank != candidateScore.rootRank { return .protectedOrPreferredRoot }
+        if preferredScore.captureRank != candidateScore.captureRank { return .strongerCaptureEvidence }
+        if preferredScore.pathDepth != candidateScore.pathDepth { return .shallowerPath }
+        return .deterministicTieBreak
     }
 
     private struct ResourceScore {

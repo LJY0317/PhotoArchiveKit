@@ -1,5 +1,35 @@
-import Darwin
 import Foundation
+
+private final class ScanProgressEmitter: @unchecked Sendable {
+    private let handler: ScanProgressHandler?
+    private let minimumInterval: TimeInterval
+    private let lock = NSLock()
+    private var lastProgress: ScanProgress?
+    private var lastEmissionTime: TimeInterval = 0
+
+    init(handler: ScanProgressHandler?, minimumInterval: TimeInterval = 0.1) {
+        self.handler = handler
+        self.minimumInterval = minimumInterval
+    }
+
+    func emit(_ progress: ScanProgress) {
+        guard let handler else { return }
+        let now = ProcessInfo.processInfo.systemUptime
+        lock.lock()
+        let stageChanged = lastProgress?.stage != progress.stage
+        let completed = progress.totalUnitCount.map { progress.completedUnitCount >= $0 } ?? false
+        let shouldEmit = lastProgress == nil
+            || stageChanged
+            || completed
+            || now - lastEmissionTime >= minimumInterval
+        if shouldEmit {
+            lastProgress = progress
+            lastEmissionTime = now
+        }
+        lock.unlock()
+        if shouldEmit { handler(progress) }
+    }
+}
 
 public enum ArchiveScannerError: LocalizedError {
     case noRoots
@@ -27,35 +57,6 @@ public enum ArchiveScannerError: LocalizedError {
     }
 }
 
-private final class CatalogScanLock {
-    private let descriptor: Int32
-
-    private init(descriptor: Int32) {
-        self.descriptor = descriptor
-    }
-
-    static func acquire(catalogURL: URL) throws -> CatalogScanLock {
-        let lockURL = catalogURL.deletingLastPathComponent().appendingPathComponent(
-            ".\(catalogURL.lastPathComponent).scan.lock",
-            isDirectory: false
-        )
-        let descriptor = Darwin.open(lockURL.path, O_CREAT | O_RDWR, S_IRUSR | S_IWUSR)
-        guard descriptor >= 0 else {
-            throw ArchiveScannerError.scanAlreadyRunning
-        }
-        guard flock(descriptor, LOCK_EX | LOCK_NB) == 0 else {
-            Darwin.close(descriptor)
-            throw ArchiveScannerError.scanAlreadyRunning
-        }
-        return CatalogScanLock(descriptor: descriptor)
-    }
-
-    func release() {
-        _ = flock(descriptor, LOCK_UN)
-        Darwin.close(descriptor)
-    }
-}
-
 public final class ArchiveScanner {
     private let catalog: SQLiteCatalog
 
@@ -73,8 +74,16 @@ public final class ArchiveScanner {
         try catalog.latestReusableActiveRootsScanReport()
     }
 
+    public func latestReusableActiveRootsDuplicateReviewScanReport() throws -> ScanReport? {
+        try catalog.latestReusableActiveRootsDuplicateReviewScanReport()
+    }
+
     public func latestReusableDuplicateReviewScanReport() throws -> ScanReport? {
         try catalog.latestReusableDuplicateReviewScanReport()
+    }
+
+    public func completedScanRootIDs() throws -> Set<String> {
+        try catalog.completedScanRootIDs()
     }
 
     public func duplicateReviewResourceDetails(
@@ -109,12 +118,46 @@ public final class ArchiveScanner {
         roots inputs: [ScanRoot],
         options: ScanOptions = ScanOptions()
     ) async throws -> ScanReport {
+        try await scan(
+            roots: inputs,
+            options: options,
+            acquireOperationLock: true
+        )
+    }
+
+    func scanAssumingOperationLock(
+        roots inputs: [ScanRoot],
+        options: ScanOptions = ScanOptions()
+    ) async throws -> ScanReport {
+        try await scan(
+            roots: inputs,
+            options: options,
+            acquireOperationLock: false
+        )
+    }
+
+    private func scan(
+        roots inputs: [ScanRoot],
+        options: ScanOptions,
+        acquireOperationLock: Bool
+    ) async throws -> ScanReport {
         guard !inputs.isEmpty else { throw ArchiveScannerError.noRoots }
 
-        let scanLock = try CatalogScanLock.acquire(catalogURL: catalog.url)
-        defer { scanLock.release() }
+        var scanLock: PhotoArchiveOperationLock?
+        if acquireOperationLock {
+            do {
+                scanLock = try PhotoArchiveOperationLock.acquire(catalogURL: catalog.url)
+            } catch {
+                throw ArchiveScannerError.scanAlreadyRunning
+            }
+        }
+        defer { scanLock?.release() }
 
         let startedAt = Date()
+        let progressEmitter = ScanProgressEmitter(handler: options.progressHandler)
+        let progressHandler: ScanProgressHandler = { progress in
+            progressEmitter.emit(progress)
+        }
         let recoveredInterruptedScanCount = try catalog.recoverInterruptedScans(
             completedAt: startedAt
         )
@@ -129,21 +172,23 @@ public final class ArchiveScanner {
                 }
         )
         let sessionID = try catalog.beginScan(startedAt: startedAt, rootCount: roots.count)
+        try catalog.persistScanSessionRoots(sessionID: sessionID, roots: roots)
 
         do {
             var warnings: [ScanWarning] = []
-            options.progressHandler?(ScanProgress(
+            progressHandler(ScanProgress(
                 stage: .enumerating,
                 completedUnitCount: 0
             ))
             let enumeration = try enumerate(
                 roots: roots,
                 registeredOwnershipPaths: registeredOwnershipPaths,
-                progressHandler: options.progressHandler
+                progressHandler: progressHandler
             )
             warnings.append(contentsOf: enumeration.warnings)
             let pending = enumeration.files
-            options.progressHandler?(ScanProgress(
+            let takeoutSidecarIndex = TakeoutSidecarIndex.build(from: pending)
+            progressHandler(ScanProgress(
                 stage: .enumerating,
                 completedUnitCount: pending.count,
                 totalUnitCount: pending.count
@@ -152,7 +197,8 @@ public final class ArchiveScanner {
             if options.reuseMetadataCache {
                 metadataReuse = try catalog.reuseCachedMetadata(
                     pendingFiles: pending,
-                    probeVersion: MetadataProbe.cacheVersion
+                    probeVersion: MetadataProbe.cacheVersion,
+                    takeoutSidecarIndex: takeoutSidecarIndex
                 )
             } else {
                 metadataReuse = ([], pending)
@@ -162,14 +208,17 @@ public final class ArchiveScanner {
                 initialCompletedUnitCount: metadataReuse.resources.count,
                 totalUnitCount: pending.count,
                 maxConcurrency: options.maxConcurrentProbes,
-                progressHandler: options.progressHandler
+                progressHandler: progressHandler
             )
             var resources = (metadataReuse.resources + newlyProbedResources).sorted {
                 ($0.root.label, $0.relativePath) < ($1.root.label, $1.relativePath)
             }
             let reusedMetadataCount = metadataReuse.resources.count
-            TakeoutSidecarImporter.applyCaptureTimes(to: &resources)
-            let sidecarAssociations = SidecarAssociationDetector.detect(in: resources)
+            TakeoutSidecarImporter.applyCaptureTimes(to: &resources, index: takeoutSidecarIndex)
+            let sidecarAssociations = SidecarAssociationDetector.detect(
+                in: resources,
+                takeoutIndex: takeoutSidecarIndex
+            )
 
             let reusedExactHashCount: Int
             if options.reuseExactHashCache {
@@ -201,14 +250,14 @@ public final class ArchiveScanner {
                     roots: roots,
                     engine: options.exactDuplicateEngine,
                     maxConcurrency: min(options.maxConcurrentProbes, 4),
-                    progressHandler: options.progressHandler
+                    progressHandler: progressHandler
                 ))
             }
             if options.computeArchiveIntegrityPreconditions {
                 warnings.append(contentsOf: await hashArchiveIntegrityPreconditions(
                     resources: &resources,
                     maxConcurrency: min(options.maxConcurrentProbes, 4),
-                    progressHandler: options.progressHandler
+                    progressHandler: progressHandler
                 ))
             }
 
@@ -219,7 +268,7 @@ public final class ArchiveScanner {
             warnings.append(contentsOf: filenameCollisionWarnings(resources))
 
             var finalReport: ScanReport?
-            options.progressHandler?(ScanProgress(
+            progressHandler(ScanProgress(
                 stage: .cataloging,
                 completedUnitCount: 0,
                 totalUnitCount: 1
@@ -280,6 +329,7 @@ public final class ArchiveScanner {
                 try catalog.finishScan(
                     sessionID: sessionID,
                     completedAt: completedAt,
+                    exactDuplicatesComputed: options.computeExactDuplicates,
                     summary: summary
                 )
 
@@ -300,7 +350,7 @@ public final class ArchiveScanner {
                     filesModified: false
                 )
             }
-            options.progressHandler?(ScanProgress(
+            progressHandler(ScanProgress(
                 stage: .cataloging,
                 completedUnitCount: 1,
                 totalUnitCount: 1
@@ -309,7 +359,7 @@ public final class ArchiveScanner {
             guard let finalReport else {
                 throw CatalogError.invalidCatalogValue("Scan report was not assembled.")
             }
-            options.progressHandler?(ScanProgress(
+            progressHandler(ScanProgress(
                 stage: .finalizing,
                 completedUnitCount: 1,
                 totalUnitCount: 1

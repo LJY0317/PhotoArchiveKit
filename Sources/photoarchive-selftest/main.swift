@@ -1,7 +1,9 @@
 import AVFoundation
+import CoreGraphics
 import CoreMedia
 import CryptoKit
 import Foundation
+import ImageIO
 import PhotoArchiveCore
 import SQLite3
 
@@ -59,6 +61,128 @@ struct PhotoArchiveSelfTest {
             try PhotoArchiveSettingsStore.load(url: settingsURL).duplicateCleanupDestination == .systemTrash,
             "the product setting should be able to switch back to system Trash"
         )
+
+        let syncCatalogURL = temporary.appendingPathComponent("sync-core.sqlite3")
+        let syncStoreURL = temporary.appendingPathComponent("sync-connections.json")
+        let syncStateURL = temporary.appendingPathComponent("sync-state", isDirectory: true)
+        let syncRecoveryURL = temporary.appendingPathComponent("sync-recovery", isDirectory: true)
+        let syncRootA = try RootRegistry.add(
+            url: rootA,
+            kind: .inbox,
+            provenance: .localLibrary,
+            usageRole: .staging,
+            catalogURL: syncCatalogURL
+        )
+        let syncRootB = try RootRegistry.add(
+            url: rootB,
+            kind: .reference,
+            provenance: .localLibrary,
+            usageRole: .reference,
+            catalogURL: syncCatalogURL
+        )
+        let syncConnection = try FolderSyncConnectionManager.create(
+            rootID: syncRootA.rootID,
+            remoteName: "synthetic-drive",
+            remotePath: "/camera/",
+            catalogURL: syncCatalogURL,
+            storeURL: syncStoreURL,
+            stateDirectoryURL: syncStateURL,
+            recoveryDirectoryURL: syncRecoveryURL
+        )
+        try require(
+            syncConnection.rootMarkerKey == rootAMarker.markerKey
+                && syncConnection.remotePath == "camera"
+                && syncConnection.remoteRecoveryPath.hasPrefix(".photoarchivekit-recovery/"),
+            "sync connections should bind a stable local root identity and keep recovery outside the remote sync tree"
+        )
+        try require(
+            try FolderSyncConnectionStore.load(url: syncStoreURL) == [syncConnection],
+            "sync connection state should round-trip independently of folder purpose"
+        )
+        var interruptedSyncConnection = syncConnection
+        interruptedSyncConnection.status = .running
+        try FolderSyncConnectionStore.save([interruptedSyncConnection], url: syncStoreURL)
+        try require(
+            try FolderSyncConnectionStore.load(url: syncStoreURL).first?.status == .running,
+            "ordinary state reads must not reinterpret a possibly live running owner"
+        )
+        try require(
+            try FolderSyncConnectionStore.loadRecoveringInterrupted(
+                catalogURL: syncCatalogURL,
+                url: syncStoreURL
+            ).first?.status == .recoveryRequired,
+            "a stale persisted running sync must become recovery-required when no operation lock is active"
+        )
+        try FolderSyncConnectionStore.save([syncConnection], url: syncStoreURL)
+        _ = try FolderSyncConnectionManager.verifyLocalRoot(
+            syncConnection,
+            catalogURL: syncCatalogURL
+        )
+        do {
+            _ = try FolderSyncConnectionManager.create(
+                rootID: syncRootB.rootID,
+                remoteName: "synthetic-drive",
+                remotePath: "camera-read-only",
+                catalogURL: syncCatalogURL,
+                storeURL: syncStoreURL,
+                stateDirectoryURL: syncStateURL,
+                recoveryDirectoryURL: syncRecoveryURL
+            )
+            throw SelfTestFailure("read-only roots must not become bidirectional sync targets")
+        } catch FolderSyncConnectionError.readOnlyRoot {
+            // Expected.
+        }
+        do {
+            _ = try FolderSyncConnectionManager.normalizeRemotePath("/")
+            throw SelfTestFailure("remote root itself must not be accepted as a sync target")
+        } catch FolderSyncConnectionError.remoteRootNotAllowed {
+            // Expected: recovery storage must stay outside the sync tree.
+        }
+        let originalMarkerData = try Data(contentsOf: RootMarkerStore.markerURL(for: rootA))
+        try JSONEncoder().encode(RootMarker(markerKey: "RM-SYNTHETIC-DIFFERENT"))
+            .write(to: RootMarkerStore.markerURL(for: rootA), options: .atomic)
+        do {
+            _ = try FolderSyncConnectionManager.verifyLocalRoot(
+                syncConnection,
+                catalogURL: syncCatalogURL
+            )
+            throw SelfTestFailure("sync must reject a path whose stable root identity changed")
+        } catch FolderSyncConnectionError.rootIdentityChanged {
+            // Expected.
+        }
+        try originalMarkerData.write(to: RootMarkerStore.markerURL(for: rootA), options: .atomic)
+
+        let bisyncLogURL = temporary.appendingPathComponent("bisync-dry-run.jsonl")
+        let bisyncLog = """
+        {"level":"notice","msg":"- Path1    File changed: size (larger) - album/공백 - IMG_0001 \\"사진\\".HEIC","source":"bisync/deltas.go:232"}
+        {"level":"notice","msg":"- WARNING    New or changed in both paths - conflict - 사진.jpg","source":"bisync/deltas.go:391"}
+        {"level":"notice","msg":"Skipped copy as --dry-run is set","skipped":"copy","object":"album/공백 - IMG_0001 \\"사진\\".HEIC","source":"operations/operations.go:2631"}
+        """
+        try bisyncLog.write(to: bisyncLogURL, atomically: true, encoding: .utf8)
+        let bisyncSummary = try RcloneBisyncService.parseDryRunLog(url: bisyncLogURL)
+        try require(
+            bisyncSummary.candidatePaths == [
+                "album/공백 - IMG_0001 \"사진\".HEIC",
+                "conflict - 사진.jpg"
+            ]
+                && bisyncSummary.conflictPreserved,
+            "rclone 1.75 NOTICE JSON parsing must preserve spaces, Korean text, quotes and ' - ' inside filenames"
+        )
+        for invalidLog in [
+            "{not-json}\n",
+            "{\"level\":\"notice\",\"msg\":\"- Path1    File mutated unexpectedly - unsafe.JPG\",\"source\":\"bisync/deltas.go:232\"}\n",
+            "{\"level\":\"notice\",\"msg\":\"- Path1    File changed: size (larger) - unsafe.JPG\"}\n",
+            "{\"level\":\"notice\",\"msg\":\"- Path1    File changed: size (larger)\",\"source\":\"bisync/deltas.go:232\"}\n"
+        ] {
+            try invalidLog.write(to: bisyncLogURL, atomically: true, encoding: .utf8)
+            do {
+                _ = try RcloneBisyncService.parseDryRunLog(url: bisyncLogURL)
+                throw SelfTestFailure("unsafe bisync log input must fail closed")
+            } catch FolderSyncConnectionError.unsupportedBisyncLog {
+                // Expected: malformed or structurally unknown change evidence
+                // can never be interpreted as "no changes".
+            }
+        }
 
         let validTimedVideo = temporary.appendingPathComponent("valid-timed.mov")
         try await writeSyntheticTimedMetadataMovie(to: validTimedVideo, markerValues: [-1])
@@ -171,8 +295,14 @@ struct PhotoArchiveSelfTest {
         )
         let takeoutMetadataCacheVideo = takeoutMetadataCacheRoot
             .appendingPathComponent("TAKEOUT-CACHED.MOV")
+        let takeoutMetadataCacheOtherVideo = takeoutMetadataCacheRoot
+            .appendingPathComponent("TAKEOUT-OTHER.MOV")
         try await writeSyntheticTimedMetadataMovie(
             to: takeoutMetadataCacheVideo,
+            markerValues: [0]
+        )
+        try await writeSyntheticTimedMetadataMovie(
+            to: takeoutMetadataCacheOtherVideo,
             markerValues: [0]
         )
         try Data(
@@ -204,8 +334,136 @@ struct PhotoArchiveSelfTest {
             options: ScanOptions(computeExactDuplicates: false)
         )
         try require(
-            takeoutMetadataSecond.summary.reusedMetadataCount == 1,
-            "Takeout sidecar-derived media metadata must be re-probed while the unchanged sidecar itself may be cached"
+            takeoutMetadataSecond.summary.reusedMetadataCount == 3,
+            "unchanged Takeout media and sidecar metadata should all be reused"
+        )
+        try Data(
+            #"{"title":"TAKEOUT-CACHED.MOV","photoTakenTime":{"timestamp":"1776001234"}}"#.utf8
+        ).write(
+            to: takeoutMetadataCacheRoot.appendingPathComponent("TAKEOUT-CACHED.MOV.json")
+        )
+        let takeoutMetadataSidecarChanged = try await takeoutMetadataCacheScanner.scan(
+            roots: takeoutMetadataCacheRoots,
+            options: ScanOptions(computeExactDuplicates: false)
+        )
+        try require(
+            takeoutMetadataSidecarChanged.summary.reusedMetadataCount == 2,
+            "changing only the Takeout sidecar should keep both unchanged media metadata cache hits"
+        )
+        try require(
+            takeoutMetadataSidecarChanged.resources.first(where: { $0.mediaKind == .video })?
+                .captureTime?.instant == Date(timeIntervalSince1970: 1776001234),
+            "a changed Takeout sidecar timestamp should replace the prior provider-derived capture time"
+        )
+        try fileManager.removeItem(
+            at: takeoutMetadataCacheRoot.appendingPathComponent("TAKEOUT-CACHED.MOV.json")
+        )
+        let takeoutMetadataSidecarRemoved = try await takeoutMetadataCacheScanner.scan(
+            roots: takeoutMetadataCacheRoots,
+            options: ScanOptions(computeExactDuplicates: false)
+        )
+        try require(
+            takeoutMetadataSidecarRemoved.summary.reusedMetadataCount == 2,
+            "removing a Takeout sidecar should reuse both unchanged media probes from intrinsic metadata cache"
+        )
+        try require(
+            takeoutMetadataSidecarRemoved.resources.first(where: { $0.mediaKind == .video })?
+                .captureTime?.source != .googleTakeoutPhotoTakenTime,
+            "a removed Takeout sidecar must not leave stale provider-derived capture time behind"
+        )
+        try Data(
+            #"{"title":"TAKEOUT-OTHER.MOV","photoTakenTime":{"timestamp":"1776002222"}}"#.utf8
+        ).write(
+            to: takeoutMetadataCacheRoot.appendingPathComponent("TAKEOUT-CACHED.MOV.json")
+        )
+        let takeoutMetadataRetargeted = try await takeoutMetadataCacheScanner.scan(
+            roots: takeoutMetadataCacheRoots,
+            options: ScanOptions(computeExactDuplicates: false)
+        )
+        try require(
+            takeoutMetadataRetargeted.summary.reusedMetadataCount == 2,
+            "retargeting a Takeout sidecar should reuse both unchanged media probes while re-reading the changed JSON"
+        )
+        try require(
+            takeoutMetadataRetargeted.resources.first(where: { $0.fileName == "TAKEOUT-CACHED.MOV" })?
+                .captureTime?.source != .googleTakeoutPhotoTakenTime,
+            "retargeting a Takeout sidecar must not restore provider time onto its former media target"
+        )
+        try require(
+            takeoutMetadataRetargeted.resources.first(where: { $0.fileName == "TAKEOUT-OTHER.MOV" })?
+                .captureTime?.instant == Date(timeIntervalSince1970: 1776002222),
+            "retargeting a Takeout sidecar should apply its provider time to the new media target"
+        )
+
+        let directRetargetRoot = temporary.appendingPathComponent(
+            "TakeoutDirectRetarget",
+            isDirectory: true
+        )
+        try fileManager.createDirectory(at: directRetargetRoot, withIntermediateDirectories: true)
+        let directRetargetA = directRetargetRoot.appendingPathComponent("DIRECT-A.MOV")
+        let directRetargetB = directRetargetRoot.appendingPathComponent("DIRECT-B.MOV")
+        let directRetargetJSON = directRetargetRoot.appendingPathComponent("DIRECT.MOV.json")
+        try await writeSyntheticTimedMetadataMovie(to: directRetargetA, markerValues: [0])
+        try await writeSyntheticTimedMetadataMovie(to: directRetargetB, markerValues: [0])
+        try Data(
+            #"{"title":"DIRECT-A.MOV","photoTakenTime":{"timestamp":"1776100000"}}"#.utf8
+        ).write(to: directRetargetJSON)
+        let directRetargetCatalog = temporary.appendingPathComponent("takeout-direct-retarget.sqlite3")
+        let directRetargetScanner = try ArchiveScanner(catalogURL: directRetargetCatalog)
+        let directRetargetRoots = [
+            ScanRoot(
+                url: directRetargetRoot,
+                kind: .importSource,
+                provenance: .googleTakeout
+            )
+        ]
+        let directRetargetFirst = try await directRetargetScanner.scan(
+            roots: directRetargetRoots,
+            options: ScanOptions(computeExactDuplicates: false)
+        )
+        try require(
+            directRetargetFirst.resources.first(where: { $0.fileName == "DIRECT-A.MOV" })?
+                .captureTime?.instant == Date(timeIntervalSince1970: 1776100000),
+            "direct-retarget fixture should start with the sidecar applied to media A"
+        )
+        let directJSONAttributes = try fileManager.attributesOfItem(atPath: directRetargetJSON.path)
+        let directJSONModifiedAt = directJSONAttributes[.modificationDate] as! Date
+        try Data(
+            #"{"title":"DIRECT-B.MOV","photoTakenTime":{"timestamp":"1776102222"}}"#.utf8
+        ).write(to: directRetargetJSON)
+        try fileManager.setAttributes(
+            [.modificationDate: directJSONModifiedAt.addingTimeInterval(5)],
+            ofItemAtPath: directRetargetJSON.path
+        )
+        let directRetargetProgress = ProgressRecorder()
+        let directRetargetSecond = try await directRetargetScanner.scan(
+            roots: directRetargetRoots,
+            options: ScanOptions(
+                computeExactDuplicates: false,
+                progressHandler: { progress in
+                    directRetargetProgress.record(progress)
+                }
+            )
+        )
+        let directMetadataProgress = directRetargetProgress.snapshot().filter { $0.stage == .metadata }
+        try require(
+            directRetargetSecond.summary.reusedMetadataCount == 2,
+            "direct sidecar retarget should reuse both unchanged media metadata probes"
+        )
+        try require(
+            directMetadataProgress.first?.completedUnitCount == 2
+                && directMetadataProgress.first?.totalUnitCount == 3,
+            "direct sidecar retarget should enter metadata probing with both media already satisfied by cache, leaving only the changed JSON to probe"
+        )
+        try require(
+            directRetargetSecond.resources.first(where: { $0.fileName == "DIRECT-A.MOV" })?
+                .captureTime?.source != .googleTakeoutPhotoTakenTime,
+            "direct A-to-B sidecar retarget must remove the old provider-derived capture time from media A"
+        )
+        try require(
+            directRetargetSecond.resources.first(where: { $0.fileName == "DIRECT-B.MOV" })?
+                .captureTime?.instant == Date(timeIntervalSince1970: 1776102222),
+            "direct A-to-B sidecar retarget must apply the new provider-derived capture time to media B"
         )
 
         let registryRoot = temporary.appendingPathComponent("RegistryRoot", isDirectory: true)
@@ -528,6 +786,108 @@ struct PhotoArchiveSelfTest {
             "restoring staging role should restore import-cleanup authority without a media rescan"
         )
 
+        let legacySessionCatalog = temporary.appendingPathComponent("legacy-scan-session.sqlite3")
+        _ = fileManager.createFile(atPath: legacySessionCatalog.path, contents: Data())
+        try sqliteExecute(
+            databaseURL: legacySessionCatalog,
+            sql: """
+                CREATE TABLE scan_sessions (
+                    id TEXT PRIMARY KEY,
+                    started_at REAL NOT NULL,
+                    completed_at REAL,
+                    status TEXT NOT NULL,
+                    root_count INTEGER NOT NULL DEFAULT 0,
+                    resource_count INTEGER NOT NULL DEFAULT 0,
+                    asset_count INTEGER NOT NULL DEFAULT 0,
+                    warning_count INTEGER NOT NULL DEFAULT 0
+                );
+                INSERT INTO scan_sessions (
+                    id, started_at, completed_at, status, root_count,
+                    resource_count, asset_count, warning_count
+                ) VALUES ('SLEGACY', 1, 2, 'complete', 0, 0, 0, 0);
+                """
+        )
+        _ = try ArchiveScanner(catalogURL: legacySessionCatalog)
+        try require(
+            try sqliteInt(
+                databaseURL: legacySessionCatalog,
+                sql: "SELECT COUNT(*) FROM pragma_table_info('scan_sessions') WHERE name = 'exact_duplicates_computed'"
+            ) == 1,
+            "catalog migration should add explicit exact-duplicate scan capability state"
+        )
+        try require(
+            try sqliteInt(
+                databaseURL: legacySessionCatalog,
+                sql: "SELECT exact_duplicates_computed IS NULL FROM scan_sessions WHERE id = 'SLEGACY'"
+            ) == 1,
+            "legacy completed sessions must retain unknown exact-duplicate capability instead of being assumed complete"
+        )
+
+        let skippedDuplicateCatalog = temporary.appendingPathComponent("skipped-duplicate-review.sqlite3")
+        let skippedDuplicateRoot = temporary.appendingPathComponent("SkippedDuplicateReview", isDirectory: true)
+        try fileManager.createDirectory(at: skippedDuplicateRoot, withIntermediateDirectories: true)
+        let skippedDuplicateBytes = Data("skipped-duplicate-bytes".utf8)
+        try skippedDuplicateBytes.write(to: skippedDuplicateRoot.appendingPathComponent("same-a.jpg"))
+        try skippedDuplicateBytes.write(to: skippedDuplicateRoot.appendingPathComponent("same-b.jpg"))
+        _ = try RootRegistry.add(
+            url: skippedDuplicateRoot,
+            kind: .inbox,
+            provenance: .unknown,
+            usageRole: .staging,
+            catalogURL: skippedDuplicateCatalog
+        )
+        let skippedDuplicateScanner = try ArchiveScanner(catalogURL: skippedDuplicateCatalog)
+        let skippedDuplicateScan = try await skippedDuplicateScanner.scan(
+            roots: [ScanRoot(url: skippedDuplicateRoot, kind: .inbox, provenance: .unknown)],
+            options: ScanOptions(computeExactDuplicates: false)
+        )
+        try require(
+            skippedDuplicateScan.exactDuplicateGroups.isEmpty,
+            "a scan that explicitly skips exact comparison should not synthesize duplicate groups"
+        )
+        try require(
+            try sqliteInt(
+                databaseURL: skippedDuplicateCatalog,
+                sql: "SELECT exact_duplicates_computed FROM scan_sessions WHERE id = '\(skippedDuplicateScan.sessionID)'"
+            ) == 0,
+            "completed scan sessions should record that exact duplicate comparison was skipped"
+        )
+        guard let generalSkippedSnapshot = try skippedDuplicateScanner.latestReusableActiveRootsScanReport() else {
+            throw SelfTestFailure("a no-exact scan should remain reusable as general scan history")
+        }
+        try require(
+            generalSkippedSnapshot.sessionID == skippedDuplicateScan.sessionID,
+            "general scan snapshot reuse should remain independent from duplicate-review eligibility"
+        )
+        try require(
+            try skippedDuplicateScanner.latestReusableActiveRootsDuplicateReviewScanReport() == nil
+                && skippedDuplicateScanner.latestReusableDuplicateReviewScanReport() == nil,
+            "a completed no-exact scan must not be restored as a valid zero-duplicate review"
+        )
+        let completedDuplicateScan = try await skippedDuplicateScanner.scan(
+            roots: [ScanRoot(url: skippedDuplicateRoot, kind: .inbox, provenance: .unknown)]
+        )
+        try require(
+            completedDuplicateScan.exactDuplicateGroups.count == 1,
+            "the same synthetic bytes should form one duplicate group when exact comparison is actually performed"
+        )
+        try require(
+            try skippedDuplicateScanner.latestReusableActiveRootsDuplicateReviewScanReport()?.sessionID
+                == completedDuplicateScan.sessionID
+                && skippedDuplicateScanner.latestReusableDuplicateReviewScanReport()?.sessionID
+                    == completedDuplicateScan.sessionID,
+            "duplicate-review reuse should accept a completed session that actually performed exact comparison"
+        )
+        try sqliteExecute(
+            databaseURL: skippedDuplicateCatalog,
+            sql: "UPDATE scan_sessions SET exact_duplicates_computed = NULL WHERE id = '\(completedDuplicateScan.sessionID)'"
+        )
+        try require(
+            try skippedDuplicateScanner.latestReusableActiveRootsDuplicateReviewScanReport() == nil
+                && skippedDuplicateScanner.latestReusableDuplicateReviewScanReport() == nil,
+            "an information-less legacy session must not be treated as exact-duplicate-complete"
+        )
+
         let reviewSubsetCatalog = temporary.appendingPathComponent("review-subset.sqlite3")
         let reviewSubsetA = temporary.appendingPathComponent("ReviewSubsetA", isDirectory: true)
         let reviewSubsetB = temporary.appendingPathComponent("ReviewSubsetB", isDirectory: true)
@@ -563,30 +923,29 @@ struct PhotoArchiveSelfTest {
             "an unrelated active-root scan should make the strict all-active-root snapshot unavailable"
         )
         guard let reusableReviewSubset = try reviewSubsetScanner.latestReusableDuplicateReviewScanReport() else {
-            throw SelfTestFailure("duplicate review should reuse the latest valid exact-duplicate root subset")
+            throw SelfTestFailure("duplicate review should restore the latest completed scan even when it found no duplicates")
         }
         try require(
-            reusableReviewSubset.sessionID == reviewDuplicateScan.sessionID
+            reusableReviewSubset.sessionID != reviewDuplicateScan.sessionID
                 && Set(reusableReviewSubset.roots.map(\.canonicalPath))
-                    == Set([reviewSubsetA.standardizedFileURL.path, reviewSubsetB.standardizedFileURL.path]),
-            "duplicate review should skip a newer unrelated scan and recover the latest valid duplicate snapshot"
+                    == Set([reviewSubsetC.standardizedFileURL.path])
+                && reusableReviewSubset.exactDuplicateGroups.isEmpty,
+            "duplicate review should restore the newest completed scope instead of presenting an older duplicate snapshot as current"
         )
         let reusablePresentation = try DuplicateReviewPresentationBuilder.latest(
             catalogURL: reviewSubsetCatalog
         )
         try require(
-            reusablePresentation.items.count == 1
-                && reusablePresentation.candidateResourceCount == 1
-                && reusablePresentation.scopeRootLabels.count == 2,
-            "duplicate-review GUI presentation should open the reusable root subset without requiring every active root"
+            reusablePresentation.items.isEmpty
+                && reusablePresentation.candidateResourceCount == 0
+                && reusablePresentation.scopeRootLabels.count == 1,
+            "duplicate-review GUI presentation should restore a completed zero-duplicate result as an empty state"
         )
         try require(
-            reusablePresentation.items[0].copies.count == 2
-                && reusablePresentation.items[0].copies.filter(\.isKeeper).count == 1
-                && reusablePresentation.items[0].allResources.allSatisfy {
-                    $0.details?.exactSHA256Hex?.count == 64 && $0.fileSystemFacts.exists
-                },
-            "duplicate-review GUI should expose one comparison column per standalone copy with rich local-only catalog/filesystem facts"
+            try reviewSubsetScanner.completedScanRootIDs().isSuperset(of: Set(
+                try RootRegistry.list(catalogURL: reviewSubsetCatalog).map(\.rootID)
+            )),
+            "completed scan history should remember each scanned registered root independently of the currently displayed snapshot"
         )
         let expandedReviewScan = try await reviewSubsetScanner.scan(roots: [
             ScanRoot(url: reviewSubsetA, kind: .inbox, provenance: .unknown),
@@ -602,6 +961,29 @@ struct PhotoArchiveSelfTest {
                 && expandedReviewPresentation.items.count == 1
                 && expandedReviewPresentation.candidateResourceCount == 1,
             "adding a comparison root and rescanning the selected registered roots should expand the GUI scope without changing unrelated duplicate decisions"
+        )
+
+        let emptyReviewRoot = temporary.appendingPathComponent("EmptyReviewRoot", isDirectory: true)
+        try fileManager.createDirectory(at: emptyReviewRoot, withIntermediateDirectories: true)
+        let emptyReviewRegistered = try RootRegistry.add(
+            url: emptyReviewRoot,
+            kind: .inbox,
+            provenance: .unknown,
+            usageRole: .staging,
+            catalogURL: reviewSubsetCatalog
+        )
+        let emptyReviewScan = try await reviewSubsetScanner.scan(roots: [
+            ScanRoot(url: emptyReviewRoot, kind: .inbox, provenance: .unknown)
+        ])
+        guard let restoredEmptyReviewScan = try reviewSubsetScanner.latestReusableDuplicateReviewScanReport() else {
+            throw SelfTestFailure("an empty completed duplicate-review scan should remain reusable")
+        }
+        try require(
+            emptyReviewScan.resources.isEmpty
+                && restoredEmptyReviewScan.sessionID == emptyReviewScan.sessionID
+                && restoredEmptyReviewScan.roots.map(\.rootID) == [emptyReviewRegistered.rootID]
+                && restoredEmptyReviewScan.resources.isEmpty,
+            "completed scan scope must be persisted independently of resource rows so empty roots restore correctly"
         )
 
         let takeoutSidecarRoot = temporary.appendingPathComponent("TakeoutSidecar", isDirectory: true)
@@ -669,6 +1051,39 @@ struct PhotoArchiveSelfTest {
                 totalUnitCount: 1
             ),
             "scan progress should end with finalizing completion"
+        )
+
+        let throttledProgressRoot = temporary.appendingPathComponent("ThrottledProgress", isDirectory: true)
+        try fileManager.createDirectory(at: throttledProgressRoot, withIntermediateDirectories: true)
+        for index in 0..<200 {
+            try Data("progress-\(index)".utf8).write(
+                to: throttledProgressRoot.appendingPathComponent("item-\(index).jpg")
+            )
+        }
+        let throttledProgressRecorder = ProgressRecorder()
+        let throttledProgressScanner = try ArchiveScanner(
+            catalogURL: temporary.appendingPathComponent("throttled-progress.sqlite3")
+        )
+        _ = try await throttledProgressScanner.scan(
+            roots: [ScanRoot(url: throttledProgressRoot, kind: .reference)],
+            options: ScanOptions(
+                computeExactDuplicates: false,
+                progressHandler: { throttledProgressRecorder.record($0) }
+            )
+        )
+        let throttledProgressEvents = throttledProgressRecorder.snapshot()
+        try require(
+            throttledProgressEvents.count < 40,
+            "high-frequency per-file scan progress should be coalesced before reaching the UI callback"
+        )
+        try require(
+            throttledProgressEvents.contains { $0.stage == .cataloging }
+                && throttledProgressEvents.last == ScanProgress(
+                    stage: .finalizing,
+                    completedUnitCount: 1,
+                    totalUnitCount: 1
+                ),
+            "progress throttling must still deliver stage transitions and final completion immediately"
         )
         try require(
             second.summary.reusedExactHashCount == 2,
@@ -2303,6 +2718,10 @@ struct PhotoArchiveSelfTest {
                 && localDuplicateLivePresentationItem.copies.filter(\.isKeeper).count == 1,
             "duplicate-review GUI should group still+paired-video resources into one comparison column per Live Photo occurrence"
         )
+        try require(
+            localDuplicateLivePresentationItem.rationale == .shallowerPath,
+            "complete Live Photo duplicates should explain the actual shallower-path keeper decision instead of merely restating that the keeper is a Live Photo"
+        )
         let archiveDuplicateLiveReport = syntheticLocalDuplicateLivePhotoReport(usageRole: .archive)
         let archiveDuplicateLivePlan = ReconciliationPlanner.makePlan(from: archiveDuplicateLiveReport)
         try require(
@@ -2333,6 +2752,33 @@ struct PhotoArchiveSelfTest {
             "Takeout same-root Live Photo dedupe should become eligible after source-folder semantics are captured"
         )
 
+        let stillOnlyDuplicateLiveReport = syntheticStillOnlyDuplicateLivePhotoReport()
+        let stillOnlyDuplicateLivePlan = ReconciliationPlanner.makePlan(from: stillOnlyDuplicateLiveReport)
+        guard let stillOnlyDuplicateLiveItem = stillOnlyDuplicateLivePlan.items.first(where: {
+            $0.reason == .canonicalLocalLivePhotoOccurrence
+        }) else {
+            throw SelfTestFailure("same-root still-only Live Photo duplicates should produce a canonical occurrence item")
+        }
+        try require(
+            stillOnlyDuplicateLiveItem.preferredResources.first?.relativePath == "2026/IMG_0002.HEIC"
+                && stillOnlyDuplicateLiveItem.candidateResources.first?.relativePath == "Album/IMG_0002.HEIC",
+            "still-only Live Photo occurrence selection should retain its deterministic stable-path tie break when all higher-priority occurrence evidence is equal"
+        )
+        let stillOnlyDuplicateLivePresentation = DuplicateReviewPresentationBuilder.makePresentation(
+            report: stillOnlyDuplicateLiveReport,
+            plan: stillOnlyDuplicateLivePlan
+        )
+        guard let stillOnlyDuplicateLivePresentationItem = stillOnlyDuplicateLivePresentation.items.first(where: {
+            $0.reason == .canonicalLocalLivePhotoOccurrence
+        }) else {
+            throw SelfTestFailure("still-only Live Photo duplicate-review presentation item missing")
+        }
+        try require(
+            stillOnlyDuplicateLivePresentationItem.rationale == .deterministicTieBreak
+                && stillOnlyDuplicateLivePresentationItem.copies.first(where: \.isKeeper)?.isCompleteLivePhotoOccurrence == false,
+            "still-only Live Photo duplicates should show the existing deterministic-tie recommendation instead of claiming the keeper contains a complete still+video pair"
+        )
+
         let quarantineRoot = temporary.appendingPathComponent("Quarantine", isDirectory: true)
         try fileManager.createDirectory(at: quarantineRoot, withIntermediateDirectories: true)
         let quarantineDryRun = try QuarantineExecutor.preflight(
@@ -2354,7 +2800,8 @@ struct PhotoArchiveSelfTest {
         let quarantineApplied = try QuarantineExecutor.apply(
             report: reviewReport,
             plan: standalonePlan,
-            targetURL: quarantineRoot
+            targetURL: quarantineRoot,
+            catalogURL: mainCatalogURL
         )
         try require(quarantineApplied.filesModified, "quarantine apply should report file modification")
         try require(fileManager.fileExists(atPath: fileA.path), "preferred local copy must remain in place")
@@ -2494,6 +2941,7 @@ struct PhotoArchiveSelfTest {
         _ = try OrganizationExecutor.apply(
             report: trackingMoved,
             plan: catalogCommitPlan,
+            catalogURL: trackingCatalog,
             manifestDirectoryURL: catalogCommitOperations,
             commitCatalog: { try trackingScanner.commitAppliedOrganizationPlan(catalogCommitPlan) }
         )
@@ -2651,6 +3099,7 @@ struct PhotoArchiveSelfTest {
             _ = try OrganizationExecutor.apply(
                 report: organizationApplyScan,
                 plan: organizationApplyPlan,
+                catalogURL: temporary.appendingPathComponent("organization-apply-lock.sqlite3"),
                 manifestDirectoryURL: organizationOperations,
                 commitCatalog: { throw SelfTestFailure("synthetic catalog commit failure") }
             )
@@ -2665,6 +3114,7 @@ struct PhotoArchiveSelfTest {
         let organizationApplied = try OrganizationExecutor.apply(
             report: organizationApplyScan,
             plan: organizationApplyPlan,
+            catalogURL: temporary.appendingPathComponent("organization-apply-lock.sqlite3"),
             manifestDirectoryURL: organizationOperations,
             commitCatalog: {}
         )
@@ -2974,7 +3424,8 @@ struct PhotoArchiveSelfTest {
         let liveApplied = try QuarantineExecutor.apply(
             report: liveCoverageReport,
             plan: liveCoveragePlan,
-            targetURL: liveQuarantineRoot
+            targetURL: liveQuarantineRoot,
+            catalogURL: temporary.appendingPathComponent("live-quarantine-lock.sqlite3")
         )
         try require(liveApplied.resourceCount == 4, "Live Photo quarantine should move the entire covered resource set")
         try require(
@@ -3176,6 +3627,801 @@ struct PhotoArchiveSelfTest {
     }
 }
 
+private extension PhotoArchiveSelfTest {
+    static func runRcloneBisyncServiceIntegrationTests() async throws {
+        guard let rcloneURL = executableURL("rclone") else {
+            print("SKIP: rclone is not installed; bisync service adapter is optional.")
+            return
+        }
+
+        let fileManager = FileManager.default
+        let temporary = fileManager.temporaryDirectory
+            .appendingPathComponent("pbs-\(UUID().uuidString.prefix(6))", isDirectory: true)
+        try fileManager.createDirectory(at: temporary, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(at: temporary) }
+
+        // Production execution is intentionally blocked before creating the
+        // access marker or invoking a mutating bisync. The same service path is
+        // enabled only for these synthetic fixtures so we can test/reproduce
+        // rclone behavior without weakening the shipping safety boundary.
+        do {
+            print("bisync-service: production safety boundary")
+            let fixture = try BisyncServiceFixture.make(
+                parentURL: temporary,
+                name: "production-safety-boundary",
+                rcloneURL: rcloneURL
+            )
+            try Data("local-only".utf8).write(to: fixture.localRoot.appendingPathComponent("local.txt"))
+            let service = fixture.service(allowApply: false)
+            do {
+                _ = try await service.synchronize(
+                    connection: fixture.connection,
+                    confirmInitialSync: true,
+                    catalogURL: fixture.catalogURL,
+                    storeURL: fixture.storeURL
+                )
+                throw SelfTestFailure("production bisync apply must stay disabled while destination concurrency safety is unresolved")
+            } catch FolderSyncConnectionError.concurrentMutationSafetyUnavailable {
+                // Expected.
+            }
+            try require(
+                try visibleUserFiles(in: fixture.remoteRoot).isEmpty,
+                "production safety block must happen before remote access markers or media are written"
+            )
+            try require(
+                try fixture.savedConnection().status == .safetyUnavailable,
+                "production safety block should be visible as a distinct connection state"
+            )
+        }
+
+        // First setup: files unique to either side merge, but same-path content
+        // differences are rejected before resync so `newer` never decides a
+        // user's first conflict.
+        do {
+            print("bisync-service: initial unique merge")
+            let fixture = try BisyncServiceFixture.make(
+                parentURL: temporary,
+                name: "initial-unique-merge",
+                rcloneURL: rcloneURL
+            )
+            try writeSyntheticJPEG(
+                to: fixture.localRoot.appendingPathComponent("로컬 전용 - 사진.JPG"),
+                pixelValue: 40
+            )
+            try writeSyntheticJPEG(
+                to: fixture.remoteRoot.appendingPathComponent("원격 전용 - 사진.JPG"),
+                pixelValue: 90
+            )
+            let report: FolderSyncRunReport
+            do {
+                report = try await fixture.service().synchronize(
+                    connection: fixture.connection,
+                    confirmInitialSync: true,
+                    catalogURL: fixture.catalogURL,
+                    storeURL: fixture.storeURL
+                )
+            } catch {
+                let saved = try? fixture.savedConnection()
+                print("initial unique failure: \(error.localizedDescription); saved=\(String(describing: saved?.status))")
+                printSyntheticRunLogs(workDirectoryPath: fixture.connection.workDirectoryPath)
+                throw error
+            }
+            try require(report.connection.isInitialized, "mergeable first sync should initialize the connection")
+            try require(
+                report.connection.initialSyncStartedAt == nil,
+                "successful first sync should clear its in-progress initialization marker"
+            )
+            try require(
+                report.connection.lastSuccessAt != nil,
+                "successful service sync should persist a last-success timestamp for the UI"
+            )
+            try require(
+                fileManager.fileExists(atPath: fixture.remoteRoot.appendingPathComponent("로컬 전용 - 사진.JPG").path)
+                    && fileManager.fileExists(atPath: fixture.localRoot.appendingPathComponent("원격 전용 - 사진.JPG").path),
+                "first sync should merge files that exist on only one side"
+            )
+        }
+
+        do {
+            print("bisync-service: initial conflict")
+            let fixture = try BisyncServiceFixture.make(
+                parentURL: temporary,
+                name: "initial-conflict",
+                rcloneURL: rcloneURL
+            )
+            let local = fixture.localRoot.appendingPathComponent("same path.txt")
+            let remote = fixture.remoteRoot.appendingPathComponent("same path.txt")
+            try Data("left version".utf8).write(to: local)
+            try Data("right version is different".utf8).write(to: remote)
+            let beforeLocal = try Data(contentsOf: local)
+            let beforeRemote = try Data(contentsOf: remote)
+            do {
+                _ = try await fixture.service().synchronize(
+                    connection: fixture.connection,
+                    confirmInitialSync: true,
+                    catalogURL: fixture.catalogURL,
+                    storeURL: fixture.storeURL
+                )
+                throw SelfTestFailure("same-path first-sync mismatch must stop instead of selecting the newer copy")
+            } catch FolderSyncConnectionError.initialConflict {
+                // Expected.
+            }
+            try require(
+                try Data(contentsOf: local) == beforeLocal && Data(contentsOf: remote) == beforeRemote,
+                "first-sync conflict detection must not overwrite either user file"
+            )
+            try require(
+                try fixture.savedConnection().status == .initialConflict,
+                "first-sync mismatch should persist a consumer-visible conflict state"
+            )
+        }
+
+        // Ordinary media uses the full app adapter and is allowed in synthetic
+        // execution mode. The filename intentionally exercises spaces, Korean,
+        // quotes and ` - ` through the actual rclone 1.75 NOTICE JSON parser.
+        do {
+            print("bisync-service: ordinary media")
+            let fixture = try BisyncServiceFixture.make(
+                parentURL: temporary,
+                name: "ordinary-media",
+                rcloneURL: rcloneURL
+            )
+            let imageName = "공백 이름 - 따옴표 \"파일\".JPG"
+            let movieName = "일반 동영상 - sample.MOV"
+            let localImage = fixture.localRoot.appendingPathComponent(imageName)
+            let localMovie = fixture.localRoot.appendingPathComponent(movieName)
+            try writeSyntheticJPEG(to: localImage, pixelValue: 20)
+            try await writeSyntheticTimedMetadataMovie(to: localMovie, markerValues: [])
+            try copyReplacing(localImage, to: fixture.remoteRoot.appendingPathComponent(imageName))
+            try copyReplacing(localMovie, to: fixture.remoteRoot.appendingPathComponent(movieName))
+            var connection = try await initialize(fixture)
+
+            try writeSyntheticJPEGReplacing(localImage, pixelValue: 180)
+            try await writeSyntheticMovieReplacing(localMovie, markerValues: [0])
+            connection = try await fixture.service().synchronize(
+                connection: connection,
+                confirmInitialSync: false,
+                catalogURL: fixture.catalogURL,
+                storeURL: fixture.storeURL
+            ).connection
+            try require(
+                try Data(contentsOf: localImage) == Data(contentsOf: fixture.remoteRoot.appendingPathComponent(imageName)),
+                "ordinary image changes should pass the service preflight and synchronize"
+            )
+            try require(
+                try Data(contentsOf: localMovie) == Data(contentsOf: fixture.remoteRoot.appendingPathComponent(movieName)),
+                "ordinary video changes should pass the service preflight and synchronize"
+            )
+            try require(connection.status == .success, "ordinary synthetic sync should finish successfully")
+        }
+
+        // Real synthetic Live Photo metadata: MakerApple key 17 on the still
+        // and QuickTime content identifier on the paired video.
+        do {
+            print("bisync-service: local Live Photo still")
+            let fixture = try BisyncServiceFixture.make(
+                parentURL: temporary,
+                name: "live-local-still",
+                rcloneURL: rcloneURL
+            )
+            try await seedLivePair(fixture, identifier: "LIVE-LOCAL-STILL")
+            let connection = try await initialize(fixture)
+            let remoteStill = fixture.remoteRoot.appendingPathComponent("IMG_0001.JPG")
+            let remoteBefore = try Data(contentsOf: remoteStill)
+            try writeSyntheticJPEGReplacing(
+                fixture.localRoot.appendingPathComponent("IMG_0001.JPG"),
+                contentIdentifier: "LIVE-LOCAL-STILL",
+                pixelValue: 210
+            )
+            try await requireLivePhotoBlock(fixture: fixture, connection: connection)
+            try require(
+                try Data(contentsOf: remoteStill) == remoteBefore,
+                "blocked local Live Photo still change must not reach the apply phase"
+            )
+        }
+
+        do {
+            print("bisync-service: remote Live Photo video")
+            let fixture = try BisyncServiceFixture.make(
+                parentURL: temporary,
+                name: "live-remote-video",
+                rcloneURL: rcloneURL
+            )
+            try await seedLivePair(fixture, identifier: "LIVE-REMOTE-VIDEO")
+            let connection = try await initialize(fixture)
+            let localMovie = fixture.localRoot.appendingPathComponent("IMG_0001.MOV")
+            let localBefore = try Data(contentsOf: localMovie)
+            try await writeSyntheticMovieReplacing(
+                fixture.remoteRoot.appendingPathComponent("IMG_0001.MOV"),
+                markerValues: [1],
+                contentIdentifier: "LIVE-REMOTE-VIDEO-CHANGED"
+            )
+            try await requireLivePhotoBlock(fixture: fixture, connection: connection)
+            try require(
+                try Data(contentsOf: localMovie) == localBefore,
+                "blocked remote Live Photo video change must not reach the apply phase"
+            )
+        }
+
+        do {
+            print("bisync-service: Live Photo deletion")
+            let fixture = try BisyncServiceFixture.make(
+                parentURL: temporary,
+                name: "live-deletion",
+                rcloneURL: rcloneURL
+            )
+            try await seedLivePair(fixture, identifier: "LIVE-DELETE")
+            let connection = try await initialize(fixture)
+            let remoteStill = fixture.remoteRoot.appendingPathComponent("IMG_0001.JPG")
+            try fileManager.removeItem(at: fixture.localRoot.appendingPathComponent("IMG_0001.JPG"))
+            try await requireLivePhotoBlock(fixture: fixture, connection: connection)
+            try require(
+                fileManager.fileExists(atPath: remoteStill.path),
+                "blocked Live Photo deletion must not delete the surviving counterpart"
+            )
+        }
+
+        do {
+            print("bisync-service: Live Photo conflict")
+            let fixture = try BisyncServiceFixture.make(
+                parentURL: temporary,
+                name: "live-conflict",
+                rcloneURL: rcloneURL
+            )
+            try await seedLivePair(fixture, identifier: "LIVE-CONFLICT")
+            let connection = try await initialize(fixture)
+            try writeSyntheticJPEGReplacing(
+                fixture.localRoot.appendingPathComponent("IMG_0001.JPG"),
+                contentIdentifier: "LIVE-CONFLICT-LEFT",
+                pixelValue: 30
+            )
+            try writeSyntheticJPEGReplacing(
+                fixture.remoteRoot.appendingPathComponent("IMG_0001.JPG"),
+                contentIdentifier: "LIVE-CONFLICT-RIGHT",
+                pixelValue: 220
+            )
+            try await requireLivePhotoBlock(fixture: fixture, connection: connection)
+            try require(
+                try visibleUserFiles(in: fixture.localRoot).allSatisfy { !$0.lastPathComponent.contains("conflict") }
+                    && visibleUserFiles(in: fixture.remoteRoot).allSatisfy { !$0.lastPathComponent.contains("conflict") },
+                "blocked Live Photo conflict must not create conflict-renamed user files"
+            )
+        }
+
+        do {
+            print("bisync-service: metadata failure")
+            let fixture = try BisyncServiceFixture.make(
+                parentURL: temporary,
+                name: "metadata-failure",
+                rcloneURL: rcloneURL
+            )
+            let path = "broken.JPG"
+            let local = fixture.localRoot.appendingPathComponent(path)
+            let remote = fixture.remoteRoot.appendingPathComponent(path)
+            try writeSyntheticJPEG(to: local, pixelValue: 50)
+            try copyReplacing(local, to: remote)
+            let connection = try await initialize(fixture)
+            let remoteBefore = try Data(contentsOf: remote)
+            try Data("not an image anymore".utf8).write(to: local, options: .atomic)
+            try await requireLivePhotoBlock(fixture: fixture, connection: connection)
+            try require(
+                try Data(contentsOf: remote) == remoteBefore,
+                "metadata probe failure must fail safe before actual transfer"
+            )
+        }
+
+        do {
+            print("bisync-service: cancellation before apply")
+            let fixture = try BisyncServiceFixture.make(
+                parentURL: temporary,
+                name: "cancel-before-apply",
+                rcloneURL: rcloneURL
+            )
+            let local = fixture.localRoot.appendingPathComponent("cancel.txt")
+            let remote = fixture.remoteRoot.appendingPathComponent("cancel.txt")
+            try Data("baseline".utf8).write(to: local)
+            try copyReplacing(local, to: remote)
+            let connection = try await initialize(fixture)
+            try Data("changed but not applied yet".utf8).write(to: local, options: .atomic)
+            let remoteBefore = try Data(contentsOf: remote)
+            let gate = BisyncHookGate()
+            let service = fixture.service(afterPreflight: {
+                await gate.enterAndWait()
+            })
+            let task = Task {
+                try await service.synchronize(
+                    connection: connection,
+                    confirmInitialSync: false,
+                    catalogURL: fixture.catalogURL,
+                    storeURL: fixture.storeURL
+                )
+            }
+            await gate.waitUntilEntered()
+            service.cancelCurrentRun()
+            await gate.release()
+            do {
+                _ = try await task.value
+                throw SelfTestFailure("cancelled synthetic service run should not report success")
+            } catch is CancellationError {
+                // Expected.
+            }
+            try require(
+                try fixture.savedConnection().status == .cancelled,
+                "pre-apply cancellation should persist cancelled rather than success"
+            )
+            try require(
+                try Data(contentsOf: remote) == remoteBefore,
+                "pre-apply cancellation should not start the actual file transfer"
+            )
+        }
+
+        // Deterministic TOCTOU witnesses. These are deliberately allowed only
+        // in the synthetic test policy. They prove why a successful dry-run is
+        // not sufficient authority for shipping Live Photo mutation.
+        do {
+            print("bisync-service: TOCTOU add")
+            let fixture = try BisyncServiceFixture.make(
+                parentURL: temporary,
+                name: "toctou-add",
+                rcloneURL: rcloneURL
+            )
+            try Data("anchor".utf8).write(to: fixture.localRoot.appendingPathComponent("anchor.txt"))
+            try copyReplacing(
+                fixture.localRoot.appendingPathComponent("anchor.txt"),
+                to: fixture.remoteRoot.appendingPathComponent("anchor.txt")
+            )
+            let connection = try await initialize(fixture)
+            let injected = fixture.localRoot.appendingPathComponent("late-live.JPG")
+            let service = fixture.service(afterPreflight: {
+                try writeSyntheticJPEG(
+                    to: injected,
+                    contentIdentifier: "LATE-ADD",
+                    pixelValue: 120
+                )
+            })
+            _ = try await service.synchronize(
+                connection: connection,
+                confirmInitialSync: false,
+                catalogURL: fixture.catalogURL,
+                storeURL: fixture.storeURL
+            )
+            try require(
+                fileManager.fileExists(atPath: fixture.remoteRoot.appendingPathComponent("late-live.JPG").path),
+                "synthetic witness should show that a post-preflight Live Photo addition can enter bisync apply"
+            )
+        }
+
+        do {
+            print("bisync-service: TOCTOU replace")
+            let fixture = try BisyncServiceFixture.make(
+                parentURL: temporary,
+                name: "toctou-replace",
+                rcloneURL: rcloneURL
+            )
+            let relative = "replace.JPG"
+            let local = fixture.localRoot.appendingPathComponent(relative)
+            let remote = fixture.remoteRoot.appendingPathComponent(relative)
+            try writeSyntheticJPEG(to: local, pixelValue: 80)
+            try copyReplacing(local, to: remote)
+            let connection = try await initialize(fixture)
+            let service = fixture.service(afterPreflight: {
+                try writeSyntheticJPEGReplacing(
+                    local,
+                    contentIdentifier: "LATE-REPLACE",
+                    pixelValue: 200
+                )
+            })
+            _ = try await service.synchronize(
+                connection: connection,
+                confirmInitialSync: false,
+                catalogURL: fixture.catalogURL,
+                storeURL: fixture.storeURL
+            )
+            try require(
+                try Data(contentsOf: local) == Data(contentsOf: remote),
+                "synthetic witness should show that a post-preflight replacement can enter bisync apply"
+            )
+        }
+
+        do {
+            print("bisync-service: TOCTOU delete")
+            let fixture = try BisyncServiceFixture.make(
+                parentURL: temporary,
+                name: "toctou-delete",
+                rcloneURL: rcloneURL
+            )
+            try await seedLivePair(fixture, identifier: "LATE-DELETE")
+            let connection = try await initialize(fixture)
+            let localStill = fixture.localRoot.appendingPathComponent("IMG_0001.JPG")
+            let remoteStill = fixture.remoteRoot.appendingPathComponent("IMG_0001.JPG")
+            let remoteMovie = fixture.remoteRoot.appendingPathComponent("IMG_0001.MOV")
+            let service = fixture.service(afterPreflight: {
+                try FileManager.default.removeItem(at: localStill)
+            })
+            _ = try await service.synchronize(
+                connection: connection,
+                confirmInitialSync: false,
+                catalogURL: fixture.catalogURL,
+                storeURL: fixture.storeURL
+            )
+            try require(
+                !fileManager.fileExists(atPath: remoteStill.path)
+                    && fileManager.fileExists(atPath: remoteMovie.path),
+                "synthetic witness should demonstrate the one-sided Live Photo deletion gap after preflight"
+            )
+        }
+
+        // A first resync that crosses the apply boundary and then fails is not
+        // retried as a new resync. The partial state is preserved for recovery.
+        do {
+            print("bisync-service: partial first sync")
+            let fixture = try BisyncServiceFixture.make(
+                parentURL: temporary,
+                name: "partial-first-sync",
+                rcloneURL: rcloneURL
+            )
+            for name in ["a.txt", "b.txt", "c.txt", "d.txt"] {
+                try Data("x".utf8).write(to: fixture.localRoot.appendingPathComponent(name))
+            }
+            let limited = fixture.service(additionalApplyArguments: [
+                "--max-transfer", "1B",
+                "--cutoff-mode", "hard",
+                "--transfers", "1"
+            ])
+            do {
+                _ = try await limited.synchronize(
+                    connection: fixture.connection,
+                    confirmInitialSync: true,
+                    catalogURL: fixture.catalogURL,
+                    storeURL: fixture.storeURL
+                )
+                throw SelfTestFailure("hard transfer limit should interrupt the first synthetic resync")
+            } catch {
+                // Expected; persisted state is the authority below.
+            }
+            let partialCount = try visibleUserFiles(in: fixture.remoteRoot)
+                .filter { $0.pathExtension == "txt" }.count
+            let interrupted = try fixture.savedConnection()
+            try require(
+                partialCount > 0 && partialCount < 4,
+                "interrupted first sync fixture should prove that some, but not all, user files may already be reflected"
+            )
+            try require(
+                !interrupted.isInitialized
+                    && interrupted.initialSyncStartedAt != nil
+                    && interrupted.status == .recoveryRequired,
+                "partial first sync must persist recovery-required instead of pretending setup never began"
+            )
+            do {
+                _ = try await fixture.service().synchronize(
+                    connection: interrupted,
+                    confirmInitialSync: true,
+                    catalogURL: fixture.catalogURL,
+                    storeURL: fixture.storeURL
+                )
+                throw SelfTestFailure("partial initial sync must not automatically run resync again")
+            } catch FolderSyncConnectionError.recoveryRequired {
+                // Expected.
+            }
+            let countAfterRetry = try visibleUserFiles(in: fixture.remoteRoot)
+                .filter { $0.pathExtension == "txt" }.count
+            try require(
+                countAfterRetry == partialCount,
+                "recovery-required retry must not continue mutating the partially initialized remote"
+            )
+        }
+
+        // A competing service instance must fail on the shared operation lock
+        // without rewriting the legitimate owner's persisted `running` state.
+        do {
+            print("bisync-service: duplicate service")
+            let fixture = try BisyncServiceFixture.make(
+                parentURL: temporary,
+                name: "duplicate-service",
+                rcloneURL: rcloneURL
+            )
+            try Data("same".utf8).write(to: fixture.localRoot.appendingPathComponent("same.txt"))
+            try copyReplacing(
+                fixture.localRoot.appendingPathComponent("same.txt"),
+                to: fixture.remoteRoot.appendingPathComponent("same.txt")
+            )
+            let connection = try await initialize(fixture)
+            let gate = BisyncHookGate()
+            let firstService = fixture.service(afterPreflight: {
+                await gate.enterAndWait()
+            })
+            let first = Task {
+                try await firstService.synchronize(
+                    connection: connection,
+                    confirmInitialSync: false,
+                    catalogURL: fixture.catalogURL,
+                    storeURL: fixture.storeURL
+                )
+            }
+            await gate.waitUntilEntered()
+            try require(
+                try FolderSyncConnectionStore.loadRecoveringInterrupted(
+                    catalogURL: fixture.catalogURL,
+                    url: fixture.storeURL
+                ).first?.status == .running,
+                "a live operation lock must keep another reader from misclassifying the owner as interrupted"
+            )
+            do {
+                _ = try await fixture.service().synchronize(
+                    connection: connection,
+                    confirmInitialSync: false,
+                    catalogURL: fixture.catalogURL,
+                    storeURL: fixture.storeURL
+                )
+                throw SelfTestFailure("overlapping app-service sync should be rejected by the shared operation lock")
+            } catch FolderSyncConnectionError.operationAlreadyRunning {
+                // Expected.
+            }
+            try require(
+                try persistedRawSyncStatus(url: fixture.storeURL) == "running",
+                "competing sync attempt must not overwrite the active owner's running state"
+            )
+            await gate.release()
+            _ = try await first.value
+        }
+    }
+
+    static func initialize(_ fixture: BisyncServiceFixture) async throws -> FolderSyncConnection {
+        try await fixture.service().synchronize(
+            connection: fixture.connection,
+            confirmInitialSync: true,
+            catalogURL: fixture.catalogURL,
+            storeURL: fixture.storeURL
+        ).connection
+    }
+
+    static func requireLivePhotoBlock(
+        fixture: BisyncServiceFixture,
+        connection: FolderSyncConnection
+    ) async throws {
+        do {
+            _ = try await fixture.service().synchronize(
+                connection: connection,
+                confirmInitialSync: false,
+                catalogURL: fixture.catalogURL,
+                storeURL: fixture.storeURL
+            )
+            throw SelfTestFailure("actual Live Photo metadata change should be blocked before bisync apply")
+        } catch FolderSyncConnectionError.livePhotoMutationBlocked {
+            try require(
+                try fixture.savedConnection().status == .livePhotoBlocked,
+                "Live Photo safety rejection should persist a distinct blocked state"
+            )
+        } catch {
+            print("unexpected Live Photo preflight error: \(error.localizedDescription)")
+            printSyntheticRunLogs(workDirectoryPath: fixture.connection.workDirectoryPath)
+            throw error
+        }
+    }
+}
+
+private struct BisyncServiceFixture: Sendable {
+    let localRoot: URL
+    let remoteRoot: URL
+    let catalogURL: URL
+    let storeURL: URL
+    let configURL: URL
+    let rcloneURL: URL
+    let connection: FolderSyncConnection
+
+    static func make(
+        parentURL: URL,
+        name: String,
+        rcloneURL: URL
+    ) throws -> BisyncServiceFixture {
+        // rclone bisync derives its listing filename from both endpoint paths.
+        // Keep synthetic endpoints deliberately short so the test exercises
+        // bisync semantics rather than macOS's 255-byte filename limit.
+        let base = parentURL.appendingPathComponent(
+            "f-\(UUID().uuidString.prefix(6))",
+            isDirectory: true
+        )
+        let localRoot = base.appendingPathComponent("local", isDirectory: true)
+        let remoteBase = base.appendingPathComponent("remote", isDirectory: true)
+        let remoteRoot = remoteBase.appendingPathComponent("camera", isDirectory: true)
+        let catalogURL = base.appendingPathComponent("catalog.sqlite3")
+        let storeURL = base.appendingPathComponent("sync-connections.json")
+        let stateURL = base.appendingPathComponent("state", isDirectory: true)
+        let recoveryURL = base.appendingPathComponent("recovery", isDirectory: true)
+        let configURL = base.appendingPathComponent("rclone.conf")
+        for directory in [localRoot, remoteRoot, stateURL, recoveryURL] {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        }
+        try """
+        [synthetic-drive]
+        type = alias
+        remote = \(remoteBase.path)
+        description = Synthetic Google Drive
+        """.write(to: configURL, atomically: true, encoding: .utf8)
+
+        let root = try RootRegistry.add(
+            url: localRoot,
+            kind: .inbox,
+            provenance: .localLibrary,
+            usageRole: .staging,
+            catalogURL: catalogURL
+        )
+        let connection = try FolderSyncConnectionManager.create(
+            rootID: root.rootID,
+            remoteName: "synthetic-drive",
+            remoteDisplayName: "Synthetic Google Drive",
+            remotePath: "camera",
+            catalogURL: catalogURL,
+            storeURL: storeURL,
+            stateDirectoryURL: stateURL,
+            recoveryDirectoryURL: recoveryURL
+        )
+        return BisyncServiceFixture(
+            localRoot: localRoot,
+            remoteRoot: remoteRoot,
+            catalogURL: catalogURL,
+            storeURL: storeURL,
+            configURL: configURL,
+            rcloneURL: rcloneURL,
+            connection: connection
+        )
+    }
+
+    func service(
+        allowApply: Bool = true,
+        additionalApplyArguments: [String] = [],
+        afterPreflight: (@Sendable () async throws -> Void)? = nil
+    ) -> RcloneBisyncService {
+        RcloneBisyncService(
+            syntheticTestingExecutableURL: rcloneURL,
+            environment: ["RCLONE_CONFIG": configURL.path],
+            remoteTypeFilter: "alias",
+            allowBisyncApply: allowApply,
+            additionalApplyArguments: additionalApplyArguments,
+            afterPreflight: afterPreflight
+        )
+    }
+
+    func savedConnection() throws -> FolderSyncConnection {
+        guard let value = try FolderSyncConnectionStore.load(url: storeURL)
+            .first(where: { $0.id == connection.id })
+        else {
+            throw SelfTestFailure("synthetic sync connection state is missing")
+        }
+        return value
+    }
+}
+
+private actor BisyncHookGate {
+    private var entered = false
+    private var released = false
+    private var enteredWaiters: [CheckedContinuation<Void, Never>] = []
+    private var releaseWaiter: CheckedContinuation<Void, Never>?
+
+    func enterAndWait() async {
+        entered = true
+        enteredWaiters.forEach { $0.resume() }
+        enteredWaiters.removeAll()
+        if released { return }
+        await withCheckedContinuation { continuation in
+            releaseWaiter = continuation
+        }
+    }
+
+    func waitUntilEntered() async {
+        if entered { return }
+        await withCheckedContinuation { continuation in
+            enteredWaiters.append(continuation)
+        }
+    }
+
+    func release() {
+        released = true
+        releaseWaiter?.resume()
+        releaseWaiter = nil
+    }
+}
+
+private func seedLivePair(
+    _ fixture: BisyncServiceFixture,
+    identifier: String
+) async throws {
+    let still = fixture.localRoot.appendingPathComponent("IMG_0001.JPG")
+    let movie = fixture.localRoot.appendingPathComponent("IMG_0001.MOV")
+    try writeSyntheticJPEG(to: still, contentIdentifier: identifier, pixelValue: 100)
+    try await writeSyntheticTimedMetadataMovie(
+        to: movie,
+        markerValues: [0],
+        contentIdentifier: identifier
+    )
+    try copyReplacing(still, to: fixture.remoteRoot.appendingPathComponent("IMG_0001.JPG"))
+    try copyReplacing(movie, to: fixture.remoteRoot.appendingPathComponent("IMG_0001.MOV"))
+    // Keep a one-file deletion below bisync's configured 25% deletion guard so
+    // the test reaches PhotoArchiveKit's Live Photo preflight instead of being
+    // stopped earlier by rclone's independent bulk-delete protection.
+    for index in 0..<4 {
+        let name = "anchor-\(index).txt"
+        let local = fixture.localRoot.appendingPathComponent(name)
+        try Data("anchor-\(index)".utf8).write(to: local)
+        try copyReplacing(local, to: fixture.remoteRoot.appendingPathComponent(name))
+    }
+}
+
+private func writeSyntheticJPEGReplacing(
+    _ url: URL,
+    contentIdentifier: String? = nil,
+    pixelValue: UInt8
+) throws {
+    try? FileManager.default.removeItem(at: url)
+    try writeSyntheticJPEG(
+        to: url,
+        contentIdentifier: contentIdentifier,
+        pixelValue: pixelValue
+    )
+}
+
+private func writeSyntheticMovieReplacing(
+    _ url: URL,
+    markerValues: [Int8],
+    contentIdentifier: String? = nil
+) async throws {
+    try? FileManager.default.removeItem(at: url)
+    try await writeSyntheticTimedMetadataMovie(
+        to: url,
+        markerValues: markerValues,
+        contentIdentifier: contentIdentifier
+    )
+}
+
+private func copyReplacing(_ source: URL, to destination: URL) throws {
+    try FileManager.default.createDirectory(
+        at: destination.deletingLastPathComponent(),
+        withIntermediateDirectories: true
+    )
+    try? FileManager.default.removeItem(at: destination)
+    try FileManager.default.copyItem(at: source, to: destination)
+}
+
+private func visibleUserFiles(in root: URL) throws -> [URL] {
+    let accessPrefix = RcloneBisyncService.accessFilePrefix
+    guard let enumerator = FileManager.default.enumerator(
+        at: root,
+        includingPropertiesForKeys: [.isRegularFileKey],
+        options: [.skipsHiddenFiles]
+    ) else { return [] }
+    return try enumerator.compactMap { item -> URL? in
+        guard let url = item as? URL,
+              try url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile == true,
+              !url.lastPathComponent.hasPrefix(accessPrefix),
+              url.lastPathComponent != RootMarkerStore.fileName
+        else { return nil }
+        return url
+    }
+}
+
+private func persistedRawSyncStatus(url: URL) throws -> String? {
+    let object = try JSONSerialization.jsonObject(with: Data(contentsOf: url))
+    guard let dictionary = object as? [String: Any],
+          let connections = dictionary["connections"] as? [[String: Any]]
+    else { return nil }
+    return connections.first?["status"] as? String
+}
+
+private func printSyntheticRunLogs(workDirectoryPath: String) {
+    let root = URL(fileURLWithPath: workDirectoryPath, isDirectory: true)
+        .appendingPathComponent("runs", isDirectory: true)
+    guard let enumerator = FileManager.default.enumerator(at: root, includingPropertiesForKeys: nil) else {
+        return
+    }
+    for case let url as URL in enumerator {
+        guard url.pathExtension == "jsonl",
+              let text = try? String(contentsOf: url, encoding: .utf8)
+        else { continue }
+        print("--- synthetic log \(url.lastPathComponent) ---")
+        print(text)
+    }
+}
+
 private func executableExists(_ name: String) -> Bool {
     let environmentPath = ProcessInfo.processInfo.environment["PATH"] ?? ""
     return environmentPath.split(separator: ":").contains { directory in
@@ -3184,10 +4430,67 @@ private func executableExists(_ name: String) -> Bool {
     }
 }
 
+private func executableURL(_ name: String) -> URL? {
+    let environmentPath = ProcessInfo.processInfo.environment["PATH"] ?? ""
+    for directory in environmentPath.split(separator: ":") {
+        let candidate = URL(fileURLWithPath: String(directory)).appendingPathComponent(name)
+        if FileManager.default.isExecutableFile(atPath: candidate.path) {
+            return candidate
+        }
+    }
+    for path in ["/opt/homebrew/bin/\(name)", "/usr/local/bin/\(name)"] {
+        if FileManager.default.isExecutableFile(atPath: path) {
+            return URL(fileURLWithPath: path)
+        }
+    }
+    return nil
+}
+
+private func writeSyntheticJPEG(
+    to url: URL,
+    contentIdentifier: String? = nil,
+    pixelValue: UInt8 = 128
+) throws {
+    let bytes: [UInt8] = [pixelValue, 255 &- pixelValue, pixelValue / 2, 255]
+    guard let provider = CGDataProvider(data: Data(bytes) as CFData),
+          let image = CGImage(
+              width: 1,
+              height: 1,
+              bitsPerComponent: 8,
+              bitsPerPixel: 32,
+              bytesPerRow: 4,
+              space: CGColorSpaceCreateDeviceRGB(),
+              bitmapInfo: CGBitmapInfo(rawValue: CGImageAlphaInfo.last.rawValue),
+              provider: provider,
+              decode: nil,
+              shouldInterpolate: false,
+              intent: .defaultIntent
+          ),
+          let destination = CGImageDestinationCreateWithURL(
+              url as CFURL,
+              "public.jpeg" as CFString,
+              1,
+              nil
+          )
+    else {
+        throw SelfTestFailure("could not create synthetic JPEG")
+    }
+
+    var properties: [CFString: Any] = [:]
+    if let contentIdentifier {
+        properties[kCGImagePropertyMakerAppleDictionary] = ["17": contentIdentifier]
+    }
+    CGImageDestinationAddImage(destination, image, properties as CFDictionary)
+    guard CGImageDestinationFinalize(destination) else {
+        throw SelfTestFailure("could not finalize synthetic JPEG")
+    }
+}
+
 private func writeSyntheticTimedMetadataMovie(
     to url: URL,
     markerValues: [Int8],
-    validDataType: Bool = true
+    validDataType: Bool = true,
+    contentIdentifier: String? = nil
 ) async throws {
     let stillImageTimeIdentifier = "mdta/com.apple.quicktime.still-image-time"
     let unrelatedIdentifier = "mdta/com.example.photoarchive.synthetic"
@@ -3216,6 +4519,13 @@ private func writeSyntheticTimedMetadataMovie(
     }
 
     let writer = try AVAssetWriter(outputURL: url, fileType: .mov)
+    if let contentIdentifier {
+        let item = AVMutableMetadataItem()
+        item.identifier = .quickTimeMetadataContentIdentifier
+        item.dataType = kCMMetadataBaseDataType_UTF8 as String
+        item.value = NSString(string: contentIdentifier)
+        writer.metadata = [item]
+    }
     let input = AVAssetWriterInput(
         mediaType: .metadata,
         outputSettings: nil,
@@ -3548,6 +4858,130 @@ private func syntheticLocalDuplicateLivePhotoReport(
                 groupID: "GLOCALVIDEO",
                 byteSize: 200,
                 members: [rootOccurrence.resources[1], nestedOccurrence.resources[1]]
+            )
+        ],
+        eventSuggestions: [],
+        warnings: [],
+        filesModified: false
+    )
+}
+
+private func syntheticStillOnlyDuplicateLivePhotoReport() -> ScanReport {
+    let rootID = "RSTILLONLYDUPLIVE"
+    let assetID = "ASTILLONLYDUPLIVE"
+    let capture = CaptureTime(
+        localTimestamp: "2026-03-21T13:25:32",
+        utcOffset: "+09:00",
+        instant: Date(timeIntervalSince1970: 1_774_078_732),
+        source: .exifDateTimeOriginal,
+        confidence: .trusted
+    )
+    let stableFirst = ScannedResourceReport(
+        resourceID: "FSTILLONLYA",
+        assetID: assetID,
+        rootID: rootID,
+        rootLabel: "Takeout",
+        relativePath: "2026/IMG_0002.HEIC",
+        fileName: "IMG_0002.HEIC",
+        mediaKind: .image,
+        role: .photo,
+        byteSize: 100,
+        addedAt: Date(timeIntervalSince1970: 1_777_000_006),
+        captureTime: capture
+    )
+    let stableSecond = ScannedResourceReport(
+        resourceID: "FSTILLONLYB",
+        assetID: assetID,
+        rootID: rootID,
+        rootLabel: "Takeout",
+        relativePath: "Album/IMG_0002.HEIC",
+        fileName: "IMG_0002.HEIC",
+        mediaKind: .image,
+        role: .photo,
+        byteSize: 100,
+        addedAt: Date(timeIntervalSince1970: 1_777_000_000),
+        captureTime: capture
+    )
+    let firstReference = ResourceReference(
+        rootID: rootID,
+        rootLabel: "Takeout",
+        relativePath: stableFirst.relativePath,
+        role: .photo,
+        byteSize: 100
+    )
+    let secondReference = ResourceReference(
+        rootID: rootID,
+        rootLabel: "Takeout",
+        relativePath: stableSecond.relativePath,
+        role: .photo,
+        byteSize: 100
+    )
+    let now = Date(timeIntervalSince1970: 1)
+    return ScanReport(
+        sessionID: "SSTILLONLYDUPLIVE",
+        startedAt: now,
+        completedAt: now,
+        catalogPath: "/synthetic/still-only-duplicate-live.sqlite3",
+        summary: ScanSummary(
+            rootCount: 1,
+            resourceCount: 2,
+            logicalAssetCount: 1,
+            livePhotoAssetCount: 1,
+            exactDuplicateGroupCount: 1,
+            eventSuggestionCount: 0,
+            warningCount: 0
+        ),
+        roots: [
+            RootScanReport(
+                rootID: rootID,
+                label: "Takeout",
+                kind: .importSource,
+                usageRole: .importSource,
+                provenance: .googleTakeout,
+                canonicalPath: "/synthetic/still-only-takeout",
+                mediaFileCount: 2,
+                completeLivePhotos: 0,
+                stillOnlyLiveResources: 2,
+                videoOnlyLiveResources: 0,
+                standaloneImages: 0,
+                standaloneVideos: 0,
+                sidecars: 0,
+                metadataProbeFailures: 0,
+                sourceFolderSemanticsCaptured: true
+            )
+        ],
+        resources: [stableFirst, stableSecond],
+        livePhotos: [
+            LivePhotoAssetReport(
+                assetID: assetID,
+                occurrenceCount: 2,
+                stillCopyCount: 2,
+                videoCopyCount: 0,
+                occurrences: [
+                    LivePhotoOccurrenceReport(
+                        rootID: rootID,
+                        rootLabel: "Takeout",
+                        status: .stillOnly,
+                        stillCount: 1,
+                        videoCount: 0,
+                        resources: [firstReference]
+                    ),
+                    LivePhotoOccurrenceReport(
+                        rootID: rootID,
+                        rootLabel: "Takeout",
+                        status: .stillOnly,
+                        stillCount: 1,
+                        videoCount: 0,
+                        resources: [secondReference]
+                    )
+                ]
+            )
+        ],
+        exactDuplicateGroups: [
+            ExactDuplicateGroupReport(
+                groupID: "GSTILLONLYDUPLIVE",
+                byteSize: 100,
+                members: [firstReference, secondReference]
             )
         ],
         eventSuggestions: [],

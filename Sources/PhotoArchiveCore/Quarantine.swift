@@ -162,8 +162,11 @@ public enum QuarantineExecutor {
         report: ScanReport,
         plan: ReconciliationPlan,
         targetURL rawTargetURL: URL,
-        approvedPreferenceItemIDs: Set<String> = []
+        approvedPreferenceItemIDs: Set<String> = [],
+        catalogURL: URL = PhotoArchivePaths.defaultCatalogURL
     ) throws -> QuarantineReport {
+        let operationLock = try PhotoArchiveOperationLock.acquire(catalogURL: catalogURL)
+        defer { operationLock.release() }
         let verified = try verify(
             report: report,
             plan: plan,

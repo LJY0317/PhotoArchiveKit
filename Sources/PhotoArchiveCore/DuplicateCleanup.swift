@@ -112,7 +112,8 @@ public enum DuplicateCleanupExecutor {
         report: ScanReport,
         plan: ReconciliationPlan,
         destination: DuplicateCleanupDestination,
-        approvedPreferenceItemIDs: Set<String> = []
+        approvedPreferenceItemIDs: Set<String> = [],
+        catalogURL: URL = PhotoArchivePaths.defaultCatalogURL
     ) throws -> DuplicateCleanupReport {
         switch destination {
         case .customQuarantine(let targetURL):
@@ -120,7 +121,8 @@ public enum DuplicateCleanupExecutor {
                 report: report,
                 plan: plan,
                 targetURL: targetURL,
-                approvedPreferenceItemIDs: approvedPreferenceItemIDs
+                approvedPreferenceItemIDs: approvedPreferenceItemIDs,
+                catalogURL: catalogURL
             )
             let removed = EmptyParentDirectoryCleaner.removeNowEmptyParents(
                 sourceRecords: quarantine.moves,
@@ -131,6 +133,8 @@ public enum DuplicateCleanupExecutor {
                 removedEmptyDirectoryCount: removed.count
             )
         case .systemTrash:
+            let operationLock = try PhotoArchiveOperationLock.acquire(catalogURL: catalogURL)
+            defer { operationLock.release() }
             return try applySystemTrash(
                 report: report,
                 plan: plan,

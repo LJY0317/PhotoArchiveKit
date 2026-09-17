@@ -171,9 +171,12 @@ public enum OrganizationExecutor {
     public static func apply(
         report: ScanReport,
         plan: OrganizationPlan,
+        catalogURL: URL = PhotoArchivePaths.defaultCatalogURL,
         manifestDirectoryURL: URL = PhotoArchivePaths.defaultOperationsDirectoryURL,
         commitCatalog: () throws -> Void
     ) throws -> OrganizationApplyReport {
+        let operationLock = try PhotoArchiveOperationLock.acquire(catalogURL: catalogURL)
+        defer { operationLock.release() }
         let verifiedItems = try verify(report: report, plan: plan)
         let allMoves = verifiedItems.flatMap(\.moves)
         let fileManager = FileManager.default

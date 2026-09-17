@@ -13,11 +13,10 @@ struct SidecarAssociationCandidate: Sendable {
 }
 
 enum SidecarAssociationDetector {
-    private struct TakeoutSidecar: Decodable {
-        let title: String?
-    }
-
-    static func detect(in resources: [ProbedResource]) -> [SidecarAssociationCandidate] {
+    static func detect(
+        in resources: [ProbedResource],
+        takeoutIndex: TakeoutSidecarIndex
+    ) -> [SidecarAssociationCandidate] {
         var candidates: [SidecarAssociationCandidate] = []
         var usedSidecarIndices = Set<Int>()
 
@@ -31,15 +30,14 @@ enum SidecarAssociationDetector {
             guard resource.mediaKind == .sidecar,
                   resource.fileExtension == "json",
                   resource.root.provenance == .googleTakeout,
-                  let data = try? Data(contentsOf: resource.url),
-                  let sidecar = try? JSONDecoder().decode(TakeoutSidecar.self, from: data),
-                  let title = sidecar.title,
-                  !title.isEmpty
+                  let entry = takeoutIndex.entriesBySidecarPath[
+                    TakeoutSidecarIndex.normalizedPath(resource.url)
+                  ]
             else {
                 continue
             }
 
-            let mediaURL = resource.url.deletingLastPathComponent().appendingPathComponent(title)
+            let mediaURL = resource.url.deletingLastPathComponent().appendingPathComponent(entry.title)
             guard let targetIndex = mediaIndexByNormalizedPath[normalizedPath(mediaURL)] else {
                 continue
             }
@@ -105,6 +103,6 @@ enum SidecarAssociationDetector {
     }
 
     private static func normalizedPath(_ url: URL) -> String {
-        url.standardizedFileURL.path.decomposedStringWithCanonicalMapping
+        TakeoutSidecarIndex.normalizedPath(url)
     }
 }

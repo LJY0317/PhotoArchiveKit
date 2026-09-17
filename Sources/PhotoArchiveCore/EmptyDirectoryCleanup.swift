@@ -115,6 +115,8 @@ public enum EmptyDirectoryCleanupExecutor {
         organizationManifestURL: URL,
         catalogURL: URL
     ) throws -> EmptyDirectoryCleanupReport {
+        let operationLock = try PhotoArchiveOperationLock.acquire(catalogURL: catalogURL)
+        defer { operationLock.release() }
         let verified = try verify(
             organizationManifestURL: organizationManifestURL,
             catalogURL: catalogURL

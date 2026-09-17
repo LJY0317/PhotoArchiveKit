@@ -28,6 +28,9 @@
 - Live Photo asset graph, provenance, root role, keeper policy, mutation/archive transaction, agent-safe boundary는 PhotoArchiveKit core가 소유한다.
 - GUI에는 위치 용도를 `기본`, `장기 보관`, `읽기 전용`만 노출한다. 기존 catalog 호환과 import 안전성에 필요한 세부 role/provenance는 core 내부에만 유지하고 일반 사용자에게 설정을 요구하지 않는다.
 - GUI는 local-private human surface다. 사용자 문구는 자연어를 쓰고 internal ID/reason/debug 용어는 필요한 고급 정보가 아니면 숨긴다. 현재는 한국어 완성도를 우선한다.
+- GUI 디자인 의도와 정보 구조는 지원 macOS 전체에 공통으로 유지하되, sidebar/list/toolbar/button/scroller/material 같은 표준 UI는 SwiftUI/AppKit의 semantic/native 표현을 우선한다. Finder를 흉내 내기 위한 고정 RGB, OS별 픽셀 값, 커스텀 scroller 같은 복제는 피한다.
+- SwiftUI의 표준 container bridge가 실제 OS에서 확인된 private gutter/edge 같은 회귀를 만드는 경우에는 앱 전체를 비네이티브 스택으로 바꾸지 말고, native `NSWindow`/material/scroller/SF Symbols/system font는 유지하면서 해당 surface만 앱 소유 SwiftUI layout으로 교체할 수 있다. duplicate-review sidebar는 이 예외에 해당하며 `NavigationSplitView + List(.sidebar)` source-list bridge를 다시 도입하지 않는다.
+- 새 OS의 시스템 디자인 API(예: Liquid Glass)는 해당 OS에서만 좁게 사용하고, 이전 지원 OS에서는 그 버전의 native control/style을 유지한다. 실제 API·렌더링 차이가 확인될 때만 `#available` 분기를 추가하며, 새 디자인 자체를 특정 OS 전용 하드코딩으로 만들지 않는다.
 
 ## 작업·Git
 - 장기 branch는 `main` 하나를 기본으로 한다. 큰 격리 실험만 임시 feature branch/worktree를 쓰고 완료 후 합쳐 삭제한다.

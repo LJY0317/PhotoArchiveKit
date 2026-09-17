@@ -24,6 +24,7 @@ public enum DuplicateReviewPresentationRationale: String, Sendable, Codable {
     case shallowerPath = "shallower_path"
     case deterministicTieBreak = "deterministic_tie_break"
     case completeLivePhotoOccurrence = "complete_live_photo_occurrence"
+    case clearerLivePhotoStructure = "clearer_live_photo_structure"
     case sourceSemantics = "source_semantics"
 }
 
@@ -221,11 +222,15 @@ public enum DuplicateReviewPresentationBuilder {
             throw DuplicateReviewPresentationError.noReusableSnapshot
         }
         let plan = ReconciliationPlanner.makePlan(from: report)
+        let resourceIDByKey = Dictionary(uniqueKeysWithValues: report.resources.map {
+            (CanonicalResourceKey(rootID: $0.rootID, relativePath: $0.relativePath), $0.resourceID)
+        })
         let resourceIDs = Set(plan.items.flatMap { item in
             (item.preferredResources + item.candidateResources).compactMap { reference in
-                report.resources.first(where: {
-                    $0.rootID == reference.rootID && $0.relativePath == reference.relativePath
-                })?.resourceID
+                resourceIDByKey[CanonicalResourceKey(
+                    rootID: reference.rootID,
+                    relativePath: reference.relativePath
+                )]
             }
         })
         let details = try scanner.duplicateReviewResourceDetails(resourceIDs: Array(resourceIDs))
@@ -275,7 +280,8 @@ public enum DuplicateReviewPresentationBuilder {
                     rationale: rationale(
                         for: item,
                         rootsByID: rootsByID,
-                        resourcesByKey: resourcesByKey
+                        resourcesByKey: resourcesByKey,
+                        livePhoto: livePhotosByID[item.subjectID]
                     ),
                     preferredResources: preferred,
                     candidateResources: candidates,
@@ -565,21 +571,30 @@ public enum DuplicateReviewPresentationBuilder {
     private static func rationale(
         for item: ReconciliationPlanItem,
         rootsByID: [String: RootScanReport],
-        resourcesByKey: [CanonicalResourceKey: ScannedResourceReport]
+        resourcesByKey: [CanonicalResourceKey: ScannedResourceReport],
+        livePhoto: LivePhotoAssetReport?
     ) -> DuplicateReviewPresentationRationale {
+        if let livePhoto,
+           let occurrenceRationale = livePhotoOccurrenceRationale(
+               item: item,
+               livePhoto: livePhoto,
+               rootsByID: rootsByID,
+               resourcesByKey: resourcesByKey
+           ) {
+            return occurrenceRationale
+        }
+
         switch item.reason {
-        case .canonicalLocalLivePhotoOccurrence,
-                .livePhotoCanonicalCoverage,
-                .livePhotoIncompleteOccurrenceExactCoverage:
-            return .completeLivePhotoOccurrence
         case .preferredNonTakeoutExactCopy,
                 .takeoutSourceFolderSemanticsCaptured,
                 .takeoutCollectionSemanticsPending:
             return .sourceSemantics
-        case .noCompletePreferredLivePhoto,
+        case .canonicalExactCopy,
+                .canonicalLocalLivePhotoOccurrence,
+                .livePhotoCanonicalCoverage,
+                .livePhotoIncompleteOccurrenceExactCoverage,
+                .noCompletePreferredLivePhoto,
                 .uncoveredLivePhotoVariant:
-            return .completeLivePhotoOccurrence
-        case .canonicalExactCopy:
             break
         }
 
@@ -605,5 +620,61 @@ public enum DuplicateReviewPresentationBuilder {
         case .shallowerPath: return .shallowerPath
         case .deterministicTieBreak: return .deterministicTieBreak
         }
+    }
+
+    private static func livePhotoOccurrenceRationale(
+        item: ReconciliationPlanItem,
+        livePhoto: LivePhotoAssetReport,
+        rootsByID: [String: RootScanReport],
+        resourcesByKey: [CanonicalResourceKey: ScannedResourceReport]
+    ) -> DuplicateReviewPresentationRationale? {
+        let preferredKeys = Set(item.preferredResources.map(resourceKey))
+        guard !preferredKeys.isEmpty,
+              let preferredOccurrence = livePhoto.occurrences.first(where: {
+                  Set($0.resources.map(resourceKey)) == preferredKeys
+              })
+        else {
+            return nil
+        }
+
+        let candidateKeys = Set(item.candidateResources.map(resourceKey))
+        let candidateOccurrences = livePhoto.occurrences.filter { occurrence in
+            let keys = Set(occurrence.resources.map(resourceKey))
+            return !keys.isEmpty && keys.isSubset(of: candidateKeys)
+        }
+        guard !candidateOccurrences.isEmpty else { return nil }
+
+        let rationales = candidateOccurrences.map {
+            CanonicalKeeperPolicy.occurrencePreferenceRationale(
+                preferred: preferredOccurrence,
+                candidate: $0,
+                rootsByID: rootsByID,
+                resourcesByKey: resourcesByKey
+            )
+        }
+
+        let preferredOrder: [CanonicalKeeperPolicy.OccurrencePreferenceRationale] = [
+            .completeLivePhotoOccurrence,
+            .clearerLivePhotoStructure,
+            .protectedOrPreferredRoot,
+            .strongerCaptureEvidence,
+            .shallowerPath,
+            .deterministicTieBreak
+        ]
+        guard let rationale = preferredOrder.first(where: { rationales.contains($0) }) else {
+            return nil
+        }
+        switch rationale {
+        case .completeLivePhotoOccurrence: return .completeLivePhotoOccurrence
+        case .clearerLivePhotoStructure: return .clearerLivePhotoStructure
+        case .protectedOrPreferredRoot: return .protectedOrPreferredRoot
+        case .strongerCaptureEvidence: return .strongerCaptureEvidence
+        case .shallowerPath: return .shallowerPath
+        case .deterministicTieBreak: return .deterministicTieBreak
+        }
+    }
+
+    private static func resourceKey(_ resource: ResourceReference) -> CanonicalResourceKey {
+        CanonicalResourceKey(rootID: resource.rootID, relativePath: resource.relativePath)
     }
 }
