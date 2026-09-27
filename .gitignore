@@ -1,0 +1,102 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# Swift Package Manager and Xcode
+.build/
+.swiftpm/
+DerivedData/
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+*.xcuserstate
+
+# Local configuration and secrets
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.mobileprovision
+*client_secret*.json
+*credentials*.json
+*oauth*.json
+*tokens*.json
+secrets/
+credentials/
+tokens/
+
+# PhotoArchiveKit runtime state
+*.sqlite
+*.sqlite3
+*.sqlite-shm
+*.sqlite-wal
+*.sqlite3-shm
+*.sqlite3-wal
+*.db
+*.db-shm
+*.db-wal
+*.jsonl
+*.log
+*.bak
+*.cache
+# Local maintainer state and private working notes
+.local/
+/STATE.md
+/MILESTONES.md
+state/private/
+test-output/
+local-reports/
+integration-output/
+integration-cache/
+agent-reports/
+*.agent-report.json
+
+# Never commit personal media or provider exports
+Photo Inbox/
+Photo Archive/
+Takeout/
+Google Takeout/
+*.photoslibrary/
+fixtures/private/
+private-fixtures/
+
+# Common media formats: public fixtures must be explicitly force-added only
+*.heic
+*.heif
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.tif
+*.tiff
+*.dng
+*.arw
+*.cr2
+*.cr3
+*.nef
+*.raf
+*.mov
+*.mp4
+*.m4v
+*.3gp
+*.3g2
+*.aae
+*.xmp
+*.zip
+*.tar
+*.tgz
+*.tar.gz
+*.7z
+
+# Editor files
+.vscode/
+.idea/
+*.swp
+*~
+
+# Local maintainer instructions
+/AGENTS.md

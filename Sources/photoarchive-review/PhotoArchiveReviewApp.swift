@@ -1,0 +1,65 @@
+import AppKit
+import SwiftUI
+
+final class PhotoArchiveReviewAppDelegate: NSObject, NSApplicationDelegate {
+    func applicationWillFinishLaunching(_ notification: Notification) {
+        // Keep native AppKit help tags, but use the long-standing Mac-style
+        // one-second initial hover delay for this app only. Do not alter the
+        // user's global tooltip preference.
+        UserDefaults.standard.set(1000, forKey: "NSInitialToolTipDelay")
+    }
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.setActivationPolicy(.regular)
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    func applicationShouldHandleReopen(
+        _ sender: NSApplication,
+        hasVisibleWindows flag: Bool
+    ) -> Bool {
+        if !flag {
+            sender.windows.first?.makeKeyAndOrderFront(nil)
+        }
+        sender.activate(ignoringOtherApps: true)
+        return true
+    }
+
+    func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
+        true
+    }
+}
+
+@main
+struct PhotoArchiveReviewApp: App {
+    @NSApplicationDelegateAdaptor(PhotoArchiveReviewAppDelegate.self) private var appDelegate
+
+    private var usesSyncUIFixture: Bool {
+        ProcessInfo.processInfo.environment["PHOTOARCHIVE_SYNC_UI_FIXTURE"] == "1"
+            || CommandLine.arguments.contains("--sync-ui-fixture")
+    }
+
+    var body: some Scene {
+        WindowGroup("PhotoArchiveKit") {
+            if usesSyncUIFixture {
+                FolderSyncUIFixtureView()
+            } else {
+                ReviewRootView()
+                    .frame(minWidth: 980, minHeight: 640)
+            }
+        }
+        .defaultSize(width: 1240, height: 800)
+        .commands {
+            CommandGroup(after: .sidebar) {
+                Button("다시 불러오기") {
+                    NotificationCenter.default.post(name: .photoArchiveReloadReview, object: nil)
+                }
+                .keyboardShortcut("r", modifiers: .command)
+            }
+        }
+    }
+}
+
+extension Notification.Name {
+    static let photoArchiveReloadReview = Notification.Name("PhotoArchiveReloadReview")
+}
