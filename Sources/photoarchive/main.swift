@@ -63,13 +63,61 @@ struct PhotoArchiveCLI {
         }
     }
 
+    private enum JSONOutputMode {
+        case text
+        case json
+        case agentJSON
+    }
+
+    private struct JSONOutputOptions {
+        private var requestsJSON = false
+        private var requestsAgentJSON = false
+
+        var mode: JSONOutputMode {
+            if requestsAgentJSON { return .agentJSON }
+            if requestsJSON { return .json }
+            return .text
+        }
+
+        mutating func consume(_ argument: String) {
+            switch argument {
+            case "--json":
+                requestsJSON = true
+            case "--agent-json":
+                requestsAgentJSON = true
+            default:
+                break
+            }
+        }
+
+        func validate() throws {
+            if requestsJSON && requestsAgentJSON {
+                throw CLIError("Use either --json or --agent-json, not both.")
+            }
+        }
+
+        func write(
+            json: () throws -> Void,
+            agentJSON: () throws -> Void,
+            text: () -> Void
+        ) throws {
+            switch mode {
+            case .text:
+                text()
+            case .json:
+                try json()
+            case .agentJSON:
+                try agentJSON()
+            }
+        }
+    }
+
     private static func runArchiveCopy(_ arguments: [String]) async throws {
         var catalogURL: URL?
         var destinationURL: URL?
         var rootBindings: [ArchiveCopyRootBinding] = []
         var apply = false
-        var outputJSON = false
-        var outputAgentJSON = false
+        var outputOptions = JSONOutputOptions()
         var planPaths: [String] = []
 
         var index = 0
@@ -86,10 +134,8 @@ struct PhotoArchiveCLI {
                 ))
             case "--apply":
                 apply = true
-            case "--json":
-                outputJSON = true
-            case "--agent-json":
-                outputAgentJSON = true
+            case "--json", "--agent-json":
+                outputOptions.consume(argument)
             case "--help", "-h":
                 printArchiveCopyHelp()
                 return
@@ -105,9 +151,7 @@ struct PhotoArchiveCLI {
         guard planPaths.count == 1 else {
             throw CLIError("archive-copy requires exactly one immutable archive plan path.")
         }
-        if outputJSON && outputAgentJSON {
-            throw CLIError("Use either --json or --agent-json, not both.")
-        }
+        try outputOptions.validate()
 
         let planURL = fileURL(planPaths[0])
         let report: ArchiveCopyReport
@@ -127,20 +171,17 @@ struct PhotoArchiveCLI {
             )
         }
 
-        if outputAgentJSON {
-            try printJSON(AgentSafeArchiveCopyReport(report: report))
-        } else if outputJSON {
-            try printJSON(report)
-        } else {
-            printArchiveCopyReport(report)
-        }
+        try outputOptions.write(
+            json: { try printJSON(report) },
+            agentJSON: { try printJSON(AgentSafeArchiveCopyReport(report: report)) },
+            text: { printArchiveCopyReport(report) }
+        )
     }
 
     private static func runArchiveIndex(_ arguments: [String]) async throws {
         var catalogURL = PhotoArchivePaths.defaultCatalogURL
         var apply = false
-        var outputJSON = false
-        var outputAgentJSON = false
+        var outputOptions = JSONOutputOptions()
         var reuseMetadataCache = true
         var reuseHashCache = true
         var showProgress = true
@@ -155,10 +196,8 @@ struct PhotoArchiveCLI {
                 catalogURL = fileURL(try value(after: argument, at: &index, in: arguments))
             case "--apply":
                 apply = true
-            case "--json":
-                outputJSON = true
-            case "--agent-json":
-                outputAgentJSON = true
+            case "--json", "--agent-json":
+                outputOptions.consume(argument)
             case "--fresh":
                 reuseMetadataCache = false
                 reuseHashCache = false
@@ -185,9 +224,7 @@ struct PhotoArchiveCLI {
         guard paths.count == 1 else {
             throw CLIError("archive-index requires exactly one existing archive root path.")
         }
-        if outputJSON && outputAgentJSON {
-            throw CLIError("Use either --json or --agent-json, not both.")
-        }
+        try outputOptions.validate()
 
         let progressRenderer = ScanProgressRenderer(enabled: showProgress)
         defer { progressRenderer.finish() }
@@ -208,20 +245,17 @@ struct PhotoArchiveCLI {
             maxConcurrentProbes: maxConcurrency,
             progressHandler: progressHandler
         )
-        if outputAgentJSON {
-            try printJSON(AgentSafeArchiveRootInventoryReport(report: report))
-        } else if outputJSON {
-            try printJSON(report)
-        } else {
-            printArchiveRootInventoryReport(report)
-        }
+        try outputOptions.write(
+            json: { try printJSON(report) },
+            agentJSON: { try printJSON(AgentSafeArchiveRootInventoryReport(report: report)) },
+            text: { printArchiveRootInventoryReport(report) }
+        )
     }
 
     private static func runRestoreQuarantine(_ arguments: [String]) throws {
         var catalogURL = PhotoArchivePaths.defaultCatalogURL
         var apply = false
-        var outputJSON = false
-        var outputAgentJSON = false
+        var outputOptions = JSONOutputOptions()
         var manifestPaths: [String] = []
 
         var index = 0
@@ -232,10 +266,8 @@ struct PhotoArchiveCLI {
                 catalogURL = fileURL(try value(after: argument, at: &index, in: arguments))
             case "--apply":
                 apply = true
-            case "--json":
-                outputJSON = true
-            case "--agent-json":
-                outputAgentJSON = true
+            case "--json", "--agent-json":
+                outputOptions.consume(argument)
             case "--help", "-h":
                 printRestoreQuarantineHelp()
                 return
@@ -251,29 +283,24 @@ struct PhotoArchiveCLI {
         guard manifestPaths.count == 1 else {
             throw CLIError("restore-quarantine requires exactly one manifest.json path.")
         }
-        if outputJSON && outputAgentJSON {
-            throw CLIError("Use either --json or --agent-json, not both.")
-        }
+        try outputOptions.validate()
 
         let manifestURL = fileURL(manifestPaths[0])
         let report = try apply
             ? QuarantineRestoreExecutor.apply(manifestURL: manifestURL, catalogURL: catalogURL)
             : QuarantineRestoreExecutor.preflight(manifestURL: manifestURL, catalogURL: catalogURL)
 
-        if outputAgentJSON {
-            try printJSON(AgentSafeQuarantineRestoreReport(report: report))
-        } else if outputJSON {
-            try printJSON(report)
-        } else {
-            printQuarantineRestoreReport(report)
-        }
+        try outputOptions.write(
+            json: { try printJSON(report) },
+            agentJSON: { try printJSON(AgentSafeQuarantineRestoreReport(report: report)) },
+            text: { printQuarantineRestoreReport(report) }
+        )
     }
 
     private static func runCleanupEmptyDirectories(_ arguments: [String]) throws {
         var catalogURL = PhotoArchivePaths.defaultCatalogURL
         var apply = false
-        var outputJSON = false
-        var outputAgentJSON = false
+        var outputOptions = JSONOutputOptions()
         var manifestPaths: [String] = []
 
         var index = 0
@@ -284,10 +311,8 @@ struct PhotoArchiveCLI {
                 catalogURL = fileURL(try value(after: argument, at: &index, in: arguments))
             case "--apply":
                 apply = true
-            case "--json":
-                outputJSON = true
-            case "--agent-json":
-                outputAgentJSON = true
+            case "--json", "--agent-json":
+                outputOptions.consume(argument)
             case "--help", "-h":
                 printCleanupEmptyDirectoriesHelp()
                 return
@@ -303,9 +328,7 @@ struct PhotoArchiveCLI {
         guard manifestPaths.count == 1 else {
             throw CLIError("cleanup-empty-dirs requires exactly one organization.json path.")
         }
-        if outputJSON && outputAgentJSON {
-            throw CLIError("Use either --json or --agent-json, not both.")
-        }
+        try outputOptions.validate()
 
         let manifestURL = fileURL(manifestPaths[0])
         let report = try apply
@@ -318,13 +341,11 @@ struct PhotoArchiveCLI {
                 catalogURL: catalogURL
             )
 
-        if outputAgentJSON {
-            try printJSON(AgentSafeEmptyDirectoryCleanupReport(report: report))
-        } else if outputJSON {
-            try printJSON(report)
-        } else {
-            printEmptyDirectoryCleanupReport(report)
-        }
+        try outputOptions.write(
+            json: { try printJSON(report) },
+            agentJSON: { try printJSON(AgentSafeEmptyDirectoryCleanupReport(report: report)) },
+            text: { printEmptyDirectoryCleanupReport(report) }
+        )
     }
 
     private static func runCatalog(_ arguments: [String]) throws {
@@ -337,8 +358,7 @@ struct PhotoArchiveCLI {
         case "export":
             var catalogURL = PhotoArchivePaths.defaultCatalogURL
             var outputURL: URL?
-            var outputJSON = false
-            var outputAgentJSON = false
+            var outputOptions = JSONOutputOptions()
             var index = 0
             while index < rest.count {
                 let argument = rest[index]
@@ -347,10 +367,8 @@ struct PhotoArchiveCLI {
                     catalogURL = fileURL(try value(after: argument, at: &index, in: rest))
                 case "--output":
                     outputURL = fileURL(try value(after: argument, at: &index, in: rest))
-                case "--json":
-                    outputJSON = true
-                case "--agent-json":
-                    outputAgentJSON = true
+                case "--json", "--agent-json":
+                    outputOptions.consume(argument)
                 case "--help", "-h":
                     printCatalogExportHelp()
                     return
@@ -362,26 +380,21 @@ struct PhotoArchiveCLI {
             guard let outputURL else {
                 throw CLIError("catalog export requires --output PATH.")
             }
-            if outputJSON && outputAgentJSON {
-                throw CLIError("Use either --json or --agent-json, not both.")
-            }
+            try outputOptions.validate()
             let report = try CatalogSnapshotExporter.export(
                 catalogURL: catalogURL,
                 outputURL: outputURL
             )
-            if outputAgentJSON {
-                try printJSON(AgentSafeCatalogSnapshotReport(report: report))
-            } else if outputJSON {
-                try printJSON(report)
-            } else {
-                printCatalogSnapshotReport(report)
-            }
+            try outputOptions.write(
+                json: { try printJSON(report) },
+                agentJSON: { try printJSON(AgentSafeCatalogSnapshotReport(report: report)) },
+                text: { printCatalogSnapshotReport(report) }
+            )
 
         case "restore":
             var destinationURL: URL?
             var apply = false
-            var outputJSON = false
-            var outputAgentJSON = false
+            var outputOptions = JSONOutputOptions()
             var snapshotPaths: [String] = []
             var rootBindings: [CatalogRootBinding] = []
             var index = 0
@@ -396,10 +409,8 @@ struct PhotoArchiveCLI {
                     ))
                 case "--apply":
                     apply = true
-                case "--json":
-                    outputJSON = true
-                case "--agent-json":
-                    outputAgentJSON = true
+                case "--json", "--agent-json":
+                    outputOptions.consume(argument)
                 case "--help", "-h":
                     printCatalogRestoreHelp()
                     return
@@ -417,9 +428,7 @@ struct PhotoArchiveCLI {
             guard let destinationURL else {
                 throw CLIError("catalog restore requires --to PATH.")
             }
-            if outputJSON && outputAgentJSON {
-                throw CLIError("Use either --json or --agent-json, not both.")
-            }
+            try outputOptions.validate()
             let snapshotURL = fileURL(snapshotPaths[0])
             let report = try apply
                 ? CatalogSnapshotRestorer.apply(
@@ -432,13 +441,11 @@ struct PhotoArchiveCLI {
                     destinationCatalogURL: destinationURL,
                     rootBindings: rootBindings
                 )
-            if outputAgentJSON {
-                try printJSON(AgentSafeCatalogSnapshotReport(report: report))
-            } else if outputJSON {
-                try printJSON(report)
-            } else {
-                printCatalogSnapshotReport(report)
-            }
+            try outputOptions.write(
+                json: { try printJSON(report) },
+                agentJSON: { try printJSON(AgentSafeCatalogSnapshotReport(report: report)) },
+                text: { printCatalogSnapshotReport(report) }
+            )
 
         case "help", "--help", "-h":
             printCatalogHelp()
@@ -457,8 +464,7 @@ struct PhotoArchiveCLI {
         case "list":
             var catalogURL = PhotoArchivePaths.defaultCatalogURL
             var includeHistory = false
-            var outputJSON = false
-            var outputAgentJSON = false
+            var outputOptions = JSONOutputOptions()
             var index = 0
             while index < rest.count {
                 let argument = rest[index]
@@ -467,10 +473,8 @@ struct PhotoArchiveCLI {
                     catalogURL = fileURL(try value(after: argument, at: &index, in: rest))
                 case "--all":
                     includeHistory = true
-                case "--json":
-                    outputJSON = true
-                case "--agent-json":
-                    outputAgentJSON = true
+                case "--json", "--agent-json":
+                    outputOptions.consume(argument)
                 case "--help", "-h":
                     printRootHelp(); return
                 default:
@@ -478,13 +482,11 @@ struct PhotoArchiveCLI {
                 }
                 index += 1
             }
-            if outputJSON && outputAgentJSON {
-                throw CLIError("Use either --json or --agent-json, not both.")
-            }
+            try outputOptions.validate()
             let reports = try RootRegistry.list(catalogURL: catalogURL, includeHistory: includeHistory)
-            if outputAgentJSON {
+            if outputOptions.mode == .agentJSON {
                 try printJSON(reports.map(AgentSafeRegisteredRootReport.init))
-            } else if outputJSON {
+            } else if outputOptions.mode == .json {
                 try printJSON(reports)
             } else if reports.isEmpty {
                 print("No registered roots. Use 'photoarchive root list --all' to show catalog history.")
@@ -556,18 +558,15 @@ struct PhotoArchiveCLI {
             print("Media files were not modified.")
         case "role", "set-role":
             var catalogURL = PhotoArchivePaths.defaultCatalogURL
-            var outputJSON = false
-            var outputAgentJSON = false
+            var outputOptions = JSONOutputOptions()
             var values: [String] = []
             var index = 0
             while index < rest.count {
                 let argument = rest[index]
                 if argument == "--catalog" {
                     catalogURL = fileURL(try value(after: argument, at: &index, in: rest))
-                } else if argument == "--json" {
-                    outputJSON = true
-                } else if argument == "--agent-json" {
-                    outputAgentJSON = true
+                } else if argument == "--json" || argument == "--agent-json" {
+                    outputOptions.consume(argument)
                 } else if argument == "--help" || argument == "-h" {
                     printRootHelp(); return
                 } else if argument.hasPrefix("-") {
@@ -582,17 +581,15 @@ struct PhotoArchiveCLI {
             else {
                 throw CLIError("Usage: photoarchive root role [--catalog PATH] ROOT_ID_OR_PATH ROLE")
             }
-            if outputJSON && outputAgentJSON {
-                throw CLIError("Use either --json or --agent-json, not both.")
-            }
+            try outputOptions.validate()
             let report = try RootRegistry.setUsageRole(
                 target: values[0],
                 role: role,
                 catalogURL: catalogURL
             )
-            if outputAgentJSON {
+            if outputOptions.mode == .agentJSON {
                 try printJSON(AgentSafeRegisteredRootReport(report: report))
-            } else if outputJSON {
+            } else if outputOptions.mode == .json {
                 try printJSON(report)
             } else {
                 print("Root role is now \(report.usageRole.rawValue): \(report.canonicalPath)")
@@ -622,8 +619,7 @@ struct PhotoArchiveCLI {
             print("Media files were not modified.")
         case "remove":
             var catalogURL = PhotoArchivePaths.defaultCatalogURL
-            var outputJSON = false
-            var outputAgentJSON = false
+            var outputOptions = JSONOutputOptions()
             var targets: [String] = []
             var index = 0
             while index < rest.count {
@@ -631,8 +627,7 @@ struct PhotoArchiveCLI {
                 switch argument {
                 case "--catalog":
                     catalogURL = fileURL(try value(after: argument, at: &index, in: rest))
-                case "--json": outputJSON = true
-                case "--agent-json": outputAgentJSON = true
+                case "--json", "--agent-json": outputOptions.consume(argument)
                 case "--help", "-h": printRootHelp(); return
                 default:
                     if argument.hasPrefix("-") { throw CLIError("Unknown root remove option: \(argument)") }
@@ -641,11 +636,11 @@ struct PhotoArchiveCLI {
                 index += 1
             }
             guard targets.count == 1 else { throw CLIError("Usage: photoarchive root remove [--catalog PATH] ROOT_ID_OR_PATH") }
-            if outputJSON && outputAgentJSON { throw CLIError("Use either --json or --agent-json, not both.") }
+            try outputOptions.validate()
             let report = try RootRegistry.remove(target: targets[0], catalogURL: catalogURL)
-            if outputAgentJSON {
+            if outputOptions.mode == .agentJSON {
                 try printJSON(AgentSafeRootRemovalReport(report: report))
-            } else if outputJSON {
+            } else if outputOptions.mode == .json {
                 try printJSON(report)
             } else {
                 print("Removed root from the current PhotoArchiveKit library.")
@@ -750,8 +745,7 @@ struct PhotoArchiveCLI {
 
     private static func runScan(_ arguments: [String], mode: WorkflowMode) async throws {
         var catalogURL = PhotoArchivePaths.defaultCatalogURL
-        var outputJSON = false
-        var outputAgentJSON = false
+        var outputOptions = JSONOutputOptions()
         var computeExactDuplicates = true
         var reuseMetadataCache = true
         var reuseExactHashCache = true
@@ -780,10 +774,8 @@ struct PhotoArchiveCLI {
             switch argument {
             case "--catalog":
                 catalogURL = fileURL(try value(after: argument, at: &index, in: arguments))
-            case "--json":
-                outputJSON = true
-            case "--agent-json":
-                outputAgentJSON = true
+            case "--json", "--agent-json":
+                outputOptions.consume(argument)
             case "--no-exact-duplicates":
                 computeExactDuplicates = false
             case "--fresh":
@@ -963,9 +955,7 @@ struct PhotoArchiveCLI {
         if mode == .archiveCoverage && !computeExactDuplicates {
             throw CLIError("archive-coverage requires exact duplicate comparison.")
         }
-        if outputJSON && outputAgentJSON {
-            throw CLIError("Use either --json or --agent-json, not both.")
-        }
+        try outputOptions.validate()
         if mode == .quarantine && forceSystemTrash && quarantineTargetURL != nil {
             throw CLIError("Use either --trash or --to PATH, not both.")
         }
@@ -992,9 +982,9 @@ struct PhotoArchiveCLI {
                 candidateRootTarget: duplicateReviewCandidateRoot,
                 preferenceOnly: duplicateReviewPreferenceOnly
             )
-            if outputAgentJSON {
+            if outputOptions.mode == .agentJSON {
                 try printJSON(AgentSafeDuplicateReviewWorkspaceReport(report: review))
-            } else if outputJSON {
+            } else if outputOptions.mode == .json {
                 try printJSON(review)
             } else {
                 print("Created local Finder review workspace from the latest reusable catalog snapshot: \(review.workspacePath)")
@@ -1034,25 +1024,21 @@ struct PhotoArchiveCLI {
 
         if mode == .archiveCoverage {
             let coverage = ArchiveCoverageBuilder.makeReport(from: report)
-            if outputAgentJSON {
-                try printJSON(AgentSafeArchiveCoverageReport(report: coverage))
-            } else if outputJSON {
-                try printJSON(coverage)
-            } else {
-                printArchiveCoverageReport(coverage)
-            }
+            try outputOptions.write(
+                json: { try printJSON(coverage) },
+                agentJSON: { try printJSON(AgentSafeArchiveCoverageReport(report: coverage)) },
+                text: { printArchiveCoverageReport(coverage) }
+            )
             return
         }
 
         if mode == .plan {
             let plan = ReconciliationPlanner.makePlan(from: report)
-            if outputAgentJSON {
-                try printJSON(AgentSafeReconciliationPlan(plan: plan))
-            } else if outputJSON {
-                try printJSON(plan)
-            } else {
-                printReconciliationPlan(plan)
-            }
+            try outputOptions.write(
+                json: { try printJSON(plan) },
+                agentJSON: { try printJSON(AgentSafeReconciliationPlan(plan: plan)) },
+                text: { printReconciliationPlan(plan) }
+            )
             return
         }
 
@@ -1071,9 +1057,9 @@ struct PhotoArchiveCLI {
                 candidateRootTarget: duplicateReviewCandidateRoot,
                 preferenceOnly: duplicateReviewPreferenceOnly
             )
-            if outputAgentJSON {
+            if outputOptions.mode == .agentJSON {
                 try printJSON(AgentSafeDuplicateReviewWorkspaceReport(report: review))
-            } else if outputJSON {
+            } else if outputOptions.mode == .json {
                 try printJSON(review)
             } else {
                 print("Created local Finder review workspace: \(review.workspacePath)")
@@ -1097,13 +1083,11 @@ struct PhotoArchiveCLI {
             let plan = singletonLeafOnly
                 ? OrganizationPlanner.cleanSingletonLeafPlan(from: basePlan, report: report)
                 : basePlan
-            if outputAgentJSON {
-                try printJSON(AgentSafeOrganizationPlan(plan: plan))
-            } else if outputJSON {
-                try printJSON(plan)
-            } else {
-                printOrganizationPlan(plan)
-            }
+            try outputOptions.write(
+                json: { try printJSON(plan) },
+                agentJSON: { try printJSON(AgentSafeOrganizationPlan(plan: plan)) },
+                text: { printOrganizationPlan(plan) }
+            )
             return
         }
 
@@ -1122,13 +1106,11 @@ struct PhotoArchiveCLI {
                 destinationURL: archiveDestinationURL
             )
             try ArchivePlanStore.write(plan, to: archivePlanOutputURL)
-            if outputAgentJSON {
-                try printJSON(AgentSafeArchivePlan(plan: plan))
-            } else if outputJSON {
-                try printJSON(plan)
-            } else {
-                printArchivePlan(plan, outputURL: archivePlanOutputURL)
-            }
+            try outputOptions.write(
+                json: { try printJSON(plan) },
+                agentJSON: { try printJSON(AgentSafeArchivePlan(plan: plan)) },
+                text: { printArchivePlan(plan, outputURL: archivePlanOutputURL) }
+            )
             return
         }
 
@@ -1150,13 +1132,11 @@ struct PhotoArchiveCLI {
                     commitCatalog: { try scanner.commitAppliedOrganizationPlan(plan) }
                 )
                 : try OrganizationExecutor.preflight(report: report, plan: plan)
-            if outputAgentJSON {
-                try printJSON(AgentSafeOrganizationApplyReport(report: applyReport))
-            } else if outputJSON {
-                try printJSON(applyReport)
-            } else {
-                printOrganizationApplyReport(applyReport)
-            }
+            try outputOptions.write(
+                json: { try printJSON(applyReport) },
+                agentJSON: { try printJSON(AgentSafeOrganizationApplyReport(report: applyReport)) },
+                text: { printOrganizationApplyReport(applyReport) }
+            )
             return
         }
 
@@ -1192,22 +1172,20 @@ struct PhotoArchiveCLI {
                 )
             }
 
-            if outputAgentJSON {
-                try printJSON(AgentSafeDuplicateCleanupReport(report: cleanupReport))
-            } else if outputJSON {
-                try printJSON(cleanupReport)
-            } else {
-                printDuplicateCleanupReport(cleanupReport)
-            }
+            try outputOptions.write(
+                json: { try printJSON(cleanupReport) },
+                agentJSON: { try printJSON(AgentSafeDuplicateCleanupReport(report: cleanupReport)) },
+                text: { printDuplicateCleanupReport(cleanupReport) }
+            )
             return
         }
 
-        if outputAgentJSON {
+        if outputOptions.mode == .agentJSON {
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
             let data = try encoder.encode(AgentSafeScanReport(report: report))
             print(String(decoding: data, as: UTF8.self))
-        } else if outputJSON {
+        } else if outputOptions.mode == .json {
             let encoder = JSONEncoder()
             encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
             encoder.dateEncodingStrategy = .iso8601
@@ -1227,12 +1205,10 @@ struct PhotoArchiveCLI {
     }
 
     private static func runReviewDecisions(_ arguments: [String]) throws {
-        var outputJSON = false
-        var outputAgentJSON = false
+        var outputOptions = JSONOutputOptions()
         for argument in arguments {
             switch argument {
-            case "--json": outputJSON = true
-            case "--agent-json": outputAgentJSON = true
+            case "--json", "--agent-json": outputOptions.consume(argument)
             case "--help", "-h":
                 print(
                     """
@@ -1249,9 +1225,10 @@ struct PhotoArchiveCLI {
                 throw CLIError("Unknown review-decisions option: \(argument)")
             }
         }
+        try outputOptions.validate()
 
         guard let bundle = try DuplicateReviewDecisionStore.load() else {
-            if outputJSON || outputAgentJSON {
+            if outputOptions.mode != .text {
                 print("{\n  \"submitted\" : false\n}")
             } else {
                 print("No submitted duplicate-review decisions.")
@@ -1259,7 +1236,7 @@ struct PhotoArchiveCLI {
             return
         }
 
-        if outputJSON || outputAgentJSON {
+        if outputOptions.mode != .text {
             try printJSON(bundle)
         } else {
             let cleanupResourceCount = bundle.decisions.reduce(0) { $0 + $1.cleanupResourceIDs.count }
