@@ -75,8 +75,8 @@ The shipping app still **disables actual bidirectional file apply**. PhotoArchiv
 
 Requirements:
 
-- macOS 14 or later
-- Swift 6 toolchain
+- macOS 14 or later to run PhotoArchiveKit
+- Xcode 26.1 or later to build the full package, including the native review app
 - no required third-party executable
 - optional: a separately installed `rclone` with the required current `bisync` safety flags for Google Drive synchronization
 
