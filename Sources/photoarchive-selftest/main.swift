@@ -31,677 +31,19 @@ struct PhotoArchiveSelfTest {
         let rootBMarker = try RootMarkerStore.create(at: rootB)
         defer { try? fileManager.removeItem(at: temporary) }
 
-        let settingsURL = temporary.appendingPathComponent("settings.json")
-        let defaultSettings = try PhotoArchiveSettingsStore.load(url: settingsURL)
-        try require(
-            defaultSettings.duplicateCleanupDestination == .systemTrash,
-            "a Mac with no saved settings should default duplicate cleanup to the system Trash"
-        )
-        let customQuarantineSettingRoot = temporary.appendingPathComponent(
-            "CustomQuarantineSetting",
-            isDirectory: true
-        )
-        try fileManager.createDirectory(
-            at: customQuarantineSettingRoot,
-            withIntermediateDirectories: true
-        )
-        var customSettings = defaultSettings
-        customSettings.duplicateCleanupDestination = .customQuarantine(
-            path: customQuarantineSettingRoot.path
-        )
-        try PhotoArchiveSettingsStore.save(customSettings, url: settingsURL)
-        try require(
-            try PhotoArchiveSettingsStore.load(url: settingsURL).duplicateCleanupDestination
-                == .customQuarantine(path: customQuarantineSettingRoot.path),
-            "a user-selected custom quarantine directory should round-trip through product settings"
-        )
-        customSettings.duplicateCleanupDestination = .systemTrash
-        try PhotoArchiveSettingsStore.save(customSettings, url: settingsURL)
-        try require(
-            try PhotoArchiveSettingsStore.load(url: settingsURL).duplicateCleanupDestination == .systemTrash,
-            "the product setting should be able to switch back to system Trash"
+        try checkSettingsAndSyncConfiguration(
+            fileManager: fileManager,
+            temporary: temporary,
+            rootA: rootA,
+            rootB: rootB,
+            rootAMarker: rootAMarker
         )
 
-        let syncCatalogURL = temporary.appendingPathComponent("sync-core.sqlite3")
-        let syncStoreURL = temporary.appendingPathComponent("sync-connections.json")
-        let syncStateURL = temporary.appendingPathComponent("sync-state", isDirectory: true)
-        let syncRecoveryURL = temporary.appendingPathComponent("sync-recovery", isDirectory: true)
-        let syncRootA = try RootRegistry.add(
-            url: rootA,
-            kind: .inbox,
-            provenance: .localLibrary,
-            usageRole: .staging,
-            catalogURL: syncCatalogURL
-        )
-        let syncRootB = try RootRegistry.add(
-            url: rootB,
-            kind: .reference,
-            provenance: .localLibrary,
-            usageRole: .reference,
-            catalogURL: syncCatalogURL
-        )
-        let syncConnection = try FolderSyncConnectionManager.create(
-            rootID: syncRootA.rootID,
-            remoteName: "synthetic-drive",
-            remotePath: "/camera/",
-            catalogURL: syncCatalogURL,
-            storeURL: syncStoreURL,
-            stateDirectoryURL: syncStateURL,
-            recoveryDirectoryURL: syncRecoveryURL
-        )
-        try require(
-            syncConnection.rootMarkerKey == rootAMarker.markerKey
-                && syncConnection.remotePath == "camera"
-                && syncConnection.remoteRecoveryPath.hasPrefix(".photoarchivekit-recovery/"),
-            "sync connections should bind a stable local root identity and keep recovery outside the remote sync tree"
-        )
-        try require(
-            try FolderSyncConnectionStore.load(url: syncStoreURL) == [syncConnection],
-            "sync connection state should round-trip independently of folder purpose"
-        )
-        var interruptedSyncConnection = syncConnection
-        interruptedSyncConnection.status = .running
-        try FolderSyncConnectionStore.save([interruptedSyncConnection], url: syncStoreURL)
-        try require(
-            try FolderSyncConnectionStore.load(url: syncStoreURL).first?.status == .running,
-            "ordinary state reads must not reinterpret a possibly live running owner"
-        )
-        try require(
-            try FolderSyncConnectionStore.loadRecoveringInterrupted(
-                catalogURL: syncCatalogURL,
-                url: syncStoreURL
-            ).first?.status == .recoveryRequired,
-            "a stale persisted running sync must become recovery-required when no operation lock is active"
-        )
-        try FolderSyncConnectionStore.save([syncConnection], url: syncStoreURL)
-        _ = try FolderSyncConnectionManager.verifyLocalRoot(
-            syncConnection,
-            catalogURL: syncCatalogURL
-        )
-        do {
-            _ = try FolderSyncConnectionManager.create(
-                rootID: syncRootB.rootID,
-                remoteName: "synthetic-drive",
-                remotePath: "camera-read-only",
-                catalogURL: syncCatalogURL,
-                storeURL: syncStoreURL,
-                stateDirectoryURL: syncStateURL,
-                recoveryDirectoryURL: syncRecoveryURL
-            )
-            throw SelfTestFailure("read-only roots must not become bidirectional sync targets")
-        } catch FolderSyncConnectionError.readOnlyRoot {
-            // Expected.
-        }
-        do {
-            _ = try FolderSyncConnectionManager.normalizeRemotePath("/")
-            throw SelfTestFailure("remote root itself must not be accepted as a sync target")
-        } catch FolderSyncConnectionError.remoteRootNotAllowed {
-            // Expected: recovery storage must stay outside the sync tree.
-        }
-        let originalMarkerData = try Data(contentsOf: RootMarkerStore.markerURL(for: rootA))
-        try JSONEncoder().encode(RootMarker(markerKey: "RM-SYNTHETIC-DIFFERENT"))
-            .write(to: RootMarkerStore.markerURL(for: rootA), options: .atomic)
-        do {
-            _ = try FolderSyncConnectionManager.verifyLocalRoot(
-                syncConnection,
-                catalogURL: syncCatalogURL
-            )
-            throw SelfTestFailure("sync must reject a path whose stable root identity changed")
-        } catch FolderSyncConnectionError.rootIdentityChanged {
-            // Expected.
-        }
-        try originalMarkerData.write(to: RootMarkerStore.markerURL(for: rootA), options: .atomic)
+        try await checkSyncLogAndTimedMetadata(temporary: temporary)
 
-        let bisyncLogURL = temporary.appendingPathComponent("bisync-dry-run.jsonl")
-        let bisyncLog = """
-        {"level":"notice","msg":"- Path1    File changed: size (larger) - album/공백 - IMG_0001 \\"사진\\".HEIC","source":"bisync/deltas.go:232"}
-        {"level":"notice","msg":"- WARNING    New or changed in both paths - conflict - 사진.jpg","source":"bisync/deltas.go:391"}
-        {"level":"notice","msg":"Skipped copy as --dry-run is set","skipped":"copy","object":"album/공백 - IMG_0001 \\"사진\\".HEIC","source":"operations/operations.go:2631"}
-        """
-        try bisyncLog.write(to: bisyncLogURL, atomically: true, encoding: .utf8)
-        let bisyncSummary = try RcloneBisyncService.parseDryRunLog(url: bisyncLogURL)
-        try require(
-            bisyncSummary.candidatePaths == [
-                "album/공백 - IMG_0001 \"사진\".HEIC",
-                "conflict - 사진.jpg"
-            ]
-                && bisyncSummary.conflictPreserved,
-            "rclone 1.75 NOTICE JSON parsing must preserve spaces, Korean text, quotes and ' - ' inside filenames"
-        )
-        for invalidLog in [
-            "{not-json}\n",
-            "{\"level\":\"notice\",\"msg\":\"- Path1    File mutated unexpectedly - unsafe.JPG\",\"source\":\"bisync/deltas.go:232\"}\n",
-            "{\"level\":\"notice\",\"msg\":\"- Path1    File changed: size (larger) - unsafe.JPG\"}\n",
-            "{\"level\":\"notice\",\"msg\":\"- Path1    File changed: size (larger)\",\"source\":\"bisync/deltas.go:232\"}\n"
-        ] {
-            try invalidLog.write(to: bisyncLogURL, atomically: true, encoding: .utf8)
-            do {
-                _ = try RcloneBisyncService.parseDryRunLog(url: bisyncLogURL)
-                throw SelfTestFailure("unsafe bisync log input must fail closed")
-            } catch FolderSyncConnectionError.unsupportedBisyncLog {
-                // Expected: malformed or structurally unknown change evidence
-                // can never be interpreted as "no changes".
-            }
-        }
+        try await checkScanCaches(fileManager: fileManager, temporary: temporary)
 
-        let validTimedVideo = temporary.appendingPathComponent("valid-timed.mov")
-        try await writeSyntheticTimedMetadataMovie(to: validTimedVideo, markerValues: [-1])
-        let validTimedStatus = await LivePhotoTimedMetadataValidator.validateVideo(at: validTimedVideo)
-        try require(
-            validTimedStatus == .valid,
-            "a single int8 still-image-time marker should validate regardless of marker payload"
-        )
-
-        let missingTimedVideo = temporary.appendingPathComponent("missing-timed.mov")
-        try await writeSyntheticTimedMetadataMovie(to: missingTimedVideo, markerValues: [])
-        let missingTimedStatus = await LivePhotoTimedMetadataValidator.validateVideo(at: missingTimedVideo)
-        try require(
-            missingTimedStatus == .missing,
-            "a readable metadata track without still-image-time should be reported missing"
-        )
-
-        let invalidTimedVideo = temporary.appendingPathComponent("invalid-timed.mov")
-        try await writeSyntheticTimedMetadataMovie(
-            to: invalidTimedVideo,
-            markerValues: [0],
-            validDataType: false
-        )
-        let invalidTimedStatus = await LivePhotoTimedMetadataValidator.validateVideo(at: invalidTimedVideo)
-        try require(
-            invalidTimedStatus == .invalid,
-            "a still-image-time marker with the wrong metadata datatype should be rejected"
-        )
-
-        let ambiguousTimedVideo = temporary.appendingPathComponent("ambiguous-timed.mov")
-        try await writeSyntheticTimedMetadataMovie(to: ambiguousTimedVideo, markerValues: [0, 0])
-        let ambiguousTimedStatus = await LivePhotoTimedMetadataValidator.validateVideo(at: ambiguousTimedVideo)
-        try require(
-            ambiguousTimedStatus == .invalid,
-            "multiple still-image-time markers should be rejected as ambiguous"
-        )
-
-        let metadataCacheRoot = temporary.appendingPathComponent("MetadataCache", isDirectory: true)
-        try fileManager.createDirectory(at: metadataCacheRoot, withIntermediateDirectories: true)
-        let metadataCacheVideo = metadataCacheRoot.appendingPathComponent("cached.mov")
-        try await writeSyntheticTimedMetadataMovie(to: metadataCacheVideo, markerValues: [0])
-        let metadataCacheCatalog = temporary.appendingPathComponent("metadata-cache.sqlite3")
-        let metadataCacheScanner = try ArchiveScanner(catalogURL: metadataCacheCatalog)
-        let metadataCacheRoots = [ScanRoot(url: metadataCacheRoot, kind: .reference)]
-        let metadataCacheFirst = try await metadataCacheScanner.scan(
-            roots: metadataCacheRoots,
-            options: ScanOptions(computeExactDuplicates: false)
-        )
-        try require(
-            metadataCacheFirst.summary.reusedMetadataCount == 0,
-            "first metadata scan must not claim a cache hit"
-        )
-        let metadataCacheSecond = try await metadataCacheScanner.scan(
-            roots: metadataCacheRoots,
-            options: ScanOptions(computeExactDuplicates: false)
-        )
-        try require(
-            metadataCacheSecond.summary.reusedMetadataCount == 1,
-            "unchanged media metadata should be reused on the next scan"
-        )
-        let cachedVideoAttributes = try fileManager.attributesOfItem(atPath: metadataCacheVideo.path)
-        let cachedVideoModifiedAt = cachedVideoAttributes[.modificationDate] as! Date
-        try fileManager.setAttributes(
-            [.modificationDate: cachedVideoModifiedAt.addingTimeInterval(5)],
-            ofItemAtPath: metadataCacheVideo.path
-        )
-        let metadataCacheChanged = try await metadataCacheScanner.scan(
-            roots: metadataCacheRoots,
-            options: ScanOptions(computeExactDuplicates: false)
-        )
-        try require(
-            metadataCacheChanged.summary.reusedMetadataCount == 0,
-            "changed modification time must invalidate metadata cache reuse"
-        )
-
-        let interruptedCatalog = temporary.appendingPathComponent("interrupted-scan.sqlite3")
-        let interruptedRoot = temporary.appendingPathComponent("InterruptedScan", isDirectory: true)
-        try fileManager.createDirectory(at: interruptedRoot, withIntermediateDirectories: true)
-        try Data("interrupted-scan-resource".utf8).write(
-            to: interruptedRoot.appendingPathComponent("resource.jpg")
-        )
-        let interruptedScanner = try ArchiveScanner(catalogURL: interruptedCatalog)
-        try sqliteExecute(
-            databaseURL: interruptedCatalog,
-            sql: "INSERT INTO scan_sessions (id, started_at, status, root_count) VALUES ('SINTERRUPTED', 1, 'running', 1)"
-        )
-        let recoveredScan = try await interruptedScanner.scan(
-            roots: [ScanRoot(url: interruptedRoot, kind: .reference)],
-            options: ScanOptions(computeExactDuplicates: false)
-        )
-        try require(
-            try sqliteText(
-                databaseURL: interruptedCatalog,
-                sql: "SELECT status FROM scan_sessions WHERE id = 'SINTERRUPTED'"
-            ) == "interrupted",
-            "a new scan should recover an earlier unfinished scan session"
-        )
-        try require(
-            recoveredScan.notices.contains { $0.code == "interrupted_scan_sessions_recovered" },
-            "scan report should disclose recovered interrupted session bookkeeping"
-        )
-
-        let takeoutMetadataCacheRoot = temporary.appendingPathComponent(
-            "TakeoutMetadataCache",
-            isDirectory: true
-        )
-        try fileManager.createDirectory(
-            at: takeoutMetadataCacheRoot,
-            withIntermediateDirectories: true
-        )
-        let takeoutMetadataCacheVideo = takeoutMetadataCacheRoot
-            .appendingPathComponent("TAKEOUT-CACHED.MOV")
-        let takeoutMetadataCacheOtherVideo = takeoutMetadataCacheRoot
-            .appendingPathComponent("TAKEOUT-OTHER.MOV")
-        try await writeSyntheticTimedMetadataMovie(
-            to: takeoutMetadataCacheVideo,
-            markerValues: [0]
-        )
-        try await writeSyntheticTimedMetadataMovie(
-            to: takeoutMetadataCacheOtherVideo,
-            markerValues: [0]
-        )
-        try Data(
-            #"{"title":"TAKEOUT-CACHED.MOV","photoTakenTime":{"timestamp":"1776000000"}}"#.utf8
-        ).write(
-            to: takeoutMetadataCacheRoot.appendingPathComponent("TAKEOUT-CACHED.MOV.json")
-        )
-        let takeoutMetadataCacheCatalog = temporary
-            .appendingPathComponent("takeout-metadata-cache.sqlite3")
-        let takeoutMetadataCacheScanner = try ArchiveScanner(catalogURL: takeoutMetadataCacheCatalog)
-        let takeoutMetadataCacheRoots = [
-            ScanRoot(
-                url: takeoutMetadataCacheRoot,
-                kind: .importSource,
-                provenance: .googleTakeout
-            )
-        ]
-        let takeoutMetadataFirst = try await takeoutMetadataCacheScanner.scan(
-            roots: takeoutMetadataCacheRoots,
-            options: ScanOptions(computeExactDuplicates: false)
-        )
-        try require(
-            takeoutMetadataFirst.resources.first(where: { $0.mediaKind == .video })?
-                .captureTime?.source == .googleTakeoutPhotoTakenTime,
-            "synthetic Takeout video should receive provider sidecar capture time"
-        )
-        let takeoutMetadataSecond = try await takeoutMetadataCacheScanner.scan(
-            roots: takeoutMetadataCacheRoots,
-            options: ScanOptions(computeExactDuplicates: false)
-        )
-        try require(
-            takeoutMetadataSecond.summary.reusedMetadataCount == 3,
-            "unchanged Takeout media and sidecar metadata should all be reused"
-        )
-        try Data(
-            #"{"title":"TAKEOUT-CACHED.MOV","photoTakenTime":{"timestamp":"1776001234"}}"#.utf8
-        ).write(
-            to: takeoutMetadataCacheRoot.appendingPathComponent("TAKEOUT-CACHED.MOV.json")
-        )
-        let takeoutMetadataSidecarChanged = try await takeoutMetadataCacheScanner.scan(
-            roots: takeoutMetadataCacheRoots,
-            options: ScanOptions(computeExactDuplicates: false)
-        )
-        try require(
-            takeoutMetadataSidecarChanged.summary.reusedMetadataCount == 2,
-            "changing only the Takeout sidecar should keep both unchanged media metadata cache hits"
-        )
-        try require(
-            takeoutMetadataSidecarChanged.resources.first(where: { $0.mediaKind == .video })?
-                .captureTime?.instant == Date(timeIntervalSince1970: 1776001234),
-            "a changed Takeout sidecar timestamp should replace the prior provider-derived capture time"
-        )
-        try fileManager.removeItem(
-            at: takeoutMetadataCacheRoot.appendingPathComponent("TAKEOUT-CACHED.MOV.json")
-        )
-        let takeoutMetadataSidecarRemoved = try await takeoutMetadataCacheScanner.scan(
-            roots: takeoutMetadataCacheRoots,
-            options: ScanOptions(computeExactDuplicates: false)
-        )
-        try require(
-            takeoutMetadataSidecarRemoved.summary.reusedMetadataCount == 2,
-            "removing a Takeout sidecar should reuse both unchanged media probes from intrinsic metadata cache"
-        )
-        try require(
-            takeoutMetadataSidecarRemoved.resources.first(where: { $0.mediaKind == .video })?
-                .captureTime?.source != .googleTakeoutPhotoTakenTime,
-            "a removed Takeout sidecar must not leave stale provider-derived capture time behind"
-        )
-        try Data(
-            #"{"title":"TAKEOUT-OTHER.MOV","photoTakenTime":{"timestamp":"1776002222"}}"#.utf8
-        ).write(
-            to: takeoutMetadataCacheRoot.appendingPathComponent("TAKEOUT-CACHED.MOV.json")
-        )
-        let takeoutMetadataRetargeted = try await takeoutMetadataCacheScanner.scan(
-            roots: takeoutMetadataCacheRoots,
-            options: ScanOptions(computeExactDuplicates: false)
-        )
-        try require(
-            takeoutMetadataRetargeted.summary.reusedMetadataCount == 2,
-            "retargeting a Takeout sidecar should reuse both unchanged media probes while re-reading the changed JSON"
-        )
-        try require(
-            takeoutMetadataRetargeted.resources.first(where: { $0.fileName == "TAKEOUT-CACHED.MOV" })?
-                .captureTime?.source != .googleTakeoutPhotoTakenTime,
-            "retargeting a Takeout sidecar must not restore provider time onto its former media target"
-        )
-        try require(
-            takeoutMetadataRetargeted.resources.first(where: { $0.fileName == "TAKEOUT-OTHER.MOV" })?
-                .captureTime?.instant == Date(timeIntervalSince1970: 1776002222),
-            "retargeting a Takeout sidecar should apply its provider time to the new media target"
-        )
-
-        let directRetargetRoot = temporary.appendingPathComponent(
-            "TakeoutDirectRetarget",
-            isDirectory: true
-        )
-        try fileManager.createDirectory(at: directRetargetRoot, withIntermediateDirectories: true)
-        let directRetargetA = directRetargetRoot.appendingPathComponent("DIRECT-A.MOV")
-        let directRetargetB = directRetargetRoot.appendingPathComponent("DIRECT-B.MOV")
-        let directRetargetJSON = directRetargetRoot.appendingPathComponent("DIRECT.MOV.json")
-        try await writeSyntheticTimedMetadataMovie(to: directRetargetA, markerValues: [0])
-        try await writeSyntheticTimedMetadataMovie(to: directRetargetB, markerValues: [0])
-        try Data(
-            #"{"title":"DIRECT-A.MOV","photoTakenTime":{"timestamp":"1776100000"}}"#.utf8
-        ).write(to: directRetargetJSON)
-        let directRetargetCatalog = temporary.appendingPathComponent("takeout-direct-retarget.sqlite3")
-        let directRetargetScanner = try ArchiveScanner(catalogURL: directRetargetCatalog)
-        let directRetargetRoots = [
-            ScanRoot(
-                url: directRetargetRoot,
-                kind: .importSource,
-                provenance: .googleTakeout
-            )
-        ]
-        let directRetargetFirst = try await directRetargetScanner.scan(
-            roots: directRetargetRoots,
-            options: ScanOptions(computeExactDuplicates: false)
-        )
-        try require(
-            directRetargetFirst.resources.first(where: { $0.fileName == "DIRECT-A.MOV" })?
-                .captureTime?.instant == Date(timeIntervalSince1970: 1776100000),
-            "direct-retarget fixture should start with the sidecar applied to media A"
-        )
-        let directJSONAttributes = try fileManager.attributesOfItem(atPath: directRetargetJSON.path)
-        let directJSONModifiedAt = directJSONAttributes[.modificationDate] as! Date
-        try Data(
-            #"{"title":"DIRECT-B.MOV","photoTakenTime":{"timestamp":"1776102222"}}"#.utf8
-        ).write(to: directRetargetJSON)
-        try fileManager.setAttributes(
-            [.modificationDate: directJSONModifiedAt.addingTimeInterval(5)],
-            ofItemAtPath: directRetargetJSON.path
-        )
-        let directRetargetProgress = ProgressRecorder()
-        let directRetargetSecond = try await directRetargetScanner.scan(
-            roots: directRetargetRoots,
-            options: ScanOptions(
-                computeExactDuplicates: false,
-                progressHandler: { progress in
-                    directRetargetProgress.record(progress)
-                }
-            )
-        )
-        let directMetadataProgress = directRetargetProgress.snapshot().filter { $0.stage == .metadata }
-        try require(
-            directRetargetSecond.summary.reusedMetadataCount == 2,
-            "direct sidecar retarget should reuse both unchanged media metadata probes"
-        )
-        try require(
-            directMetadataProgress.first?.completedUnitCount == 2
-                && directMetadataProgress.first?.totalUnitCount == 3,
-            "direct sidecar retarget should enter metadata probing with both media already satisfied by cache, leaving only the changed JSON to probe"
-        )
-        try require(
-            directRetargetSecond.resources.first(where: { $0.fileName == "DIRECT-A.MOV" })?
-                .captureTime?.source != .googleTakeoutPhotoTakenTime,
-            "direct A-to-B sidecar retarget must remove the old provider-derived capture time from media A"
-        )
-        try require(
-            directRetargetSecond.resources.first(where: { $0.fileName == "DIRECT-B.MOV" })?
-                .captureTime?.instant == Date(timeIntervalSince1970: 1776102222),
-            "direct A-to-B sidecar retarget must apply the new provider-derived capture time to media B"
-        )
-
-        let registryRoot = temporary.appendingPathComponent("RegistryRoot", isDirectory: true)
-        let registryCatalog = temporary.appendingPathComponent("registry.sqlite3")
-        try fileManager.createDirectory(at: registryRoot, withIntermediateDirectories: true)
-        let registryMedia = registryRoot.appendingPathComponent("IMG_0001.jpg")
-        try Data("registry-media".utf8).write(to: registryMedia)
-        let registryScanner = try ArchiveScanner(catalogURL: registryCatalog)
-        _ = try await registryScanner.scan(roots: [
-            ScanRoot(url: registryRoot, kind: .reference)
-        ])
-        let historyRoots = try RootRegistry.list(catalogURL: registryCatalog, includeHistory: true)
-        try require(historyRoots.count == 1 && historyRoots[0].state == .history, "an observed root should begin as history-only")
-        let registered = try RootRegistry.add(
-            url: registryRoot,
-            kind: .reference,
-            provenance: .unknown,
-            catalogURL: registryCatalog
-        )
-        try require(
-            registered.state == .active && registered.usageRole == .reference,
-            "root add should activate the registry entry with its default role"
-        )
-        let stagingRegistryRoot = try RootRegistry.setUsageRole(
-            target: registered.rootID,
-            role: .staging,
-            catalogURL: registryCatalog
-        )
-        try require(
-            stagingRegistryRoot.usageRole == .staging && stagingRegistryRoot.kind == .inbox,
-            "changing a root to staging should persist the role and map its internal kind to inbox"
-        )
-        try require(
-            fileManager.fileExists(atPath: registryMedia.path),
-            "changing a root role must never modify media"
-        )
-        let rolePreservingScan = try await registryScanner.scan(roots: [
-            ScanRoot(url: registryRoot, kind: .reference)
-        ])
-        try require(
-            rolePreservingScan.roots.first?.usageRole == .staging
-                && rolePreservingScan.roots.first?.kind == .inbox,
-            "an explicit saved root role should outrank a later scan flag for the same registered root"
-        )
-        let primaryRegistryRoot = try RootRegistry.setUsageRole(
-            target: registered.rootID,
-            role: .primaryLibrary,
-            catalogURL: registryCatalog
-        )
-        try require(
-            primaryRegistryRoot.usageRole == .primaryLibrary && primaryRegistryRoot.kind == .inbox,
-            "primary-library and staging roles should share the internal inbox kind"
-        )
-        try require(
-            try sqliteInt(
-                databaseURL: registryCatalog,
-                sql: "SELECT COUNT(*) FROM root_usage_role_history WHERE root_id = '\(registered.rootID)'"
-            ) == 3,
-            "root role changes should retain an auditable role history"
-        )
-        let disabled = try RootRegistry.setState(target: registered.rootID, state: .inactive, catalogURL: registryCatalog)
-        try require(disabled.state == .inactive, "root disable should preserve catalog evidence")
-        let enabled = try RootRegistry.setState(target: registered.rootID, state: .active, catalogURL: registryCatalog)
-        try require(enabled.state == .active, "root enable should reactivate the registry entry")
-        let removed = try RootRegistry.remove(target: registered.rootID, catalogURL: registryCatalog)
-        try require(removed.prunedResourceCount == 1, "root remove should prune current resource evidence")
-        try require(fileManager.fileExists(atPath: registryMedia.path), "root remove must never delete media")
-        let removedRoots = try RootRegistry.list(catalogURL: registryCatalog, includeHistory: true)
-        try require(removedRoots.count == 1 && removedRoots[0].state == .removed, "removed root identity should remain as minimal history")
-        try require(removedRoots[0].currentResourceCount == 0, "removed root must not retain current resource evidence")
-        let registryAgentJSON = String(
-            decoding: try JSONEncoder().encode(removedRoots.map(AgentSafeRegisteredRootReport.init)),
-            as: UTF8.self
-        )
-        try require(!registryAgentJSON.contains(registryRoot.path), "agent-safe root registry exposed a path")
-        try require(registryAgentJSON.contains("primary_library"), "agent-safe root registry should expose the semantic role")
-
-        let comparisonPurposeRoot = temporary.appendingPathComponent("ComparisonPurposeRoot", isDirectory: true)
-        let comparisonPurposeCatalog = temporary.appendingPathComponent("comparison-purpose.sqlite3")
-        try fileManager.createDirectory(at: comparisonPurposeRoot, withIntermediateDirectories: true)
-        try Data("comparison-purpose".utf8)
-            .write(to: comparisonPurposeRoot.appendingPathComponent("sample.jpg"))
-        let firstComparisonRegistration = try RootRegistry.addComparisonRoot(
-            url: comparisonPurposeRoot,
-            catalogURL: comparisonPurposeCatalog
-        )
-        try require(
-            !firstComparisonRegistration.wasAlreadyRegistered
-                && firstComparisonRegistration.root.usageRole == .staging
-                && firstComparisonRegistration.root.usageRole.userPurpose == .standard,
-            "a new comparison folder should use the consumer-facing standard purpose by default"
-        )
-        let registrationUpdatedAt = try sqliteText(
-            databaseURL: comparisonPurposeCatalog,
-            sql: "SELECT printf('%.6f', updated_at) FROM root_registrations WHERE root_id = '\(firstComparisonRegistration.root.rootID)'"
-        )
-        let duplicateComparisonRegistration = try RootRegistry.addComparisonRoot(
-            url: comparisonPurposeRoot,
-            purpose: .archive,
-            catalogURL: comparisonPurposeCatalog
-        )
-        let duplicateRegistrationUpdatedAt = try sqliteText(
-            databaseURL: comparisonPurposeCatalog,
-            sql: "SELECT printf('%.6f', updated_at) FROM root_registrations WHERE root_id = '\(firstComparisonRegistration.root.rootID)'"
-        )
-        try require(
-            duplicateComparisonRegistration.wasAlreadyRegistered
-                && duplicateComparisonRegistration.root.rootID == firstComparisonRegistration.root.rootID
-                && duplicateComparisonRegistration.root.usageRole == .staging
-                && duplicateRegistrationUpdatedAt == registrationUpdatedAt,
-            "adding an already registered comparison folder must be a no-op without role or registration timestamp changes"
-        )
-        let archivedComparisonRoot = try RootRegistry.setUserPurpose(
-            target: firstComparisonRegistration.root.rootID,
-            purpose: .archive,
-            catalogURL: comparisonPurposeCatalog
-        )
-        try require(
-            archivedComparisonRoot.usageRole == .archive
-                && archivedComparisonRoot.usageRole.userPurpose == .archive,
-            "the archive consumer purpose should map to the protected archive role"
-        )
-        let readOnlyComparisonRoot = try RootRegistry.setUserPurpose(
-            target: firstComparisonRegistration.root.rootID,
-            purpose: .readOnly,
-            catalogURL: comparisonPurposeCatalog
-        )
-        try require(
-            readOnlyComparisonRoot.usageRole == .reference
-                && readOnlyComparisonRoot.usageRole.userPurpose == .readOnly,
-            "the read-only consumer purpose should map to the non-mutating reference role"
-        )
-
-        let displayOrderCatalog = temporary.appendingPathComponent("display-order.sqlite3")
-        let displayOrderURLs = ["One", "Two", "Three"].map {
-            temporary.appendingPathComponent("DisplayOrder\($0)", isDirectory: true)
-        }
-        for url in displayOrderURLs {
-            try fileManager.createDirectory(at: url, withIntermediateDirectories: true)
-            _ = try RootRegistry.addComparisonRoot(url: url, catalogURL: displayOrderCatalog)
-        }
-        let initialDisplayRoots = try RootRegistry.list(catalogURL: displayOrderCatalog)
-        let reversedRootIDs = initialDisplayRoots.reversed().map(\.rootID)
-        _ = try RootRegistry.setDisplayOrder(rootIDs: reversedRootIDs, catalogURL: displayOrderCatalog)
-        let reorderedDisplayRoots = try RootRegistry.list(catalogURL: displayOrderCatalog)
-        try require(
-            reorderedDisplayRoots.map(\.rootID) == reversedRootIDs,
-            "consumer folder display order should persist across registry reloads"
-        )
-
-        let autoTakeoutRoot = temporary.appendingPathComponent("AutoTakeoutRoot", isDirectory: true)
-        let autoTakeoutCatalog = temporary.appendingPathComponent("auto-takeout.sqlite3")
-        try fileManager.createDirectory(at: autoTakeoutRoot, withIntermediateDirectories: true)
-        try Data("takeout-media".utf8).write(to: autoTakeoutRoot.appendingPathComponent("IMG_1000.jpg"))
-        try Data("""
-        {"title":"IMG_1000.jpg","photoTakenTime":{"timestamp":"1700000000"}}
-        """.utf8).write(to: autoTakeoutRoot.appendingPathComponent("IMG_1000.jpg.json"))
-        let autoTakeoutRegistration = try RootRegistry.addComparisonRoot(
-            url: autoTakeoutRoot,
-            catalogURL: autoTakeoutCatalog
-        )
-        try require(
-            autoTakeoutRegistration.root.provenance == .googleTakeout
-                && autoTakeoutRegistration.root.usageRole == .importSource
-                && autoTakeoutRegistration.root.usageRole.userPurpose == .standard,
-            "Google Takeout provenance should be inferred internally without exposing a provenance choice in the consumer UI"
-        )
-
-        let historySwitchRoot = temporary.appendingPathComponent("HistorySwitchRoot", isDirectory: true)
-        let historySwitchCatalog = temporary.appendingPathComponent("history-switch.sqlite3")
-        try fileManager.createDirectory(at: historySwitchRoot, withIntermediateDirectories: true)
-        try Data("history-switch".utf8)
-            .write(to: historySwitchRoot.appendingPathComponent("sample.jpg"))
-        let historySwitchScanner = try ArchiveScanner(catalogURL: historySwitchCatalog)
-        let historyReferenceScan = try await historySwitchScanner.scan(roots: [
-            ScanRoot(url: historySwitchRoot, kind: .reference)
-        ])
-        try require(
-            historyReferenceScan.roots.first?.usageRole == .reference,
-            "a history-only reference scan should reflect the current scan kind"
-        )
-        let historyInboxScan = try await historySwitchScanner.scan(roots: [
-            ScanRoot(url: historySwitchRoot, kind: .inbox, provenance: .localLibrary)
-        ])
-        try require(
-            historyInboxScan.roots.first?.usageRole == .staging,
-            "an unregistered history-only root should follow a later scan kind instead of becoming sticky"
-        )
-
-        let ownershipParent = temporary.appendingPathComponent("OwnershipParent", isDirectory: true)
-        let ownershipNested = ownershipParent.appendingPathComponent("Nested", isDirectory: true)
-        try fileManager.createDirectory(at: ownershipNested, withIntermediateDirectories: true)
-        try Data("parent-owned".utf8).write(to: ownershipParent.appendingPathComponent("parent.jpg"))
-        try Data("nested-owned".utf8).write(to: ownershipNested.appendingPathComponent("nested.jpg"))
-        let ownershipCatalog = temporary.appendingPathComponent("ownership.sqlite3")
-        let ownershipScanner = try ArchiveScanner(catalogURL: ownershipCatalog)
-        _ = try RootRegistry.add(
-            url: ownershipParent,
-            kind: .inbox,
-            provenance: .localLibrary,
-            catalogURL: ownershipCatalog
-        )
-        let ownershipNestedRegistered = try RootRegistry.add(
-            url: ownershipNested,
-            kind: .importSource,
-            provenance: .googleTakeout,
-            catalogURL: ownershipCatalog
-        )
-        let parentOnlyWithActiveNested = try await ownershipScanner.scan(roots: [
-            ScanRoot(url: ownershipParent, kind: .inbox, provenance: .localLibrary)
-        ])
-        try require(
-            parentOnlyWithActiveNested.summary.resourceCount == 1,
-            "a parent-only scan must exclude a separately registered active nested root"
-        )
-        _ = try RootRegistry.setState(
-            target: ownershipNestedRegistered.rootID,
-            state: .inactive,
-            catalogURL: ownershipCatalog
-        )
-        let parentOnlyWithInactiveNested = try await ownershipScanner.scan(roots: [
-            ScanRoot(url: ownershipParent, kind: .inbox, provenance: .localLibrary)
-        ])
-        try require(
-            parentOnlyWithInactiveNested.summary.resourceCount == 1,
-            "an inactive nested root must remain an ownership boundary until it is removed"
-        )
-        _ = try RootRegistry.remove(
-            target: ownershipNestedRegistered.rootID,
-            catalogURL: ownershipCatalog
-        )
-        let parentAfterNestedRemoval = try await ownershipScanner.scan(roots: [
-            ScanRoot(url: ownershipParent, kind: .inbox, provenance: .localLibrary)
-        ])
-        try require(
-            parentAfterNestedRemoval.summary.resourceCount == 2,
-            "a removed nested root should return its files to parent-root ownership"
-        )
+        try await checkRootRegistry(fileManager: fileManager, temporary: temporary)
 
         let bytes = Data("synthetic-not-a-real-photo".utf8)
         let fileA = rootA.appendingPathComponent("one.jpg")
@@ -786,237 +128,7 @@ struct PhotoArchiveSelfTest {
             "restoring staging role should restore import-cleanup authority without a media rescan"
         )
 
-        let legacySessionCatalog = temporary.appendingPathComponent("legacy-scan-session.sqlite3")
-        _ = fileManager.createFile(atPath: legacySessionCatalog.path, contents: Data())
-        try sqliteExecute(
-            databaseURL: legacySessionCatalog,
-            sql: """
-                CREATE TABLE scan_sessions (
-                    id TEXT PRIMARY KEY,
-                    started_at REAL NOT NULL,
-                    completed_at REAL,
-                    status TEXT NOT NULL,
-                    root_count INTEGER NOT NULL DEFAULT 0,
-                    resource_count INTEGER NOT NULL DEFAULT 0,
-                    asset_count INTEGER NOT NULL DEFAULT 0,
-                    warning_count INTEGER NOT NULL DEFAULT 0
-                );
-                INSERT INTO scan_sessions (
-                    id, started_at, completed_at, status, root_count,
-                    resource_count, asset_count, warning_count
-                ) VALUES ('SLEGACY', 1, 2, 'complete', 0, 0, 0, 0);
-                """
-        )
-        _ = try ArchiveScanner(catalogURL: legacySessionCatalog)
-        try require(
-            try sqliteInt(
-                databaseURL: legacySessionCatalog,
-                sql: "SELECT COUNT(*) FROM pragma_table_info('scan_sessions') WHERE name = 'exact_duplicates_computed'"
-            ) == 1,
-            "catalog migration should add explicit exact-duplicate scan capability state"
-        )
-        try require(
-            try sqliteInt(
-                databaseURL: legacySessionCatalog,
-                sql: "SELECT exact_duplicates_computed IS NULL FROM scan_sessions WHERE id = 'SLEGACY'"
-            ) == 1,
-            "legacy completed sessions must retain unknown exact-duplicate capability instead of being assumed complete"
-        )
-
-        let skippedDuplicateCatalog = temporary.appendingPathComponent("skipped-duplicate-review.sqlite3")
-        let skippedDuplicateRoot = temporary.appendingPathComponent("SkippedDuplicateReview", isDirectory: true)
-        try fileManager.createDirectory(at: skippedDuplicateRoot, withIntermediateDirectories: true)
-        let skippedDuplicateBytes = Data("skipped-duplicate-bytes".utf8)
-        try skippedDuplicateBytes.write(to: skippedDuplicateRoot.appendingPathComponent("same-a.jpg"))
-        try skippedDuplicateBytes.write(to: skippedDuplicateRoot.appendingPathComponent("same-b.jpg"))
-        _ = try RootRegistry.add(
-            url: skippedDuplicateRoot,
-            kind: .inbox,
-            provenance: .unknown,
-            usageRole: .staging,
-            catalogURL: skippedDuplicateCatalog
-        )
-        let skippedDuplicateScanner = try ArchiveScanner(catalogURL: skippedDuplicateCatalog)
-        let skippedDuplicateScan = try await skippedDuplicateScanner.scan(
-            roots: [ScanRoot(url: skippedDuplicateRoot, kind: .inbox, provenance: .unknown)],
-            options: ScanOptions(computeExactDuplicates: false)
-        )
-        try require(
-            skippedDuplicateScan.exactDuplicateGroups.isEmpty,
-            "a scan that explicitly skips exact comparison should not synthesize duplicate groups"
-        )
-        try require(
-            try sqliteInt(
-                databaseURL: skippedDuplicateCatalog,
-                sql: "SELECT exact_duplicates_computed FROM scan_sessions WHERE id = '\(skippedDuplicateScan.sessionID)'"
-            ) == 0,
-            "completed scan sessions should record that exact duplicate comparison was skipped"
-        )
-        guard let generalSkippedSnapshot = try skippedDuplicateScanner.latestReusableActiveRootsScanReport() else {
-            throw SelfTestFailure("a no-exact scan should remain reusable as general scan history")
-        }
-        try require(
-            generalSkippedSnapshot.sessionID == skippedDuplicateScan.sessionID,
-            "general scan snapshot reuse should remain independent from duplicate-review eligibility"
-        )
-        try require(
-            try skippedDuplicateScanner.latestReusableActiveRootsDuplicateReviewScanReport() == nil
-                && skippedDuplicateScanner.latestReusableDuplicateReviewScanReport() == nil,
-            "a completed no-exact scan must not be restored as a valid zero-duplicate review"
-        )
-        let completedDuplicateScan = try await skippedDuplicateScanner.scan(
-            roots: [ScanRoot(url: skippedDuplicateRoot, kind: .inbox, provenance: .unknown)]
-        )
-        try require(
-            completedDuplicateScan.exactDuplicateGroups.count == 1,
-            "the same synthetic bytes should form one duplicate group when exact comparison is actually performed"
-        )
-        try require(
-            try skippedDuplicateScanner.latestReusableActiveRootsDuplicateReviewScanReport()?.sessionID
-                == completedDuplicateScan.sessionID
-                && skippedDuplicateScanner.latestReusableDuplicateReviewScanReport()?.sessionID
-                    == completedDuplicateScan.sessionID,
-            "duplicate-review reuse should accept a completed session that actually performed exact comparison"
-        )
-        try sqliteExecute(
-            databaseURL: skippedDuplicateCatalog,
-            sql: "UPDATE scan_sessions SET exact_duplicates_computed = NULL WHERE id = '\(completedDuplicateScan.sessionID)'"
-        )
-        try require(
-            try skippedDuplicateScanner.latestReusableActiveRootsDuplicateReviewScanReport() == nil
-                && skippedDuplicateScanner.latestReusableDuplicateReviewScanReport() == nil,
-            "an information-less legacy session must not be treated as exact-duplicate-complete"
-        )
-
-        let reviewSubsetCatalog = temporary.appendingPathComponent("review-subset.sqlite3")
-        let reviewSubsetA = temporary.appendingPathComponent("ReviewSubsetA", isDirectory: true)
-        let reviewSubsetB = temporary.appendingPathComponent("ReviewSubsetB", isDirectory: true)
-        let reviewSubsetC = temporary.appendingPathComponent("ReviewSubsetC", isDirectory: true)
-        for root in [reviewSubsetA, reviewSubsetB, reviewSubsetC] {
-            try fileManager.createDirectory(at: root, withIntermediateDirectories: true)
-        }
-        let reviewSubsetBytes = Data("review-subset-duplicate".utf8)
-        try reviewSubsetBytes.write(to: reviewSubsetA.appendingPathComponent("keeper.jpg"))
-        try reviewSubsetBytes.write(to: reviewSubsetB.appendingPathComponent("keeper 2.jpg"))
-        try Data("unrelated-review-resource".utf8).write(
-            to: reviewSubsetC.appendingPathComponent("unrelated.jpg")
-        )
-        for root in [reviewSubsetA, reviewSubsetB, reviewSubsetC] {
-            _ = try RootRegistry.add(
-                url: root,
-                kind: .inbox,
-                provenance: .unknown,
-                usageRole: .staging,
-                catalogURL: reviewSubsetCatalog
-            )
-        }
-        let reviewSubsetScanner = try ArchiveScanner(catalogURL: reviewSubsetCatalog)
-        let reviewDuplicateScan = try await reviewSubsetScanner.scan(roots: [
-            ScanRoot(url: reviewSubsetA, kind: .inbox, provenance: .unknown),
-            ScanRoot(url: reviewSubsetB, kind: .inbox, provenance: .unknown)
-        ])
-        _ = try await reviewSubsetScanner.scan(roots: [
-            ScanRoot(url: reviewSubsetC, kind: .inbox, provenance: .unknown)
-        ])
-        try require(
-            try reviewSubsetScanner.latestReusableActiveRootsScanReport() == nil,
-            "an unrelated active-root scan should make the strict all-active-root snapshot unavailable"
-        )
-        guard let reusableReviewSubset = try reviewSubsetScanner.latestReusableDuplicateReviewScanReport() else {
-            throw SelfTestFailure("duplicate review should restore the latest completed scan even when it found no duplicates")
-        }
-        try require(
-            reusableReviewSubset.sessionID != reviewDuplicateScan.sessionID
-                && Set(reusableReviewSubset.roots.map(\.canonicalPath))
-                    == Set([reviewSubsetC.standardizedFileURL.path])
-                && reusableReviewSubset.exactDuplicateGroups.isEmpty,
-            "duplicate review should restore the newest completed scope instead of presenting an older duplicate snapshot as current"
-        )
-        let reusablePresentation = try DuplicateReviewPresentationBuilder.latest(
-            catalogURL: reviewSubsetCatalog
-        )
-        try require(
-            reusablePresentation.items.isEmpty
-                && reusablePresentation.candidateResourceCount == 0
-                && reusablePresentation.scopeRootLabels.count == 1,
-            "duplicate-review GUI presentation should restore a completed zero-duplicate result as an empty state"
-        )
-        try require(
-            try reviewSubsetScanner.completedScanRootIDs().isSuperset(of: Set(
-                try RootRegistry.list(catalogURL: reviewSubsetCatalog).map(\.rootID)
-            )),
-            "completed scan history should remember each scanned registered root independently of the currently displayed snapshot"
-        )
-        let expandedReviewScan = try await reviewSubsetScanner.scan(roots: [
-            ScanRoot(url: reviewSubsetA, kind: .inbox, provenance: .unknown),
-            ScanRoot(url: reviewSubsetB, kind: .inbox, provenance: .unknown),
-            ScanRoot(url: reviewSubsetC, kind: .inbox, provenance: .unknown)
-        ])
-        let expandedReviewPresentation = DuplicateReviewPresentationBuilder.makePresentation(
-            report: expandedReviewScan,
-            plan: ReconciliationPlanner.makePlan(from: expandedReviewScan)
-        )
-        try require(
-            expandedReviewPresentation.scopeRoots.count == 3
-                && expandedReviewPresentation.items.count == 1
-                && expandedReviewPresentation.candidateResourceCount == 1,
-            "adding a comparison root and rescanning the selected registered roots should expand the GUI scope without changing unrelated duplicate decisions"
-        )
-
-        let emptyReviewRoot = temporary.appendingPathComponent("EmptyReviewRoot", isDirectory: true)
-        try fileManager.createDirectory(at: emptyReviewRoot, withIntermediateDirectories: true)
-        let emptyReviewRegistered = try RootRegistry.add(
-            url: emptyReviewRoot,
-            kind: .inbox,
-            provenance: .unknown,
-            usageRole: .staging,
-            catalogURL: reviewSubsetCatalog
-        )
-        let emptyReviewScan = try await reviewSubsetScanner.scan(roots: [
-            ScanRoot(url: emptyReviewRoot, kind: .inbox, provenance: .unknown)
-        ])
-        guard let restoredEmptyReviewScan = try reviewSubsetScanner.latestReusableDuplicateReviewScanReport() else {
-            throw SelfTestFailure("an empty completed duplicate-review scan should remain reusable")
-        }
-        try require(
-            emptyReviewScan.resources.isEmpty
-                && restoredEmptyReviewScan.sessionID == emptyReviewScan.sessionID
-                && restoredEmptyReviewScan.roots.map(\.rootID) == [emptyReviewRegistered.rootID]
-                && restoredEmptyReviewScan.resources.isEmpty,
-            "completed scan scope must be persisted independently of resource rows so empty roots restore correctly"
-        )
-
-        let takeoutSidecarRoot = temporary.appendingPathComponent("TakeoutSidecar", isDirectory: true)
-        try fileManager.createDirectory(at: takeoutSidecarRoot, withIntermediateDirectories: true)
-        let takeoutSidecarMedia = takeoutSidecarRoot.appendingPathComponent("IMG_2468.JPG")
-        let takeoutSidecarJSON = takeoutSidecarRoot.appendingPathComponent("IMG_2468.JPG.json")
-        try Data("synthetic-sidecar-media".utf8).write(to: takeoutSidecarMedia)
-        try Data(#"{"title":"IMG_2468.JPG","photoTakenTime":{"timestamp":"1776000000"}}"#.utf8)
-            .write(to: takeoutSidecarJSON)
-        let takeoutSidecarCatalog = temporary.appendingPathComponent("takeout-sidecar.sqlite3")
-        let takeoutSidecarScanner = try ArchiveScanner(catalogURL: takeoutSidecarCatalog)
-        let takeoutSidecarReport = try await takeoutSidecarScanner.scan(roots: [
-            ScanRoot(url: takeoutSidecarRoot, kind: .importSource, provenance: .googleTakeout)
-        ])
-        try require(
-            takeoutSidecarReport.recognizedSidecars.count == 1,
-            "a matching Google Takeout JSON sidecar should be associated automatically"
-        )
-        try require(
-            takeoutSidecarReport.roots[0].recognizedSidecars == 1
-                && takeoutSidecarReport.roots[0].unrecognizedSidecars == 0,
-            "root reports should distinguish recognized from unrecognized sidecars"
-        )
-        try require(
-            try sqliteInt(databaseURL: takeoutSidecarCatalog, sql: "SELECT COUNT(*) FROM sidecar_links") == 1,
-            "recognized sidecar association should be persisted in the catalog"
-        )
-        let takeoutSidecarAgentJSON = String(
-            decoding: try JSONEncoder().encode(AgentSafeScanReport(report: takeoutSidecarReport)),
-            as: UTF8.self
-        )
-        try require(!takeoutSidecarAgentJSON.contains("IMG_2468"), "agent-safe sidecar output exposed a filename")
-        try require(!takeoutSidecarAgentJSON.contains(takeoutSidecarRoot.path), "agent-safe sidecar output exposed a path")
+        try await checkCatalogReviewReuseAndSidecars(fileManager: fileManager, temporary: temporary)
 
         try require(first.summary.exactDuplicateGroupCount == 1, "expected one duplicate group")
         try require(first.summary.logicalAssetCount == 1, "exact standalone copies should share one logical asset")
@@ -1268,128 +380,13 @@ struct PhotoArchiveSelfTest {
             "a newly observed duplicate group must replace stale members from older roots"
         )
 
-        let userArchiveRoot = temporary.appendingPathComponent("UserArchive", isDirectory: true)
-        let tripFolder = userArchiveRoot
-            .appendingPathComponent("Trips", isDirectory: true)
-            .appendingPathComponent("Japan", isDirectory: true)
-        let familyFolder = userArchiveRoot.appendingPathComponent("Family", isDirectory: true)
-        try fileManager.createDirectory(at: tripFolder, withIntermediateDirectories: true)
-        try fileManager.createDirectory(at: familyFolder, withIntermediateDirectories: true)
-        _ = try RootMarkerStore.create(at: userArchiveRoot)
-        let tripPhoto = tripFolder.appendingPathComponent("trip.jpg")
-        let familyPhoto = familyFolder.appendingPathComponent("family.jpg")
-        try Data("synthetic-user-archive-trip".utf8).write(to: tripPhoto)
-        try Data("synthetic-user-archive-family".utf8).write(to: familyPhoto)
-
-        let archiveCatalog = temporary.appendingPathComponent("archive-catalog.sqlite3")
-        let archiveIndex = try await ArchiveRootIndexer.run(
-            rootURL: userArchiveRoot,
-            catalogURL: archiveCatalog,
-            writeSnapshot: true,
-            maxConcurrentProbes: 1
+        try await checkArchiveInventory(
+            fileManager: fileManager,
+            temporary: temporary,
+            scanner: scanner,
+            roots: roots,
+            first: first
         )
-        try require(archiveIndex.resourceCount == 2, "archive index should include both media resources")
-        try require(archiveIndex.folderCount == 3, "archive index should preserve the nested user folder hierarchy")
-        try require(archiveIndex.exactHashResourceCount == 2, "archive index should hash every media resource")
-        try require(archiveIndex.snapshotWritten, "archive index apply should write a portable inventory")
-        try require(!archiveIndex.mediaFilesModified, "archive inventory write must not report media mutation")
-        try require(
-            fileManager.fileExists(atPath: archiveIndex.inventoryPath),
-            "portable archive inventory file should exist"
-        )
-        try require(
-            try sqliteInt(
-                databaseURL: archiveCatalog,
-                sql: "SELECT COUNT(*) FROM collections WHERE collection_type = 'user_archive_folder'"
-            ) == 3,
-            "archive folder hierarchy should be persisted as user-authored collections"
-        )
-        try require(
-            try sqliteInt(
-                databaseURL: archiveCatalog,
-                sql: "SELECT COUNT(*) FROM memberships WHERE membership_origin = 'user_archive_folder'"
-            ) == 2,
-            "archive media assets should retain their leaf-folder memberships"
-        )
-
-        let inventoryURL = URL(fileURLWithPath: archiveIndex.inventoryPath)
-        let inventoryBefore = try Data(contentsOf: inventoryURL)
-        let freshComputerCatalog = temporary.appendingPathComponent("fresh-computer-catalog.sqlite3")
-        let freshComputerIndex = try await ArchiveRootIndexer.run(
-            rootURL: userArchiveRoot,
-            catalogURL: freshComputerCatalog,
-            writeSnapshot: false,
-            maxConcurrentProbes: 1
-        )
-        try require(
-            freshComputerIndex.reusedExactHashCount == 2,
-            "a fresh local catalog should reuse exact hashes from the portable archive inventory"
-        )
-        try require(!freshComputerIndex.mediaFilesModified, "archive index must remain media-read-only")
-        try require(
-            try Data(contentsOf: inventoryURL) == inventoryBefore,
-            "archive-index without --apply must not rewrite the portable inventory"
-        )
-        let archiveIndexAgentJSON = String(
-            decoding: try JSONEncoder().encode(AgentSafeArchiveRootInventoryReport(report: freshComputerIndex)),
-            as: UTF8.self
-        )
-        try require(!archiveIndexAgentJSON.contains(userArchiveRoot.path), "agent-safe archive index report exposed a root path")
-        try require(!archiveIndexAgentJSON.contains("trip.jpg"), "agent-safe archive index report exposed a filename")
-        let freshIntegrityIndex = try await ArchiveRootIndexer.run(
-            rootURL: userArchiveRoot,
-            catalogURL: freshComputerCatalog,
-            writeSnapshot: false,
-            reuseMetadataCache: false,
-            reuseHashCache: false,
-            maxConcurrentProbes: 1
-        )
-        try require(
-            freshIntegrityIndex.reusedExactHashCount == 0,
-            "archive-index fresh mode should bypass both local and portable hash caches"
-        )
-
-        let movedTripPhoto = familyFolder.appendingPathComponent("trip.jpg")
-        try fileManager.moveItem(at: tripPhoto, to: movedTripPhoto)
-        let postMoveIndex = try await ArchiveRootIndexer.run(
-            rootURL: userArchiveRoot,
-            catalogURL: archiveCatalog,
-            writeSnapshot: false,
-            maxConcurrentProbes: 1
-        )
-        try require(
-            postMoveIndex.reusedExactHashCount == 2,
-            "same-volume manual moves should reuse cached hashes through filesystem identity"
-        )
-        try require(
-            postMoveIndex.folderCount == 1,
-            "archive index should reflect the current user-managed folder structure after a manual move"
-        )
-        try require(
-            try sqliteInt(
-                databaseURL: archiveCatalog,
-                sql: "SELECT COUNT(*) FROM collections WHERE collection_type = 'user_archive_folder'"
-            ) == 1,
-            "stale user-archive folder collections should be pruned after a manual move"
-        )
-        try require(
-            try sqliteText(
-                databaseURL: archiveCatalog,
-                sql: "SELECT name FROM collections WHERE collection_type = 'user_archive_folder' LIMIT 1"
-            ) == "Family",
-            "the remaining user-archive collection should match the current folder"
-        )
-
-        if executableExists("czkawka_cli") {
-            let czkawkaReport = try await scanner.scan(
-                roots: roots,
-                options: ScanOptions(exactDuplicateEngine: .czkawka)
-            )
-            try require(
-                czkawkaReport.summary.exactDuplicateGroupCount == first.summary.exactDuplicateGroupCount,
-                "Czkawka candidate discovery plus native verification should match native exact grouping"
-            )
-        }
 
         let archiveReport = try await scanner.scan(roots: roots)
 
@@ -1467,214 +464,15 @@ struct PhotoArchiveSelfTest {
             "agent-safe archive plan exposed a destination marker key"
         )
 
-        let archiveCopySourceA = temporary.appendingPathComponent("ArchiveCopySourceA", isDirectory: true)
-        let archiveCopySourceB = temporary.appendingPathComponent("ArchiveCopySourceB", isDirectory: true)
-        try fileManager.createDirectory(at: archiveCopySourceA, withIntermediateDirectories: true)
-        try fileManager.createDirectory(at: archiveCopySourceB, withIntermediateDirectories: true)
-        _ = try RootMarkerStore.create(at: archiveCopySourceA)
-        _ = try RootMarkerStore.create(at: archiveCopySourceB)
-        let archiveCopySourceFileA = archiveCopySourceA.appendingPathComponent("one.jpg")
-        let archiveCopySourceFileB = archiveCopySourceB.appendingPathComponent("copy.jpg")
-        try bytes.write(to: archiveCopySourceFileA)
-        try bytes.write(to: archiveCopySourceFileB)
-        let archiveCopyCatalogURL = temporary.appendingPathComponent("archive-copy-catalog.sqlite3")
-        let archiveCopyScanner = try ArchiveScanner(catalogURL: archiveCopyCatalogURL)
-        let archiveCopyReport = try await archiveCopyScanner.scan(roots: [
-            ScanRoot(url: archiveCopySourceA, kind: .reference, provenance: .localLibrary),
-            ScanRoot(url: archiveCopySourceB, kind: .reference, provenance: .googleTakeout)
-        ])
-
-        let archiveCopyDestination = temporary.appendingPathComponent("ArchiveCopyDestination", isDirectory: true)
-        try fileManager.createDirectory(at: archiveCopyDestination, withIntermediateDirectories: true)
-        let archiveCopyDestinationMarker = try RootMarkerStore.create(at: archiveCopyDestination)
-        _ = try RootRegistry.add(
-            url: archiveCopyDestination,
-            kind: .reference,
-            provenance: .unknown,
-            usageRole: .reference,
-            catalogURL: archiveCopyCatalogURL
+        try await checkArchiveCopy(
+            fileManager: fileManager,
+            temporary: temporary,
+            bytes: bytes,
+            beforeA: beforeA,
+            beforeB: beforeB,
+            encoder: encoder,
+            rawHash: rawHash
         )
-        do {
-            _ = try archiveCopyScanner.makeArchivePlan(
-                from: archiveCopyReport,
-                destinationURL: archiveCopyDestination
-            )
-            throw SelfTestFailure("archive planner accepted a registered reference-role destination")
-        } catch ArchivePlanError.destinationRoleConflict {
-            // Expected: a registered destination must explicitly be an archive root.
-        }
-        _ = try RootRegistry.setUsageRole(
-            target: archiveCopyDestination.path,
-            role: .archive,
-            catalogURL: archiveCopyCatalogURL
-        )
-        let archiveCopyPlan = try archiveCopyScanner.makeArchivePlan(
-            from: archiveCopyReport,
-            destinationURL: archiveCopyDestination
-        )
-        let archiveCopyPlanURL = temporary.appendingPathComponent("archive-copy-plan.json")
-        try ArchivePlanStore.write(archiveCopyPlan, to: archiveCopyPlanURL)
-        _ = try RootRegistry.setUsageRole(
-            target: archiveCopyDestination.path,
-            role: .reference,
-            catalogURL: archiveCopyCatalogURL
-        )
-        do {
-            _ = try ArchiveCopyExecutor.preflight(planURL: archiveCopyPlanURL)
-            throw SelfTestFailure("archive-copy accepted a destination changed to reference role")
-        } catch ArchiveCopyError.destinationRoleConflict {
-            // Expected: replay re-checks the current destination role.
-        }
-        _ = try RootRegistry.setUsageRole(
-            target: archiveCopyDestination.path,
-            role: .archive,
-            catalogURL: archiveCopyCatalogURL
-        )
-        let archiveCopyDryRun = try ArchiveCopyExecutor.preflight(planURL: archiveCopyPlanURL)
-        try require(archiveCopyDryRun.dryRun, "archive-copy should default to dry-run")
-        try require(
-            archiveCopyDryRun.copyRequiredResourceCount == 1
-                && archiveCopyDryRun.automaticResourceCount == 1,
-            "archive-copy dry-run should require exactly one canonical synthetic resource"
-        )
-        let archiveDryRunSourceA = try Data(contentsOf: archiveCopySourceFileA)
-        let archiveDryRunSourceB = try Data(contentsOf: archiveCopySourceFileB)
-        try require(
-            archiveDryRunSourceA == beforeA && archiveDryRunSourceB == beforeB,
-            "archive-copy dry-run modified source media"
-        )
-        let archiveCopyAgentJSON = String(
-            decoding: try encoder.encode(AgentSafeArchiveCopyReport(report: archiveCopyDryRun)),
-            as: UTF8.self
-        )
-        try require(
-            !archiveCopyAgentJSON.contains(archiveCopySourceA.path),
-            "agent-safe archive-copy exposed a source path"
-        )
-        try require(
-            !archiveCopyAgentJSON.contains(archiveCopyDestination.path),
-            "agent-safe archive-copy exposed a destination path"
-        )
-        try require(!archiveCopyAgentJSON.contains("one.jpg"), "agent-safe archive-copy exposed a filename")
-        try require(!archiveCopyAgentJSON.contains(rawHash), "agent-safe archive-copy exposed SHA-256")
-        try require(
-            !archiveCopyAgentJSON.contains(archiveCopyDestinationMarker.markerKey),
-            "agent-safe archive-copy exposed a destination marker key"
-        )
-
-        let archiveCopyApplied = try await ArchiveCopyExecutor.apply(planURL: archiveCopyPlanURL)
-        try require(archiveCopyApplied.filesModified, "archive-copy apply should create verified archive files")
-        try require(archiveCopyApplied.catalogCommitted, "archive-copy should commit the destination scan to catalog")
-        try require(archiveCopyApplied.snapshotWritten, "archive-copy should write a portable catalog snapshot")
-        guard let copiedRelativePath = archiveCopyPlan.items.first?.resources.first?.destinationRelativePath else {
-            throw SelfTestFailure("archive-copy plan is missing its destination")
-        }
-        let copiedURL = archiveCopyDestination.appendingPathComponent(copiedRelativePath)
-        try require(fileManager.fileExists(atPath: copiedURL.path), "archive-copy final resource is missing")
-        try require(try Data(contentsOf: copiedURL) == beforeA, "archive-copy changed canonical source bytes")
-        let archiveAppliedSourceA = try Data(contentsOf: archiveCopySourceFileA)
-        let archiveAppliedSourceB = try Data(contentsOf: archiveCopySourceFileB)
-        try require(
-            archiveAppliedSourceA == beforeA && archiveAppliedSourceB == beforeB,
-            "archive-copy apply moved or changed source media"
-        )
-        try require(
-            fileManager.fileExists(atPath: archiveCopyApplied.manifestPath),
-            "archive-copy complete manifest is missing"
-        )
-        try require(
-            fileManager.fileExists(atPath: archiveCopyApplied.snapshotPath),
-            "archive-copy portable catalog snapshot is missing"
-        )
-        try require(
-            try sqliteInt(
-                databaseURL: archiveCopyCatalogURL,
-                sql: "SELECT COUNT(*) FROM source_roots WHERE kind = 'archive'"
-            ) == 1,
-            "archive-copy destination scan should register one archive root"
-        )
-        try require(
-            try sqliteInt(
-                databaseURL: archiveCopyCatalogURL,
-                sql: "SELECT COUNT(*) FROM resources r JOIN source_roots sr ON sr.id = r.root_id WHERE sr.kind = 'archive' AND r.relative_path = '\(copiedRelativePath)'"
-            ) == 1,
-            "archive-copy destination resource was not committed to the catalog"
-        )
-
-        let archiveCopyReplay = try await ArchiveCopyExecutor.apply(planURL: archiveCopyPlanURL)
-        try require(!archiveCopyReplay.filesModified, "completed archive-copy replay should be idempotent")
-        try require(
-            archiveCopyReplay.alreadyFinalResourceCount == 1
-                && archiveCopyReplay.copyRequiredResourceCount == 0,
-            "completed archive-copy replay should reuse the verified final resource"
-        )
-
-        let archiveSnapshotBytes = try Data(contentsOf: URL(fileURLWithPath: archiveCopyReplay.snapshotPath))
-        try Data("tampered-archive-snapshot".utf8)
-            .write(to: URL(fileURLWithPath: archiveCopyReplay.snapshotPath))
-        do {
-            _ = try ArchiveCopyExecutor.preflight(planURL: archiveCopyPlanURL)
-            throw SelfTestFailure("archive-copy accepted a changed completed catalog snapshot")
-        } catch ArchiveCopyError.snapshotConflict {
-            // Expected: completed operation checkpoints re-verify their snapshot hash.
-        }
-        try archiveSnapshotBytes.write(to: URL(fileURLWithPath: archiveCopyReplay.snapshotPath))
-
-        let archiveCopyTamperDestination = temporary
-            .appendingPathComponent("ArchiveCopyTamperDestination", isDirectory: true)
-        try fileManager.createDirectory(at: archiveCopyTamperDestination, withIntermediateDirectories: true)
-        _ = try RootMarkerStore.create(at: archiveCopyTamperDestination)
-        let archiveCopyTamperPlan = try archiveCopyScanner.makeArchivePlan(
-            from: archiveCopyReport,
-            destinationURL: archiveCopyTamperDestination
-        )
-        let archiveCopyTamperPlanURL = temporary.appendingPathComponent("archive-copy-tamper-plan.json")
-        try ArchivePlanStore.write(archiveCopyTamperPlan, to: archiveCopyTamperPlanURL)
-        let archiveCopySameSizeTamper = Data(repeating: 0x5A, count: beforeA.count)
-        try archiveCopySameSizeTamper.write(to: archiveCopySourceFileA)
-        do {
-            _ = try ArchiveCopyExecutor.preflight(planURL: archiveCopyTamperPlanURL)
-            throw SelfTestFailure("archive-copy accepted source bytes changed after immutable planning")
-        } catch ArchiveCopyError.sourcePreconditionFailed {
-            // Expected: apply independently verifies the planned source bytes.
-        }
-        try bytes.write(to: archiveCopySourceFileA)
-
-        let archiveCopyPlanObject = try JSONSerialization.jsonObject(
-            with: Data(contentsOf: archiveCopyTamperPlanURL)
-        )
-        guard var archiveCopyPlanDictionary = archiveCopyPlanObject as? [String: Any],
-              var archiveCopyItems = archiveCopyPlanDictionary["items"] as? [[String: Any]],
-              !archiveCopyItems.isEmpty
-        else {
-            throw SelfTestFailure("could not decode archive-copy plan for tamper regression")
-        }
-        archiveCopyItems[0]["assetID"] = "A-TAMPERED"
-        archiveCopyPlanDictionary["items"] = archiveCopyItems
-        let catalogTamperedPlanURL = temporary.appendingPathComponent("archive-copy-catalog-tampered.json")
-        try JSONSerialization.data(withJSONObject: archiveCopyPlanDictionary, options: [.sortedKeys])
-            .write(to: catalogTamperedPlanURL)
-        do {
-            _ = try ArchiveCopyExecutor.preflight(planURL: catalogTamperedPlanURL)
-            throw SelfTestFailure("archive-copy accepted plan semantics that no longer match catalog evidence")
-        } catch ArchiveCopyError.catalogEvidenceMismatch {
-            // Expected: plan bytes alone are not sufficient authority for copying.
-        }
-
-        var nonAtomicPlanDictionary = archiveCopyPlanDictionary
-        var nonAtomicItems = archiveCopyItems
-        nonAtomicItems[0]["assetID"] = archiveCopyTamperPlan.items[0].assetID
-        nonAtomicItems[0]["kind"] = "live_photo"
-        nonAtomicPlanDictionary["items"] = nonAtomicItems
-        let nonAtomicPlanURL = temporary.appendingPathComponent("archive-copy-non-atomic.json")
-        try JSONSerialization.data(withJSONObject: nonAtomicPlanDictionary, options: [.sortedKeys])
-            .write(to: nonAtomicPlanURL)
-        do {
-            _ = try ArchiveCopyExecutor.preflight(planURL: nonAtomicPlanURL)
-            throw SelfTestFailure("archive-copy accepted a one-resource Live Photo item")
-        } catch ArchiveCopyError.invalidPlan {
-            // Expected: Live Photo copy authority always covers both roles.
-        }
 
         let sameSizeTamper = Data(repeating: 0x5A, count: beforeA.count)
         try sameSizeTamper.write(to: fileA)
@@ -2014,6 +812,1382 @@ struct PhotoArchiveSelfTest {
             "agent-safe reconciliation plan exposed a path"
         )
 
+        try await checkCanonicalFolderRoles(fileManager: fileManager, temporary: temporary)
+
+        try await checkFilenameKeeperPolicy(fileManager: fileManager, temporary: temporary)
+
+        try await checkStagingKeeperAndReviewCleanup(
+            fileManager: fileManager,
+            temporary: temporary,
+            rootA: rootA,
+            rootB: rootB
+        )
+
+        try await checkTrashAndLivePhotoReview(fileManager: fileManager, temporary: temporary)
+
+        let quarantineRoot = temporary.appendingPathComponent("Quarantine", isDirectory: true)
+        try fileManager.createDirectory(at: quarantineRoot, withIntermediateDirectories: true)
+        let quarantineDryRun = try QuarantineExecutor.preflight(
+            report: reviewReport,
+            plan: standalonePlan,
+            targetURL: quarantineRoot
+        )
+        try require(quarantineDryRun.dryRun, "quarantine preflight should be a dry run")
+        try require(quarantineDryRun.resourceCount == 1, "expected one synthetic quarantine candidate")
+        try require(fileManager.fileExists(atPath: fileB.path), "dry run must not move the Takeout copy")
+
+        let quarantineAgentJSON = String(
+            decoding: try encoder.encode(AgentSafeQuarantineReport(report: quarantineDryRun)),
+            as: UTF8.self
+        )
+        try require(!quarantineAgentJSON.contains(rootB.path), "agent-safe quarantine output exposed a path")
+        try require(!quarantineAgentJSON.contains("copy.jpg"), "agent-safe quarantine output exposed a filename")
+
+        let quarantineApplied = try QuarantineExecutor.apply(
+            report: reviewReport,
+            plan: standalonePlan,
+            targetURL: quarantineRoot,
+            catalogURL: mainCatalogURL
+        )
+        try require(quarantineApplied.filesModified, "quarantine apply should report file modification")
+        try require(fileManager.fileExists(atPath: fileA.path), "preferred local copy must remain in place")
+        try require(!fileManager.fileExists(atPath: fileB.path), "redundant Takeout copy should move to quarantine")
+        guard let movedDestination = quarantineApplied.moves.first?.destinationPath else {
+            throw SelfTestFailure("quarantine apply did not record a destination")
+        }
+        try require(fileManager.fileExists(atPath: movedDestination), "quarantined copy is missing at its destination")
+        try require(try Data(contentsOf: URL(fileURLWithPath: movedDestination)) == beforeB, "quarantined bytes changed")
+        guard let manifestPath = quarantineApplied.manifestPath else {
+            throw SelfTestFailure("quarantine apply did not create a restore manifest")
+        }
+        try require(fileManager.fileExists(atPath: manifestPath), "quarantine restore manifest is missing")
+
+        let restoreDryRun = try QuarantineRestoreExecutor.preflight(
+            manifestURL: URL(fileURLWithPath: manifestPath),
+            catalogURL: temporary.appendingPathComponent("catalog.sqlite3")
+        )
+        try require(restoreDryRun.dryRun, "quarantine restore preflight must be a dry run")
+        try require(restoreDryRun.resourceCount == 1, "restore preflight should contain one synthetic resource")
+        try require(!fileManager.fileExists(atPath: fileB.path), "restore dry run must not move the quarantined resource")
+        let restoreAgentJSON = String(
+            decoding: try encoder.encode(AgentSafeQuarantineRestoreReport(report: restoreDryRun)),
+            as: UTF8.self
+        )
+        try require(!restoreAgentJSON.contains(rootB.path), "agent-safe restore output exposed a source path")
+        try require(!restoreAgentJSON.contains(manifestPath), "agent-safe restore output exposed a manifest path")
+        try require(!restoreAgentJSON.contains("copy.jpg"), "agent-safe restore output exposed a filename")
+
+        try Data("tampered-quarantine-resource".utf8).write(to: URL(fileURLWithPath: movedDestination))
+        do {
+            _ = try QuarantineRestoreExecutor.preflight(
+                manifestURL: URL(fileURLWithPath: manifestPath),
+                catalogURL: temporary.appendingPathComponent("catalog.sqlite3")
+            )
+            throw SelfTestFailure("restore preflight accepted a changed quarantine resource")
+        } catch QuarantineRestoreError.quarantineResourceChanged {
+            // Expected: restore must re-verify the local catalog's exact-file evidence.
+        }
+        try beforeB.write(to: URL(fileURLWithPath: movedDestination))
+
+        let restored = try QuarantineRestoreExecutor.apply(
+            manifestURL: URL(fileURLWithPath: manifestPath),
+            catalogURL: temporary.appendingPathComponent("catalog.sqlite3")
+        )
+        try require(restored.filesModified, "restore apply should report file modification")
+        try require(fileManager.fileExists(atPath: fileB.path), "restore apply did not return the resource to its source")
+        try require(!fileManager.fileExists(atPath: movedDestination), "restore apply left the resource in quarantine")
+        try require(try Data(contentsOf: fileB) == beforeB, "restored bytes changed")
+        try require(restored.restoreStatePath != nil, "restore apply should write local restore state")
+
+        try await checkRootRelocation(fileManager: fileManager, temporary: temporary)
+
+        try await checkOrganizationAndCoverage(
+            fileManager: fileManager,
+            temporary: temporary,
+            encoder: encoder
+        )
+
+        try await checkNestedAndTakeoutSemantics(
+            fileManager: fileManager,
+            temporary: temporary,
+            encoder: encoder
+        )
+    }
+
+    private static func checkSettingsAndSyncConfiguration(
+        fileManager: FileManager,
+        temporary: URL,
+        rootA: URL,
+        rootB: URL,
+        rootAMarker: RootMarker
+    ) throws {
+        let settingsURL = temporary.appendingPathComponent("settings.json")
+        let defaultSettings = try PhotoArchiveSettingsStore.load(url: settingsURL)
+        try require(
+            defaultSettings.duplicateCleanupDestination == .systemTrash,
+            "a Mac with no saved settings should default duplicate cleanup to the system Trash"
+        )
+        let customQuarantineSettingRoot = temporary.appendingPathComponent(
+            "CustomQuarantineSetting",
+            isDirectory: true
+        )
+        try fileManager.createDirectory(
+            at: customQuarantineSettingRoot,
+            withIntermediateDirectories: true
+        )
+        var customSettings = defaultSettings
+        customSettings.duplicateCleanupDestination = .customQuarantine(
+            path: customQuarantineSettingRoot.path
+        )
+        try PhotoArchiveSettingsStore.save(customSettings, url: settingsURL)
+        try require(
+            try PhotoArchiveSettingsStore.load(url: settingsURL).duplicateCleanupDestination
+                == .customQuarantine(path: customQuarantineSettingRoot.path),
+            "a user-selected custom quarantine directory should round-trip through product settings"
+        )
+        customSettings.duplicateCleanupDestination = .systemTrash
+        try PhotoArchiveSettingsStore.save(customSettings, url: settingsURL)
+        try require(
+            try PhotoArchiveSettingsStore.load(url: settingsURL).duplicateCleanupDestination == .systemTrash,
+            "the product setting should be able to switch back to system Trash"
+        )
+
+        let syncCatalogURL = temporary.appendingPathComponent("sync-core.sqlite3")
+        let syncStoreURL = temporary.appendingPathComponent("sync-connections.json")
+        let syncStateURL = temporary.appendingPathComponent("sync-state", isDirectory: true)
+        let syncRecoveryURL = temporary.appendingPathComponent("sync-recovery", isDirectory: true)
+        let syncRootA = try RootRegistry.add(
+            url: rootA,
+            kind: .inbox,
+            provenance: .localLibrary,
+            usageRole: .staging,
+            catalogURL: syncCatalogURL
+        )
+        let syncRootB = try RootRegistry.add(
+            url: rootB,
+            kind: .reference,
+            provenance: .localLibrary,
+            usageRole: .reference,
+            catalogURL: syncCatalogURL
+        )
+        let syncConnection = try FolderSyncConnectionManager.create(
+            rootID: syncRootA.rootID,
+            remoteName: "synthetic-drive",
+            remotePath: "/camera/",
+            catalogURL: syncCatalogURL,
+            storeURL: syncStoreURL,
+            stateDirectoryURL: syncStateURL,
+            recoveryDirectoryURL: syncRecoveryURL
+        )
+        try require(
+            syncConnection.rootMarkerKey == rootAMarker.markerKey
+                && syncConnection.remotePath == "camera"
+                && syncConnection.remoteRecoveryPath.hasPrefix(".photoarchivekit-recovery/"),
+            "sync connections should bind a stable local root identity and keep recovery outside the remote sync tree"
+        )
+        try require(
+            try FolderSyncConnectionStore.load(url: syncStoreURL) == [syncConnection],
+            "sync connection state should round-trip independently of folder purpose"
+        )
+        var interruptedSyncConnection = syncConnection
+        interruptedSyncConnection.status = .running
+        try FolderSyncConnectionStore.save([interruptedSyncConnection], url: syncStoreURL)
+        try require(
+            try FolderSyncConnectionStore.load(url: syncStoreURL).first?.status == .running,
+            "ordinary state reads must not reinterpret a possibly live running owner"
+        )
+        try require(
+            try FolderSyncConnectionStore.loadRecoveringInterrupted(
+                catalogURL: syncCatalogURL,
+                url: syncStoreURL
+            ).first?.status == .recoveryRequired,
+            "a stale persisted running sync must become recovery-required when no operation lock is active"
+        )
+        try FolderSyncConnectionStore.save([syncConnection], url: syncStoreURL)
+        _ = try FolderSyncConnectionManager.verifyLocalRoot(
+            syncConnection,
+            catalogURL: syncCatalogURL
+        )
+        do {
+            _ = try FolderSyncConnectionManager.create(
+                rootID: syncRootB.rootID,
+                remoteName: "synthetic-drive",
+                remotePath: "camera-read-only",
+                catalogURL: syncCatalogURL,
+                storeURL: syncStoreURL,
+                stateDirectoryURL: syncStateURL,
+                recoveryDirectoryURL: syncRecoveryURL
+            )
+            throw SelfTestFailure("read-only roots must not become bidirectional sync targets")
+        } catch FolderSyncConnectionError.readOnlyRoot {
+            // Expected.
+        }
+        do {
+            _ = try FolderSyncConnectionManager.normalizeRemotePath("/")
+            throw SelfTestFailure("remote root itself must not be accepted as a sync target")
+        } catch FolderSyncConnectionError.remoteRootNotAllowed {
+            // Expected: recovery storage must stay outside the sync tree.
+        }
+        let originalMarkerData = try Data(contentsOf: RootMarkerStore.markerURL(for: rootA))
+        try JSONEncoder().encode(RootMarker(markerKey: "RM-SYNTHETIC-DIFFERENT"))
+            .write(to: RootMarkerStore.markerURL(for: rootA), options: .atomic)
+        do {
+            _ = try FolderSyncConnectionManager.verifyLocalRoot(
+                syncConnection,
+                catalogURL: syncCatalogURL
+            )
+            throw SelfTestFailure("sync must reject a path whose stable root identity changed")
+        } catch FolderSyncConnectionError.rootIdentityChanged {
+            // Expected.
+        }
+        try originalMarkerData.write(to: RootMarkerStore.markerURL(for: rootA), options: .atomic)
+    }
+
+    private static func checkSyncLogAndTimedMetadata(temporary: URL) async throws {
+        let bisyncLogURL = temporary.appendingPathComponent("bisync-dry-run.jsonl")
+        let bisyncLog = """
+        {"level":"notice","msg":"- Path1    File changed: size (larger) - album/공백 - IMG_0001 \\"사진\\".HEIC","source":"bisync/deltas.go:232"}
+        {"level":"notice","msg":"- WARNING    New or changed in both paths - conflict - 사진.jpg","source":"bisync/deltas.go:391"}
+        {"level":"notice","msg":"Skipped copy as --dry-run is set","skipped":"copy","object":"album/공백 - IMG_0001 \\"사진\\".HEIC","source":"operations/operations.go:2631"}
+        """
+        try bisyncLog.write(to: bisyncLogURL, atomically: true, encoding: .utf8)
+        let bisyncSummary = try RcloneBisyncService.parseDryRunLog(url: bisyncLogURL)
+        try require(
+            bisyncSummary.candidatePaths == [
+                "album/공백 - IMG_0001 \"사진\".HEIC",
+                "conflict - 사진.jpg"
+            ]
+                && bisyncSummary.conflictPreserved,
+            "rclone 1.75 NOTICE JSON parsing must preserve spaces, Korean text, quotes and ' - ' inside filenames"
+        )
+        for invalidLog in [
+            "{not-json}\n",
+            "{\"level\":\"notice\",\"msg\":\"- Path1    File mutated unexpectedly - unsafe.JPG\",\"source\":\"bisync/deltas.go:232\"}\n",
+            "{\"level\":\"notice\",\"msg\":\"- Path1    File changed: size (larger) - unsafe.JPG\"}\n",
+            "{\"level\":\"notice\",\"msg\":\"- Path1    File changed: size (larger)\",\"source\":\"bisync/deltas.go:232\"}\n"
+        ] {
+            try invalidLog.write(to: bisyncLogURL, atomically: true, encoding: .utf8)
+            do {
+                _ = try RcloneBisyncService.parseDryRunLog(url: bisyncLogURL)
+                throw SelfTestFailure("unsafe bisync log input must fail closed")
+            } catch FolderSyncConnectionError.unsupportedBisyncLog {
+                // Expected: malformed or structurally unknown change evidence
+                // can never be interpreted as "no changes".
+            }
+        }
+
+        let validTimedVideo = temporary.appendingPathComponent("valid-timed.mov")
+        try await writeSyntheticTimedMetadataMovie(to: validTimedVideo, markerValues: [-1])
+        let validTimedStatus = await LivePhotoTimedMetadataValidator.validateVideo(at: validTimedVideo)
+        try require(
+            validTimedStatus == .valid,
+            "a single int8 still-image-time marker should validate regardless of marker payload"
+        )
+
+        let missingTimedVideo = temporary.appendingPathComponent("missing-timed.mov")
+        try await writeSyntheticTimedMetadataMovie(to: missingTimedVideo, markerValues: [])
+        let missingTimedStatus = await LivePhotoTimedMetadataValidator.validateVideo(at: missingTimedVideo)
+        try require(
+            missingTimedStatus == .missing,
+            "a readable metadata track without still-image-time should be reported missing"
+        )
+
+        let invalidTimedVideo = temporary.appendingPathComponent("invalid-timed.mov")
+        try await writeSyntheticTimedMetadataMovie(
+            to: invalidTimedVideo,
+            markerValues: [0],
+            validDataType: false
+        )
+        let invalidTimedStatus = await LivePhotoTimedMetadataValidator.validateVideo(at: invalidTimedVideo)
+        try require(
+            invalidTimedStatus == .invalid,
+            "a still-image-time marker with the wrong metadata datatype should be rejected"
+        )
+
+        let ambiguousTimedVideo = temporary.appendingPathComponent("ambiguous-timed.mov")
+        try await writeSyntheticTimedMetadataMovie(to: ambiguousTimedVideo, markerValues: [0, 0])
+        let ambiguousTimedStatus = await LivePhotoTimedMetadataValidator.validateVideo(at: ambiguousTimedVideo)
+        try require(
+            ambiguousTimedStatus == .invalid,
+            "multiple still-image-time markers should be rejected as ambiguous"
+        )
+    }
+
+    private static func checkScanCaches(fileManager: FileManager, temporary: URL) async throws {
+        let metadataCacheRoot = temporary.appendingPathComponent("MetadataCache", isDirectory: true)
+        try fileManager.createDirectory(at: metadataCacheRoot, withIntermediateDirectories: true)
+        let metadataCacheVideo = metadataCacheRoot.appendingPathComponent("cached.mov")
+        try await writeSyntheticTimedMetadataMovie(to: metadataCacheVideo, markerValues: [0])
+        let metadataCacheCatalog = temporary.appendingPathComponent("metadata-cache.sqlite3")
+        let metadataCacheScanner = try ArchiveScanner(catalogURL: metadataCacheCatalog)
+        let metadataCacheRoots = [ScanRoot(url: metadataCacheRoot, kind: .reference)]
+        let metadataCacheFirst = try await metadataCacheScanner.scan(
+            roots: metadataCacheRoots,
+            options: ScanOptions(computeExactDuplicates: false)
+        )
+        try require(
+            metadataCacheFirst.summary.reusedMetadataCount == 0,
+            "first metadata scan must not claim a cache hit"
+        )
+        let metadataCacheSecond = try await metadataCacheScanner.scan(
+            roots: metadataCacheRoots,
+            options: ScanOptions(computeExactDuplicates: false)
+        )
+        try require(
+            metadataCacheSecond.summary.reusedMetadataCount == 1,
+            "unchanged media metadata should be reused on the next scan"
+        )
+        let cachedVideoAttributes = try fileManager.attributesOfItem(atPath: metadataCacheVideo.path)
+        let cachedVideoModifiedAt = cachedVideoAttributes[.modificationDate] as! Date
+        try fileManager.setAttributes(
+            [.modificationDate: cachedVideoModifiedAt.addingTimeInterval(5)],
+            ofItemAtPath: metadataCacheVideo.path
+        )
+        let metadataCacheChanged = try await metadataCacheScanner.scan(
+            roots: metadataCacheRoots,
+            options: ScanOptions(computeExactDuplicates: false)
+        )
+        try require(
+            metadataCacheChanged.summary.reusedMetadataCount == 0,
+            "changed modification time must invalidate metadata cache reuse"
+        )
+
+        let interruptedCatalog = temporary.appendingPathComponent("interrupted-scan.sqlite3")
+        let interruptedRoot = temporary.appendingPathComponent("InterruptedScan", isDirectory: true)
+        try fileManager.createDirectory(at: interruptedRoot, withIntermediateDirectories: true)
+        try Data("interrupted-scan-resource".utf8).write(
+            to: interruptedRoot.appendingPathComponent("resource.jpg")
+        )
+        let interruptedScanner = try ArchiveScanner(catalogURL: interruptedCatalog)
+        try sqliteExecute(
+            databaseURL: interruptedCatalog,
+            sql: "INSERT INTO scan_sessions (id, started_at, status, root_count) VALUES ('SINTERRUPTED', 1, 'running', 1)"
+        )
+        let recoveredScan = try await interruptedScanner.scan(
+            roots: [ScanRoot(url: interruptedRoot, kind: .reference)],
+            options: ScanOptions(computeExactDuplicates: false)
+        )
+        try require(
+            try sqliteText(
+                databaseURL: interruptedCatalog,
+                sql: "SELECT status FROM scan_sessions WHERE id = 'SINTERRUPTED'"
+            ) == "interrupted",
+            "a new scan should recover an earlier unfinished scan session"
+        )
+        try require(
+            recoveredScan.notices.contains { $0.code == "interrupted_scan_sessions_recovered" },
+            "scan report should disclose recovered interrupted session bookkeeping"
+        )
+
+        let takeoutMetadataCacheRoot = temporary.appendingPathComponent(
+            "TakeoutMetadataCache",
+            isDirectory: true
+        )
+        try fileManager.createDirectory(
+            at: takeoutMetadataCacheRoot,
+            withIntermediateDirectories: true
+        )
+        let takeoutMetadataCacheVideo = takeoutMetadataCacheRoot
+            .appendingPathComponent("TAKEOUT-CACHED.MOV")
+        let takeoutMetadataCacheOtherVideo = takeoutMetadataCacheRoot
+            .appendingPathComponent("TAKEOUT-OTHER.MOV")
+        try await writeSyntheticTimedMetadataMovie(
+            to: takeoutMetadataCacheVideo,
+            markerValues: [0]
+        )
+        try await writeSyntheticTimedMetadataMovie(
+            to: takeoutMetadataCacheOtherVideo,
+            markerValues: [0]
+        )
+        try Data(
+            #"{"title":"TAKEOUT-CACHED.MOV","photoTakenTime":{"timestamp":"1776000000"}}"#.utf8
+        ).write(
+            to: takeoutMetadataCacheRoot.appendingPathComponent("TAKEOUT-CACHED.MOV.json")
+        )
+        let takeoutMetadataCacheCatalog = temporary
+            .appendingPathComponent("takeout-metadata-cache.sqlite3")
+        let takeoutMetadataCacheScanner = try ArchiveScanner(catalogURL: takeoutMetadataCacheCatalog)
+        let takeoutMetadataCacheRoots = [
+            ScanRoot(
+                url: takeoutMetadataCacheRoot,
+                kind: .importSource,
+                provenance: .googleTakeout
+            )
+        ]
+        let takeoutMetadataFirst = try await takeoutMetadataCacheScanner.scan(
+            roots: takeoutMetadataCacheRoots,
+            options: ScanOptions(computeExactDuplicates: false)
+        )
+        try require(
+            takeoutMetadataFirst.resources.first(where: { $0.mediaKind == .video })?
+                .captureTime?.source == .googleTakeoutPhotoTakenTime,
+            "synthetic Takeout video should receive provider sidecar capture time"
+        )
+        let takeoutMetadataSecond = try await takeoutMetadataCacheScanner.scan(
+            roots: takeoutMetadataCacheRoots,
+            options: ScanOptions(computeExactDuplicates: false)
+        )
+        try require(
+            takeoutMetadataSecond.summary.reusedMetadataCount == 3,
+            "unchanged Takeout media and sidecar metadata should all be reused"
+        )
+        try Data(
+            #"{"title":"TAKEOUT-CACHED.MOV","photoTakenTime":{"timestamp":"1776001234"}}"#.utf8
+        ).write(
+            to: takeoutMetadataCacheRoot.appendingPathComponent("TAKEOUT-CACHED.MOV.json")
+        )
+        let takeoutMetadataSidecarChanged = try await takeoutMetadataCacheScanner.scan(
+            roots: takeoutMetadataCacheRoots,
+            options: ScanOptions(computeExactDuplicates: false)
+        )
+        try require(
+            takeoutMetadataSidecarChanged.summary.reusedMetadataCount == 2,
+            "changing only the Takeout sidecar should keep both unchanged media metadata cache hits"
+        )
+        try require(
+            takeoutMetadataSidecarChanged.resources.first(where: { $0.mediaKind == .video })?
+                .captureTime?.instant == Date(timeIntervalSince1970: 1776001234),
+            "a changed Takeout sidecar timestamp should replace the prior provider-derived capture time"
+        )
+        try fileManager.removeItem(
+            at: takeoutMetadataCacheRoot.appendingPathComponent("TAKEOUT-CACHED.MOV.json")
+        )
+        let takeoutMetadataSidecarRemoved = try await takeoutMetadataCacheScanner.scan(
+            roots: takeoutMetadataCacheRoots,
+            options: ScanOptions(computeExactDuplicates: false)
+        )
+        try require(
+            takeoutMetadataSidecarRemoved.summary.reusedMetadataCount == 2,
+            "removing a Takeout sidecar should reuse both unchanged media probes from intrinsic metadata cache"
+        )
+        try require(
+            takeoutMetadataSidecarRemoved.resources.first(where: { $0.mediaKind == .video })?
+                .captureTime?.source != .googleTakeoutPhotoTakenTime,
+            "a removed Takeout sidecar must not leave stale provider-derived capture time behind"
+        )
+        try Data(
+            #"{"title":"TAKEOUT-OTHER.MOV","photoTakenTime":{"timestamp":"1776002222"}}"#.utf8
+        ).write(
+            to: takeoutMetadataCacheRoot.appendingPathComponent("TAKEOUT-CACHED.MOV.json")
+        )
+        let takeoutMetadataRetargeted = try await takeoutMetadataCacheScanner.scan(
+            roots: takeoutMetadataCacheRoots,
+            options: ScanOptions(computeExactDuplicates: false)
+        )
+        try require(
+            takeoutMetadataRetargeted.summary.reusedMetadataCount == 2,
+            "retargeting a Takeout sidecar should reuse both unchanged media probes while re-reading the changed JSON"
+        )
+        try require(
+            takeoutMetadataRetargeted.resources.first(where: { $0.fileName == "TAKEOUT-CACHED.MOV" })?
+                .captureTime?.source != .googleTakeoutPhotoTakenTime,
+            "retargeting a Takeout sidecar must not restore provider time onto its former media target"
+        )
+        try require(
+            takeoutMetadataRetargeted.resources.first(where: { $0.fileName == "TAKEOUT-OTHER.MOV" })?
+                .captureTime?.instant == Date(timeIntervalSince1970: 1776002222),
+            "retargeting a Takeout sidecar should apply its provider time to the new media target"
+        )
+
+        let directRetargetRoot = temporary.appendingPathComponent(
+            "TakeoutDirectRetarget",
+            isDirectory: true
+        )
+        try fileManager.createDirectory(at: directRetargetRoot, withIntermediateDirectories: true)
+        let directRetargetA = directRetargetRoot.appendingPathComponent("DIRECT-A.MOV")
+        let directRetargetB = directRetargetRoot.appendingPathComponent("DIRECT-B.MOV")
+        let directRetargetJSON = directRetargetRoot.appendingPathComponent("DIRECT.MOV.json")
+        try await writeSyntheticTimedMetadataMovie(to: directRetargetA, markerValues: [0])
+        try await writeSyntheticTimedMetadataMovie(to: directRetargetB, markerValues: [0])
+        try Data(
+            #"{"title":"DIRECT-A.MOV","photoTakenTime":{"timestamp":"1776100000"}}"#.utf8
+        ).write(to: directRetargetJSON)
+        let directRetargetCatalog = temporary.appendingPathComponent("takeout-direct-retarget.sqlite3")
+        let directRetargetScanner = try ArchiveScanner(catalogURL: directRetargetCatalog)
+        let directRetargetRoots = [
+            ScanRoot(
+                url: directRetargetRoot,
+                kind: .importSource,
+                provenance: .googleTakeout
+            )
+        ]
+        let directRetargetFirst = try await directRetargetScanner.scan(
+            roots: directRetargetRoots,
+            options: ScanOptions(computeExactDuplicates: false)
+        )
+        try require(
+            directRetargetFirst.resources.first(where: { $0.fileName == "DIRECT-A.MOV" })?
+                .captureTime?.instant == Date(timeIntervalSince1970: 1776100000),
+            "direct-retarget fixture should start with the sidecar applied to media A"
+        )
+        let directJSONAttributes = try fileManager.attributesOfItem(atPath: directRetargetJSON.path)
+        let directJSONModifiedAt = directJSONAttributes[.modificationDate] as! Date
+        try Data(
+            #"{"title":"DIRECT-B.MOV","photoTakenTime":{"timestamp":"1776102222"}}"#.utf8
+        ).write(to: directRetargetJSON)
+        try fileManager.setAttributes(
+            [.modificationDate: directJSONModifiedAt.addingTimeInterval(5)],
+            ofItemAtPath: directRetargetJSON.path
+        )
+        let directRetargetProgress = ProgressRecorder()
+        let directRetargetSecond = try await directRetargetScanner.scan(
+            roots: directRetargetRoots,
+            options: ScanOptions(
+                computeExactDuplicates: false,
+                progressHandler: { progress in
+                    directRetargetProgress.record(progress)
+                }
+            )
+        )
+        let directMetadataProgress = directRetargetProgress.snapshot().filter { $0.stage == .metadata }
+        try require(
+            directRetargetSecond.summary.reusedMetadataCount == 2,
+            "direct sidecar retarget should reuse both unchanged media metadata probes"
+        )
+        try require(
+            directMetadataProgress.first?.completedUnitCount == 2
+                && directMetadataProgress.first?.totalUnitCount == 3,
+            "direct sidecar retarget should enter metadata probing with both media already satisfied by cache, leaving only the changed JSON to probe"
+        )
+        try require(
+            directRetargetSecond.resources.first(where: { $0.fileName == "DIRECT-A.MOV" })?
+                .captureTime?.source != .googleTakeoutPhotoTakenTime,
+            "direct A-to-B sidecar retarget must remove the old provider-derived capture time from media A"
+        )
+        try require(
+            directRetargetSecond.resources.first(where: { $0.fileName == "DIRECT-B.MOV" })?
+                .captureTime?.instant == Date(timeIntervalSince1970: 1776102222),
+            "direct A-to-B sidecar retarget must apply the new provider-derived capture time to media B"
+        )
+    }
+
+    private static func checkRootRegistry(fileManager: FileManager, temporary: URL) async throws {
+        let registryRoot = temporary.appendingPathComponent("RegistryRoot", isDirectory: true)
+        let registryCatalog = temporary.appendingPathComponent("registry.sqlite3")
+        try fileManager.createDirectory(at: registryRoot, withIntermediateDirectories: true)
+        let registryMedia = registryRoot.appendingPathComponent("IMG_0001.jpg")
+        try Data("registry-media".utf8).write(to: registryMedia)
+        let registryScanner = try ArchiveScanner(catalogURL: registryCatalog)
+        _ = try await registryScanner.scan(roots: [
+            ScanRoot(url: registryRoot, kind: .reference)
+        ])
+        let historyRoots = try RootRegistry.list(catalogURL: registryCatalog, includeHistory: true)
+        try require(historyRoots.count == 1 && historyRoots[0].state == .history, "an observed root should begin as history-only")
+        let registered = try RootRegistry.add(
+            url: registryRoot,
+            kind: .reference,
+            provenance: .unknown,
+            catalogURL: registryCatalog
+        )
+        try require(
+            registered.state == .active && registered.usageRole == .reference,
+            "root add should activate the registry entry with its default role"
+        )
+        let stagingRegistryRoot = try RootRegistry.setUsageRole(
+            target: registered.rootID,
+            role: .staging,
+            catalogURL: registryCatalog
+        )
+        try require(
+            stagingRegistryRoot.usageRole == .staging && stagingRegistryRoot.kind == .inbox,
+            "changing a root to staging should persist the role and map its internal kind to inbox"
+        )
+        try require(
+            fileManager.fileExists(atPath: registryMedia.path),
+            "changing a root role must never modify media"
+        )
+        let rolePreservingScan = try await registryScanner.scan(roots: [
+            ScanRoot(url: registryRoot, kind: .reference)
+        ])
+        try require(
+            rolePreservingScan.roots.first?.usageRole == .staging
+                && rolePreservingScan.roots.first?.kind == .inbox,
+            "an explicit saved root role should outrank a later scan flag for the same registered root"
+        )
+        let primaryRegistryRoot = try RootRegistry.setUsageRole(
+            target: registered.rootID,
+            role: .primaryLibrary,
+            catalogURL: registryCatalog
+        )
+        try require(
+            primaryRegistryRoot.usageRole == .primaryLibrary && primaryRegistryRoot.kind == .inbox,
+            "primary-library and staging roles should share the internal inbox kind"
+        )
+        try require(
+            try sqliteInt(
+                databaseURL: registryCatalog,
+                sql: "SELECT COUNT(*) FROM root_usage_role_history WHERE root_id = '\(registered.rootID)'"
+            ) == 3,
+            "root role changes should retain an auditable role history"
+        )
+        let disabled = try RootRegistry.setState(target: registered.rootID, state: .inactive, catalogURL: registryCatalog)
+        try require(disabled.state == .inactive, "root disable should preserve catalog evidence")
+        let enabled = try RootRegistry.setState(target: registered.rootID, state: .active, catalogURL: registryCatalog)
+        try require(enabled.state == .active, "root enable should reactivate the registry entry")
+        let removed = try RootRegistry.remove(target: registered.rootID, catalogURL: registryCatalog)
+        try require(removed.prunedResourceCount == 1, "root remove should prune current resource evidence")
+        try require(fileManager.fileExists(atPath: registryMedia.path), "root remove must never delete media")
+        let removedRoots = try RootRegistry.list(catalogURL: registryCatalog, includeHistory: true)
+        try require(removedRoots.count == 1 && removedRoots[0].state == .removed, "removed root identity should remain as minimal history")
+        try require(removedRoots[0].currentResourceCount == 0, "removed root must not retain current resource evidence")
+        let registryAgentJSON = String(
+            decoding: try JSONEncoder().encode(removedRoots.map(AgentSafeRegisteredRootReport.init)),
+            as: UTF8.self
+        )
+        try require(!registryAgentJSON.contains(registryRoot.path), "agent-safe root registry exposed a path")
+        try require(registryAgentJSON.contains("primary_library"), "agent-safe root registry should expose the semantic role")
+
+        let comparisonPurposeRoot = temporary.appendingPathComponent("ComparisonPurposeRoot", isDirectory: true)
+        let comparisonPurposeCatalog = temporary.appendingPathComponent("comparison-purpose.sqlite3")
+        try fileManager.createDirectory(at: comparisonPurposeRoot, withIntermediateDirectories: true)
+        try Data("comparison-purpose".utf8)
+            .write(to: comparisonPurposeRoot.appendingPathComponent("sample.jpg"))
+        let firstComparisonRegistration = try RootRegistry.addComparisonRoot(
+            url: comparisonPurposeRoot,
+            catalogURL: comparisonPurposeCatalog
+        )
+        try require(
+            !firstComparisonRegistration.wasAlreadyRegistered
+                && firstComparisonRegistration.root.usageRole == .staging
+                && firstComparisonRegistration.root.usageRole.userPurpose == .standard,
+            "a new comparison folder should use the consumer-facing standard purpose by default"
+        )
+        let registrationUpdatedAt = try sqliteText(
+            databaseURL: comparisonPurposeCatalog,
+            sql: "SELECT printf('%.6f', updated_at) FROM root_registrations WHERE root_id = '\(firstComparisonRegistration.root.rootID)'"
+        )
+        let duplicateComparisonRegistration = try RootRegistry.addComparisonRoot(
+            url: comparisonPurposeRoot,
+            purpose: .archive,
+            catalogURL: comparisonPurposeCatalog
+        )
+        let duplicateRegistrationUpdatedAt = try sqliteText(
+            databaseURL: comparisonPurposeCatalog,
+            sql: "SELECT printf('%.6f', updated_at) FROM root_registrations WHERE root_id = '\(firstComparisonRegistration.root.rootID)'"
+        )
+        try require(
+            duplicateComparisonRegistration.wasAlreadyRegistered
+                && duplicateComparisonRegistration.root.rootID == firstComparisonRegistration.root.rootID
+                && duplicateComparisonRegistration.root.usageRole == .staging
+                && duplicateRegistrationUpdatedAt == registrationUpdatedAt,
+            "adding an already registered comparison folder must be a no-op without role or registration timestamp changes"
+        )
+        let archivedComparisonRoot = try RootRegistry.setUserPurpose(
+            target: firstComparisonRegistration.root.rootID,
+            purpose: .archive,
+            catalogURL: comparisonPurposeCatalog
+        )
+        try require(
+            archivedComparisonRoot.usageRole == .archive
+                && archivedComparisonRoot.usageRole.userPurpose == .archive,
+            "the archive consumer purpose should map to the protected archive role"
+        )
+        let readOnlyComparisonRoot = try RootRegistry.setUserPurpose(
+            target: firstComparisonRegistration.root.rootID,
+            purpose: .readOnly,
+            catalogURL: comparisonPurposeCatalog
+        )
+        try require(
+            readOnlyComparisonRoot.usageRole == .reference
+                && readOnlyComparisonRoot.usageRole.userPurpose == .readOnly,
+            "the read-only consumer purpose should map to the non-mutating reference role"
+        )
+
+        let displayOrderCatalog = temporary.appendingPathComponent("display-order.sqlite3")
+        let displayOrderURLs = ["One", "Two", "Three"].map {
+            temporary.appendingPathComponent("DisplayOrder\($0)", isDirectory: true)
+        }
+        for url in displayOrderURLs {
+            try fileManager.createDirectory(at: url, withIntermediateDirectories: true)
+            _ = try RootRegistry.addComparisonRoot(url: url, catalogURL: displayOrderCatalog)
+        }
+        let initialDisplayRoots = try RootRegistry.list(catalogURL: displayOrderCatalog)
+        let reversedRootIDs = initialDisplayRoots.reversed().map(\.rootID)
+        _ = try RootRegistry.setDisplayOrder(rootIDs: reversedRootIDs, catalogURL: displayOrderCatalog)
+        let reorderedDisplayRoots = try RootRegistry.list(catalogURL: displayOrderCatalog)
+        try require(
+            reorderedDisplayRoots.map(\.rootID) == reversedRootIDs,
+            "consumer folder display order should persist across registry reloads"
+        )
+
+        let autoTakeoutRoot = temporary.appendingPathComponent("AutoTakeoutRoot", isDirectory: true)
+        let autoTakeoutCatalog = temporary.appendingPathComponent("auto-takeout.sqlite3")
+        try fileManager.createDirectory(at: autoTakeoutRoot, withIntermediateDirectories: true)
+        try Data("takeout-media".utf8).write(to: autoTakeoutRoot.appendingPathComponent("IMG_1000.jpg"))
+        try Data("""
+        {"title":"IMG_1000.jpg","photoTakenTime":{"timestamp":"1700000000"}}
+        """.utf8).write(to: autoTakeoutRoot.appendingPathComponent("IMG_1000.jpg.json"))
+        let autoTakeoutRegistration = try RootRegistry.addComparisonRoot(
+            url: autoTakeoutRoot,
+            catalogURL: autoTakeoutCatalog
+        )
+        try require(
+            autoTakeoutRegistration.root.provenance == .googleTakeout
+                && autoTakeoutRegistration.root.usageRole == .importSource
+                && autoTakeoutRegistration.root.usageRole.userPurpose == .standard,
+            "Google Takeout provenance should be inferred internally without exposing a provenance choice in the consumer UI"
+        )
+
+        let historySwitchRoot = temporary.appendingPathComponent("HistorySwitchRoot", isDirectory: true)
+        let historySwitchCatalog = temporary.appendingPathComponent("history-switch.sqlite3")
+        try fileManager.createDirectory(at: historySwitchRoot, withIntermediateDirectories: true)
+        try Data("history-switch".utf8)
+            .write(to: historySwitchRoot.appendingPathComponent("sample.jpg"))
+        let historySwitchScanner = try ArchiveScanner(catalogURL: historySwitchCatalog)
+        let historyReferenceScan = try await historySwitchScanner.scan(roots: [
+            ScanRoot(url: historySwitchRoot, kind: .reference)
+        ])
+        try require(
+            historyReferenceScan.roots.first?.usageRole == .reference,
+            "a history-only reference scan should reflect the current scan kind"
+        )
+        let historyInboxScan = try await historySwitchScanner.scan(roots: [
+            ScanRoot(url: historySwitchRoot, kind: .inbox, provenance: .localLibrary)
+        ])
+        try require(
+            historyInboxScan.roots.first?.usageRole == .staging,
+            "an unregistered history-only root should follow a later scan kind instead of becoming sticky"
+        )
+
+        let ownershipParent = temporary.appendingPathComponent("OwnershipParent", isDirectory: true)
+        let ownershipNested = ownershipParent.appendingPathComponent("Nested", isDirectory: true)
+        try fileManager.createDirectory(at: ownershipNested, withIntermediateDirectories: true)
+        try Data("parent-owned".utf8).write(to: ownershipParent.appendingPathComponent("parent.jpg"))
+        try Data("nested-owned".utf8).write(to: ownershipNested.appendingPathComponent("nested.jpg"))
+        let ownershipCatalog = temporary.appendingPathComponent("ownership.sqlite3")
+        let ownershipScanner = try ArchiveScanner(catalogURL: ownershipCatalog)
+        _ = try RootRegistry.add(
+            url: ownershipParent,
+            kind: .inbox,
+            provenance: .localLibrary,
+            catalogURL: ownershipCatalog
+        )
+        let ownershipNestedRegistered = try RootRegistry.add(
+            url: ownershipNested,
+            kind: .importSource,
+            provenance: .googleTakeout,
+            catalogURL: ownershipCatalog
+        )
+        let parentOnlyWithActiveNested = try await ownershipScanner.scan(roots: [
+            ScanRoot(url: ownershipParent, kind: .inbox, provenance: .localLibrary)
+        ])
+        try require(
+            parentOnlyWithActiveNested.summary.resourceCount == 1,
+            "a parent-only scan must exclude a separately registered active nested root"
+        )
+        _ = try RootRegistry.setState(
+            target: ownershipNestedRegistered.rootID,
+            state: .inactive,
+            catalogURL: ownershipCatalog
+        )
+        let parentOnlyWithInactiveNested = try await ownershipScanner.scan(roots: [
+            ScanRoot(url: ownershipParent, kind: .inbox, provenance: .localLibrary)
+        ])
+        try require(
+            parentOnlyWithInactiveNested.summary.resourceCount == 1,
+            "an inactive nested root must remain an ownership boundary until it is removed"
+        )
+        _ = try RootRegistry.remove(
+            target: ownershipNestedRegistered.rootID,
+            catalogURL: ownershipCatalog
+        )
+        let parentAfterNestedRemoval = try await ownershipScanner.scan(roots: [
+            ScanRoot(url: ownershipParent, kind: .inbox, provenance: .localLibrary)
+        ])
+        try require(
+            parentAfterNestedRemoval.summary.resourceCount == 2,
+            "a removed nested root should return its files to parent-root ownership"
+        )
+    }
+
+    private static func checkCatalogReviewReuseAndSidecars(
+        fileManager: FileManager,
+        temporary: URL
+    ) async throws {
+        let legacySessionCatalog = temporary.appendingPathComponent("legacy-scan-session.sqlite3")
+        _ = fileManager.createFile(atPath: legacySessionCatalog.path, contents: Data())
+        try sqliteExecute(
+            databaseURL: legacySessionCatalog,
+            sql: """
+                CREATE TABLE scan_sessions (
+                    id TEXT PRIMARY KEY,
+                    started_at REAL NOT NULL,
+                    completed_at REAL,
+                    status TEXT NOT NULL,
+                    root_count INTEGER NOT NULL DEFAULT 0,
+                    resource_count INTEGER NOT NULL DEFAULT 0,
+                    asset_count INTEGER NOT NULL DEFAULT 0,
+                    warning_count INTEGER NOT NULL DEFAULT 0
+                );
+                INSERT INTO scan_sessions (
+                    id, started_at, completed_at, status, root_count,
+                    resource_count, asset_count, warning_count
+                ) VALUES ('SLEGACY', 1, 2, 'complete', 0, 0, 0, 0);
+                """
+        )
+        _ = try ArchiveScanner(catalogURL: legacySessionCatalog)
+        try require(
+            try sqliteInt(
+                databaseURL: legacySessionCatalog,
+                sql: "SELECT COUNT(*) FROM pragma_table_info('scan_sessions') WHERE name = 'exact_duplicates_computed'"
+            ) == 1,
+            "catalog migration should add explicit exact-duplicate scan capability state"
+        )
+        try require(
+            try sqliteInt(
+                databaseURL: legacySessionCatalog,
+                sql: "SELECT exact_duplicates_computed IS NULL FROM scan_sessions WHERE id = 'SLEGACY'"
+            ) == 1,
+            "legacy completed sessions must retain unknown exact-duplicate capability instead of being assumed complete"
+        )
+
+        let skippedDuplicateCatalog = temporary.appendingPathComponent("skipped-duplicate-review.sqlite3")
+        let skippedDuplicateRoot = temporary.appendingPathComponent("SkippedDuplicateReview", isDirectory: true)
+        try fileManager.createDirectory(at: skippedDuplicateRoot, withIntermediateDirectories: true)
+        let skippedDuplicateBytes = Data("skipped-duplicate-bytes".utf8)
+        try skippedDuplicateBytes.write(to: skippedDuplicateRoot.appendingPathComponent("same-a.jpg"))
+        try skippedDuplicateBytes.write(to: skippedDuplicateRoot.appendingPathComponent("same-b.jpg"))
+        _ = try RootRegistry.add(
+            url: skippedDuplicateRoot,
+            kind: .inbox,
+            provenance: .unknown,
+            usageRole: .staging,
+            catalogURL: skippedDuplicateCatalog
+        )
+        let skippedDuplicateScanner = try ArchiveScanner(catalogURL: skippedDuplicateCatalog)
+        let skippedDuplicateScan = try await skippedDuplicateScanner.scan(
+            roots: [ScanRoot(url: skippedDuplicateRoot, kind: .inbox, provenance: .unknown)],
+            options: ScanOptions(computeExactDuplicates: false)
+        )
+        try require(
+            skippedDuplicateScan.exactDuplicateGroups.isEmpty,
+            "a scan that explicitly skips exact comparison should not synthesize duplicate groups"
+        )
+        try require(
+            try sqliteInt(
+                databaseURL: skippedDuplicateCatalog,
+                sql: "SELECT exact_duplicates_computed FROM scan_sessions WHERE id = '\(skippedDuplicateScan.sessionID)'"
+            ) == 0,
+            "completed scan sessions should record that exact duplicate comparison was skipped"
+        )
+        guard let generalSkippedSnapshot = try skippedDuplicateScanner.latestReusableActiveRootsScanReport() else {
+            throw SelfTestFailure("a no-exact scan should remain reusable as general scan history")
+        }
+        try require(
+            generalSkippedSnapshot.sessionID == skippedDuplicateScan.sessionID,
+            "general scan snapshot reuse should remain independent from duplicate-review eligibility"
+        )
+        try require(
+            try skippedDuplicateScanner.latestReusableActiveRootsDuplicateReviewScanReport() == nil
+                && skippedDuplicateScanner.latestReusableDuplicateReviewScanReport() == nil,
+            "a completed no-exact scan must not be restored as a valid zero-duplicate review"
+        )
+        let completedDuplicateScan = try await skippedDuplicateScanner.scan(
+            roots: [ScanRoot(url: skippedDuplicateRoot, kind: .inbox, provenance: .unknown)]
+        )
+        try require(
+            completedDuplicateScan.exactDuplicateGroups.count == 1,
+            "the same synthetic bytes should form one duplicate group when exact comparison is actually performed"
+        )
+        try require(
+            try skippedDuplicateScanner.latestReusableActiveRootsDuplicateReviewScanReport()?.sessionID
+                == completedDuplicateScan.sessionID
+                && skippedDuplicateScanner.latestReusableDuplicateReviewScanReport()?.sessionID
+                    == completedDuplicateScan.sessionID,
+            "duplicate-review reuse should accept a completed session that actually performed exact comparison"
+        )
+        try sqliteExecute(
+            databaseURL: skippedDuplicateCatalog,
+            sql: "UPDATE scan_sessions SET exact_duplicates_computed = NULL WHERE id = '\(completedDuplicateScan.sessionID)'"
+        )
+        try require(
+            try skippedDuplicateScanner.latestReusableActiveRootsDuplicateReviewScanReport() == nil
+                && skippedDuplicateScanner.latestReusableDuplicateReviewScanReport() == nil,
+            "an information-less legacy session must not be treated as exact-duplicate-complete"
+        )
+
+        let reviewSubsetCatalog = temporary.appendingPathComponent("review-subset.sqlite3")
+        let reviewSubsetA = temporary.appendingPathComponent("ReviewSubsetA", isDirectory: true)
+        let reviewSubsetB = temporary.appendingPathComponent("ReviewSubsetB", isDirectory: true)
+        let reviewSubsetC = temporary.appendingPathComponent("ReviewSubsetC", isDirectory: true)
+        for root in [reviewSubsetA, reviewSubsetB, reviewSubsetC] {
+            try fileManager.createDirectory(at: root, withIntermediateDirectories: true)
+        }
+        let reviewSubsetBytes = Data("review-subset-duplicate".utf8)
+        try reviewSubsetBytes.write(to: reviewSubsetA.appendingPathComponent("keeper.jpg"))
+        try reviewSubsetBytes.write(to: reviewSubsetB.appendingPathComponent("keeper 2.jpg"))
+        try Data("unrelated-review-resource".utf8).write(
+            to: reviewSubsetC.appendingPathComponent("unrelated.jpg")
+        )
+        for root in [reviewSubsetA, reviewSubsetB, reviewSubsetC] {
+            _ = try RootRegistry.add(
+                url: root,
+                kind: .inbox,
+                provenance: .unknown,
+                usageRole: .staging,
+                catalogURL: reviewSubsetCatalog
+            )
+        }
+        let reviewSubsetScanner = try ArchiveScanner(catalogURL: reviewSubsetCatalog)
+        let reviewDuplicateScan = try await reviewSubsetScanner.scan(roots: [
+            ScanRoot(url: reviewSubsetA, kind: .inbox, provenance: .unknown),
+            ScanRoot(url: reviewSubsetB, kind: .inbox, provenance: .unknown)
+        ])
+        _ = try await reviewSubsetScanner.scan(roots: [
+            ScanRoot(url: reviewSubsetC, kind: .inbox, provenance: .unknown)
+        ])
+        try require(
+            try reviewSubsetScanner.latestReusableActiveRootsScanReport() == nil,
+            "an unrelated active-root scan should make the strict all-active-root snapshot unavailable"
+        )
+        guard let reusableReviewSubset = try reviewSubsetScanner.latestReusableDuplicateReviewScanReport() else {
+            throw SelfTestFailure("duplicate review should restore the latest completed scan even when it found no duplicates")
+        }
+        try require(
+            reusableReviewSubset.sessionID != reviewDuplicateScan.sessionID
+                && Set(reusableReviewSubset.roots.map(\.canonicalPath))
+                    == Set([reviewSubsetC.standardizedFileURL.path])
+                && reusableReviewSubset.exactDuplicateGroups.isEmpty,
+            "duplicate review should restore the newest completed scope instead of presenting an older duplicate snapshot as current"
+        )
+        let reusablePresentation = try DuplicateReviewPresentationBuilder.latest(
+            catalogURL: reviewSubsetCatalog
+        )
+        try require(
+            reusablePresentation.items.isEmpty
+                && reusablePresentation.candidateResourceCount == 0
+                && reusablePresentation.scopeRootLabels.count == 1,
+            "duplicate-review GUI presentation should restore a completed zero-duplicate result as an empty state"
+        )
+        try require(
+            try reviewSubsetScanner.completedScanRootIDs().isSuperset(of: Set(
+                try RootRegistry.list(catalogURL: reviewSubsetCatalog).map(\.rootID)
+            )),
+            "completed scan history should remember each scanned registered root independently of the currently displayed snapshot"
+        )
+        let expandedReviewScan = try await reviewSubsetScanner.scan(roots: [
+            ScanRoot(url: reviewSubsetA, kind: .inbox, provenance: .unknown),
+            ScanRoot(url: reviewSubsetB, kind: .inbox, provenance: .unknown),
+            ScanRoot(url: reviewSubsetC, kind: .inbox, provenance: .unknown)
+        ])
+        let expandedReviewPresentation = DuplicateReviewPresentationBuilder.makePresentation(
+            report: expandedReviewScan,
+            plan: ReconciliationPlanner.makePlan(from: expandedReviewScan)
+        )
+        try require(
+            expandedReviewPresentation.scopeRoots.count == 3
+                && expandedReviewPresentation.items.count == 1
+                && expandedReviewPresentation.candidateResourceCount == 1,
+            "adding a comparison root and rescanning the selected registered roots should expand the GUI scope without changing unrelated duplicate decisions"
+        )
+
+        let emptyReviewRoot = temporary.appendingPathComponent("EmptyReviewRoot", isDirectory: true)
+        try fileManager.createDirectory(at: emptyReviewRoot, withIntermediateDirectories: true)
+        let emptyReviewRegistered = try RootRegistry.add(
+            url: emptyReviewRoot,
+            kind: .inbox,
+            provenance: .unknown,
+            usageRole: .staging,
+            catalogURL: reviewSubsetCatalog
+        )
+        let emptyReviewScan = try await reviewSubsetScanner.scan(roots: [
+            ScanRoot(url: emptyReviewRoot, kind: .inbox, provenance: .unknown)
+        ])
+        guard let restoredEmptyReviewScan = try reviewSubsetScanner.latestReusableDuplicateReviewScanReport() else {
+            throw SelfTestFailure("an empty completed duplicate-review scan should remain reusable")
+        }
+        try require(
+            emptyReviewScan.resources.isEmpty
+                && restoredEmptyReviewScan.sessionID == emptyReviewScan.sessionID
+                && restoredEmptyReviewScan.roots.map(\.rootID) == [emptyReviewRegistered.rootID]
+                && restoredEmptyReviewScan.resources.isEmpty,
+            "completed scan scope must be persisted independently of resource rows so empty roots restore correctly"
+        )
+
+        let takeoutSidecarRoot = temporary.appendingPathComponent("TakeoutSidecar", isDirectory: true)
+        try fileManager.createDirectory(at: takeoutSidecarRoot, withIntermediateDirectories: true)
+        let takeoutSidecarMedia = takeoutSidecarRoot.appendingPathComponent("IMG_2468.JPG")
+        let takeoutSidecarJSON = takeoutSidecarRoot.appendingPathComponent("IMG_2468.JPG.json")
+        try Data("synthetic-sidecar-media".utf8).write(to: takeoutSidecarMedia)
+        try Data(#"{"title":"IMG_2468.JPG","photoTakenTime":{"timestamp":"1776000000"}}"#.utf8)
+            .write(to: takeoutSidecarJSON)
+        let takeoutSidecarCatalog = temporary.appendingPathComponent("takeout-sidecar.sqlite3")
+        let takeoutSidecarScanner = try ArchiveScanner(catalogURL: takeoutSidecarCatalog)
+        let takeoutSidecarReport = try await takeoutSidecarScanner.scan(roots: [
+            ScanRoot(url: takeoutSidecarRoot, kind: .importSource, provenance: .googleTakeout)
+        ])
+        try require(
+            takeoutSidecarReport.recognizedSidecars.count == 1,
+            "a matching Google Takeout JSON sidecar should be associated automatically"
+        )
+        try require(
+            takeoutSidecarReport.roots[0].recognizedSidecars == 1
+                && takeoutSidecarReport.roots[0].unrecognizedSidecars == 0,
+            "root reports should distinguish recognized from unrecognized sidecars"
+        )
+        try require(
+            try sqliteInt(databaseURL: takeoutSidecarCatalog, sql: "SELECT COUNT(*) FROM sidecar_links") == 1,
+            "recognized sidecar association should be persisted in the catalog"
+        )
+        let takeoutSidecarAgentJSON = String(
+            decoding: try JSONEncoder().encode(AgentSafeScanReport(report: takeoutSidecarReport)),
+            as: UTF8.self
+        )
+        try require(!takeoutSidecarAgentJSON.contains("IMG_2468"), "agent-safe sidecar output exposed a filename")
+        try require(!takeoutSidecarAgentJSON.contains(takeoutSidecarRoot.path), "agent-safe sidecar output exposed a path")
+    }
+
+    private static func checkArchiveInventory(
+        fileManager: FileManager,
+        temporary: URL,
+        scanner: ArchiveScanner,
+        roots: [ScanRoot],
+        first: ScanReport
+    ) async throws {
+        let userArchiveRoot = temporary.appendingPathComponent("UserArchive", isDirectory: true)
+        let tripFolder = userArchiveRoot
+            .appendingPathComponent("Trips", isDirectory: true)
+            .appendingPathComponent("Japan", isDirectory: true)
+        let familyFolder = userArchiveRoot.appendingPathComponent("Family", isDirectory: true)
+        try fileManager.createDirectory(at: tripFolder, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: familyFolder, withIntermediateDirectories: true)
+        _ = try RootMarkerStore.create(at: userArchiveRoot)
+        let tripPhoto = tripFolder.appendingPathComponent("trip.jpg")
+        let familyPhoto = familyFolder.appendingPathComponent("family.jpg")
+        try Data("synthetic-user-archive-trip".utf8).write(to: tripPhoto)
+        try Data("synthetic-user-archive-family".utf8).write(to: familyPhoto)
+
+        let archiveCatalog = temporary.appendingPathComponent("archive-catalog.sqlite3")
+        let archiveIndex = try await ArchiveRootIndexer.run(
+            rootURL: userArchiveRoot,
+            catalogURL: archiveCatalog,
+            writeSnapshot: true,
+            maxConcurrentProbes: 1
+        )
+        try require(archiveIndex.resourceCount == 2, "archive index should include both media resources")
+        try require(archiveIndex.folderCount == 3, "archive index should preserve the nested user folder hierarchy")
+        try require(archiveIndex.exactHashResourceCount == 2, "archive index should hash every media resource")
+        try require(archiveIndex.snapshotWritten, "archive index apply should write a portable inventory")
+        try require(!archiveIndex.mediaFilesModified, "archive inventory write must not report media mutation")
+        try require(
+            fileManager.fileExists(atPath: archiveIndex.inventoryPath),
+            "portable archive inventory file should exist"
+        )
+        try require(
+            try sqliteInt(
+                databaseURL: archiveCatalog,
+                sql: "SELECT COUNT(*) FROM collections WHERE collection_type = 'user_archive_folder'"
+            ) == 3,
+            "archive folder hierarchy should be persisted as user-authored collections"
+        )
+        try require(
+            try sqliteInt(
+                databaseURL: archiveCatalog,
+                sql: "SELECT COUNT(*) FROM memberships WHERE membership_origin = 'user_archive_folder'"
+            ) == 2,
+            "archive media assets should retain their leaf-folder memberships"
+        )
+
+        let inventoryURL = URL(fileURLWithPath: archiveIndex.inventoryPath)
+        let inventoryBefore = try Data(contentsOf: inventoryURL)
+        let freshComputerCatalog = temporary.appendingPathComponent("fresh-computer-catalog.sqlite3")
+        let freshComputerIndex = try await ArchiveRootIndexer.run(
+            rootURL: userArchiveRoot,
+            catalogURL: freshComputerCatalog,
+            writeSnapshot: false,
+            maxConcurrentProbes: 1
+        )
+        try require(
+            freshComputerIndex.reusedExactHashCount == 2,
+            "a fresh local catalog should reuse exact hashes from the portable archive inventory"
+        )
+        try require(!freshComputerIndex.mediaFilesModified, "archive index must remain media-read-only")
+        try require(
+            try Data(contentsOf: inventoryURL) == inventoryBefore,
+            "archive-index without --apply must not rewrite the portable inventory"
+        )
+        let archiveIndexAgentJSON = String(
+            decoding: try JSONEncoder().encode(AgentSafeArchiveRootInventoryReport(report: freshComputerIndex)),
+            as: UTF8.self
+        )
+        try require(!archiveIndexAgentJSON.contains(userArchiveRoot.path), "agent-safe archive index report exposed a root path")
+        try require(!archiveIndexAgentJSON.contains("trip.jpg"), "agent-safe archive index report exposed a filename")
+        let freshIntegrityIndex = try await ArchiveRootIndexer.run(
+            rootURL: userArchiveRoot,
+            catalogURL: freshComputerCatalog,
+            writeSnapshot: false,
+            reuseMetadataCache: false,
+            reuseHashCache: false,
+            maxConcurrentProbes: 1
+        )
+        try require(
+            freshIntegrityIndex.reusedExactHashCount == 0,
+            "archive-index fresh mode should bypass both local and portable hash caches"
+        )
+
+        let movedTripPhoto = familyFolder.appendingPathComponent("trip.jpg")
+        try fileManager.moveItem(at: tripPhoto, to: movedTripPhoto)
+        let postMoveIndex = try await ArchiveRootIndexer.run(
+            rootURL: userArchiveRoot,
+            catalogURL: archiveCatalog,
+            writeSnapshot: false,
+            maxConcurrentProbes: 1
+        )
+        try require(
+            postMoveIndex.reusedExactHashCount == 2,
+            "same-volume manual moves should reuse cached hashes through filesystem identity"
+        )
+        try require(
+            postMoveIndex.folderCount == 1,
+            "archive index should reflect the current user-managed folder structure after a manual move"
+        )
+        try require(
+            try sqliteInt(
+                databaseURL: archiveCatalog,
+                sql: "SELECT COUNT(*) FROM collections WHERE collection_type = 'user_archive_folder'"
+            ) == 1,
+            "stale user-archive folder collections should be pruned after a manual move"
+        )
+        try require(
+            try sqliteText(
+                databaseURL: archiveCatalog,
+                sql: "SELECT name FROM collections WHERE collection_type = 'user_archive_folder' LIMIT 1"
+            ) == "Family",
+            "the remaining user-archive collection should match the current folder"
+        )
+
+        if executableExists("czkawka_cli") {
+            let czkawkaReport = try await scanner.scan(
+                roots: roots,
+                options: ScanOptions(exactDuplicateEngine: .czkawka)
+            )
+            try require(
+                czkawkaReport.summary.exactDuplicateGroupCount == first.summary.exactDuplicateGroupCount,
+                "Czkawka candidate discovery plus native verification should match native exact grouping"
+            )
+        }
+    }
+
+    private static func checkArchiveCopy(
+        fileManager: FileManager,
+        temporary: URL,
+        bytes: Data,
+        beforeA: Data,
+        beforeB: Data,
+        encoder: JSONEncoder,
+        rawHash: String
+    ) async throws {
+        let archiveCopySourceA = temporary.appendingPathComponent("ArchiveCopySourceA", isDirectory: true)
+        let archiveCopySourceB = temporary.appendingPathComponent("ArchiveCopySourceB", isDirectory: true)
+        try fileManager.createDirectory(at: archiveCopySourceA, withIntermediateDirectories: true)
+        try fileManager.createDirectory(at: archiveCopySourceB, withIntermediateDirectories: true)
+        _ = try RootMarkerStore.create(at: archiveCopySourceA)
+        _ = try RootMarkerStore.create(at: archiveCopySourceB)
+        let archiveCopySourceFileA = archiveCopySourceA.appendingPathComponent("one.jpg")
+        let archiveCopySourceFileB = archiveCopySourceB.appendingPathComponent("copy.jpg")
+        try bytes.write(to: archiveCopySourceFileA)
+        try bytes.write(to: archiveCopySourceFileB)
+        let archiveCopyCatalogURL = temporary.appendingPathComponent("archive-copy-catalog.sqlite3")
+        let archiveCopyScanner = try ArchiveScanner(catalogURL: archiveCopyCatalogURL)
+        let archiveCopyReport = try await archiveCopyScanner.scan(roots: [
+            ScanRoot(url: archiveCopySourceA, kind: .reference, provenance: .localLibrary),
+            ScanRoot(url: archiveCopySourceB, kind: .reference, provenance: .googleTakeout)
+        ])
+
+        let archiveCopyDestination = temporary.appendingPathComponent("ArchiveCopyDestination", isDirectory: true)
+        try fileManager.createDirectory(at: archiveCopyDestination, withIntermediateDirectories: true)
+        let archiveCopyDestinationMarker = try RootMarkerStore.create(at: archiveCopyDestination)
+        _ = try RootRegistry.add(
+            url: archiveCopyDestination,
+            kind: .reference,
+            provenance: .unknown,
+            usageRole: .reference,
+            catalogURL: archiveCopyCatalogURL
+        )
+        do {
+            _ = try archiveCopyScanner.makeArchivePlan(
+                from: archiveCopyReport,
+                destinationURL: archiveCopyDestination
+            )
+            throw SelfTestFailure("archive planner accepted a registered reference-role destination")
+        } catch ArchivePlanError.destinationRoleConflict {
+            // Expected: a registered destination must explicitly be an archive root.
+        }
+        _ = try RootRegistry.setUsageRole(
+            target: archiveCopyDestination.path,
+            role: .archive,
+            catalogURL: archiveCopyCatalogURL
+        )
+        let archiveCopyPlan = try archiveCopyScanner.makeArchivePlan(
+            from: archiveCopyReport,
+            destinationURL: archiveCopyDestination
+        )
+        let archiveCopyPlanURL = temporary.appendingPathComponent("archive-copy-plan.json")
+        try ArchivePlanStore.write(archiveCopyPlan, to: archiveCopyPlanURL)
+        _ = try RootRegistry.setUsageRole(
+            target: archiveCopyDestination.path,
+            role: .reference,
+            catalogURL: archiveCopyCatalogURL
+        )
+        do {
+            _ = try ArchiveCopyExecutor.preflight(planURL: archiveCopyPlanURL)
+            throw SelfTestFailure("archive-copy accepted a destination changed to reference role")
+        } catch ArchiveCopyError.destinationRoleConflict {
+            // Expected: replay re-checks the current destination role.
+        }
+        _ = try RootRegistry.setUsageRole(
+            target: archiveCopyDestination.path,
+            role: .archive,
+            catalogURL: archiveCopyCatalogURL
+        )
+        let archiveCopyDryRun = try ArchiveCopyExecutor.preflight(planURL: archiveCopyPlanURL)
+        try require(archiveCopyDryRun.dryRun, "archive-copy should default to dry-run")
+        try require(
+            archiveCopyDryRun.copyRequiredResourceCount == 1
+                && archiveCopyDryRun.automaticResourceCount == 1,
+            "archive-copy dry-run should require exactly one canonical synthetic resource"
+        )
+        let archiveDryRunSourceA = try Data(contentsOf: archiveCopySourceFileA)
+        let archiveDryRunSourceB = try Data(contentsOf: archiveCopySourceFileB)
+        try require(
+            archiveDryRunSourceA == beforeA && archiveDryRunSourceB == beforeB,
+            "archive-copy dry-run modified source media"
+        )
+        let archiveCopyAgentJSON = String(
+            decoding: try encoder.encode(AgentSafeArchiveCopyReport(report: archiveCopyDryRun)),
+            as: UTF8.self
+        )
+        try require(
+            !archiveCopyAgentJSON.contains(archiveCopySourceA.path),
+            "agent-safe archive-copy exposed a source path"
+        )
+        try require(
+            !archiveCopyAgentJSON.contains(archiveCopyDestination.path),
+            "agent-safe archive-copy exposed a destination path"
+        )
+        try require(!archiveCopyAgentJSON.contains("one.jpg"), "agent-safe archive-copy exposed a filename")
+        try require(!archiveCopyAgentJSON.contains(rawHash), "agent-safe archive-copy exposed SHA-256")
+        try require(
+            !archiveCopyAgentJSON.contains(archiveCopyDestinationMarker.markerKey),
+            "agent-safe archive-copy exposed a destination marker key"
+        )
+
+        let archiveCopyApplied = try await ArchiveCopyExecutor.apply(planURL: archiveCopyPlanURL)
+        try require(archiveCopyApplied.filesModified, "archive-copy apply should create verified archive files")
+        try require(archiveCopyApplied.catalogCommitted, "archive-copy should commit the destination scan to catalog")
+        try require(archiveCopyApplied.snapshotWritten, "archive-copy should write a portable catalog snapshot")
+        guard let copiedRelativePath = archiveCopyPlan.items.first?.resources.first?.destinationRelativePath else {
+            throw SelfTestFailure("archive-copy plan is missing its destination")
+        }
+        let copiedURL = archiveCopyDestination.appendingPathComponent(copiedRelativePath)
+        try require(fileManager.fileExists(atPath: copiedURL.path), "archive-copy final resource is missing")
+        try require(try Data(contentsOf: copiedURL) == beforeA, "archive-copy changed canonical source bytes")
+        let archiveAppliedSourceA = try Data(contentsOf: archiveCopySourceFileA)
+        let archiveAppliedSourceB = try Data(contentsOf: archiveCopySourceFileB)
+        try require(
+            archiveAppliedSourceA == beforeA && archiveAppliedSourceB == beforeB,
+            "archive-copy apply moved or changed source media"
+        )
+        try require(
+            fileManager.fileExists(atPath: archiveCopyApplied.manifestPath),
+            "archive-copy complete manifest is missing"
+        )
+        try require(
+            fileManager.fileExists(atPath: archiveCopyApplied.snapshotPath),
+            "archive-copy portable catalog snapshot is missing"
+        )
+        try require(
+            try sqliteInt(
+                databaseURL: archiveCopyCatalogURL,
+                sql: "SELECT COUNT(*) FROM source_roots WHERE kind = 'archive'"
+            ) == 1,
+            "archive-copy destination scan should register one archive root"
+        )
+        try require(
+            try sqliteInt(
+                databaseURL: archiveCopyCatalogURL,
+                sql: "SELECT COUNT(*) FROM resources r JOIN source_roots sr ON sr.id = r.root_id WHERE sr.kind = 'archive' AND r.relative_path = '\(copiedRelativePath)'"
+            ) == 1,
+            "archive-copy destination resource was not committed to the catalog"
+        )
+
+        let archiveCopyReplay = try await ArchiveCopyExecutor.apply(planURL: archiveCopyPlanURL)
+        try require(!archiveCopyReplay.filesModified, "completed archive-copy replay should be idempotent")
+        try require(
+            archiveCopyReplay.alreadyFinalResourceCount == 1
+                && archiveCopyReplay.copyRequiredResourceCount == 0,
+            "completed archive-copy replay should reuse the verified final resource"
+        )
+
+        let archiveSnapshotBytes = try Data(contentsOf: URL(fileURLWithPath: archiveCopyReplay.snapshotPath))
+        try Data("tampered-archive-snapshot".utf8)
+            .write(to: URL(fileURLWithPath: archiveCopyReplay.snapshotPath))
+        do {
+            _ = try ArchiveCopyExecutor.preflight(planURL: archiveCopyPlanURL)
+            throw SelfTestFailure("archive-copy accepted a changed completed catalog snapshot")
+        } catch ArchiveCopyError.snapshotConflict {
+            // Expected: completed operation checkpoints re-verify their snapshot hash.
+        }
+        try archiveSnapshotBytes.write(to: URL(fileURLWithPath: archiveCopyReplay.snapshotPath))
+
+        let archiveCopyTamperDestination = temporary
+            .appendingPathComponent("ArchiveCopyTamperDestination", isDirectory: true)
+        try fileManager.createDirectory(at: archiveCopyTamperDestination, withIntermediateDirectories: true)
+        _ = try RootMarkerStore.create(at: archiveCopyTamperDestination)
+        let archiveCopyTamperPlan = try archiveCopyScanner.makeArchivePlan(
+            from: archiveCopyReport,
+            destinationURL: archiveCopyTamperDestination
+        )
+        let archiveCopyTamperPlanURL = temporary.appendingPathComponent("archive-copy-tamper-plan.json")
+        try ArchivePlanStore.write(archiveCopyTamperPlan, to: archiveCopyTamperPlanURL)
+        let archiveCopySameSizeTamper = Data(repeating: 0x5A, count: beforeA.count)
+        try archiveCopySameSizeTamper.write(to: archiveCopySourceFileA)
+        do {
+            _ = try ArchiveCopyExecutor.preflight(planURL: archiveCopyTamperPlanURL)
+            throw SelfTestFailure("archive-copy accepted source bytes changed after immutable planning")
+        } catch ArchiveCopyError.sourcePreconditionFailed {
+            // Expected: apply independently verifies the planned source bytes.
+        }
+        try bytes.write(to: archiveCopySourceFileA)
+
+        let archiveCopyPlanObject = try JSONSerialization.jsonObject(
+            with: Data(contentsOf: archiveCopyTamperPlanURL)
+        )
+        guard var archiveCopyPlanDictionary = archiveCopyPlanObject as? [String: Any],
+              var archiveCopyItems = archiveCopyPlanDictionary["items"] as? [[String: Any]],
+              !archiveCopyItems.isEmpty
+        else {
+            throw SelfTestFailure("could not decode archive-copy plan for tamper regression")
+        }
+        archiveCopyItems[0]["assetID"] = "A-TAMPERED"
+        archiveCopyPlanDictionary["items"] = archiveCopyItems
+        let catalogTamperedPlanURL = temporary.appendingPathComponent("archive-copy-catalog-tampered.json")
+        try JSONSerialization.data(withJSONObject: archiveCopyPlanDictionary, options: [.sortedKeys])
+            .write(to: catalogTamperedPlanURL)
+        do {
+            _ = try ArchiveCopyExecutor.preflight(planURL: catalogTamperedPlanURL)
+            throw SelfTestFailure("archive-copy accepted plan semantics that no longer match catalog evidence")
+        } catch ArchiveCopyError.catalogEvidenceMismatch {
+            // Expected: plan bytes alone are not sufficient authority for copying.
+        }
+
+        var nonAtomicPlanDictionary = archiveCopyPlanDictionary
+        var nonAtomicItems = archiveCopyItems
+        nonAtomicItems[0]["assetID"] = archiveCopyTamperPlan.items[0].assetID
+        nonAtomicItems[0]["kind"] = "live_photo"
+        nonAtomicPlanDictionary["items"] = nonAtomicItems
+        let nonAtomicPlanURL = temporary.appendingPathComponent("archive-copy-non-atomic.json")
+        try JSONSerialization.data(withJSONObject: nonAtomicPlanDictionary, options: [.sortedKeys])
+            .write(to: nonAtomicPlanURL)
+        do {
+            _ = try ArchiveCopyExecutor.preflight(planURL: nonAtomicPlanURL)
+            throw SelfTestFailure("archive-copy accepted a one-resource Live Photo item")
+        } catch ArchiveCopyError.invalidPlan {
+            // Expected: Live Photo copy authority always covers both roles.
+        }
+    }
+
+    private static func checkCanonicalFolderRoles(fileManager: FileManager, temporary: URL) async throws {
         let canonicalLocalRoot = temporary.appendingPathComponent("CanonicalLocal", isDirectory: true)
         let canonicalArchiveRoot = temporary.appendingPathComponent("CanonicalArchive", isDirectory: true)
         try fileManager.createDirectory(
@@ -2180,7 +2354,9 @@ struct PhotoArchiveSelfTest {
         } catch QuarantineError.rootRoleDisallowsCleanup {
             // Expected: reference remains read-only even for a previously valid same-root plan.
         }
+    }
 
+    private static func checkFilenameKeeperPolicy(fileManager: FileManager, temporary: URL) async throws {
         let filenamePolicyRoot = temporary.appendingPathComponent("FilenamePolicy", isDirectory: true)
         try fileManager.createDirectory(at: filenamePolicyRoot, withIntermediateDirectories: true)
         _ = try RootMarkerStore.create(at: filenamePolicyRoot)
@@ -2352,7 +2528,14 @@ struct PhotoArchiveSelfTest {
                 && filenamePolicyQuarantine.moves.contains { $0.itemID == matchingParentItem.itemID },
             "confirmed copy-name, recognizable-name, structured-parent, and shallow-path rules should receive automatic quarantine preflight authority"
         )
+    }
 
+    private static func checkStagingKeeperAndReviewCleanup(
+        fileManager: FileManager,
+        temporary: URL,
+        rootA: URL,
+        rootB: URL
+    ) async throws {
         let stagingEarlierRoot = temporary.appendingPathComponent("StagingEarlier", isDirectory: true)
         let stagingLaterRoot = temporary.appendingPathComponent("StagingLater", isDirectory: true)
         try fileManager.createDirectory(at: stagingEarlierRoot, withIntermediateDirectories: true)
@@ -2629,7 +2812,9 @@ struct PhotoArchiveSelfTest {
                 && !fileManager.fileExists(atPath: reviewedCandidateURL.path),
             "GUI-reviewed cleanup should move only the selected exact resource after fresh verification"
         )
+    }
 
+    private static func checkTrashAndLivePhotoReview(fileManager: FileManager, temporary: URL) async throws {
         let trashCleanupRoot = temporary.appendingPathComponent("TrashCleanup", isDirectory: true)
         let trashCleanupNested = trashCleanupRoot
             .appendingPathComponent("nested/deeper", isDirectory: true)
@@ -2821,81 +3006,9 @@ struct PhotoArchiveSelfTest {
                 && stillOnlyDuplicateLivePresentationItem.copies.first(where: \.isKeeper)?.isCompleteLivePhotoOccurrence == false,
             "still-only Live Photo duplicates should show the existing deterministic-tie recommendation instead of claiming the keeper contains a complete still+video pair"
         )
+    }
 
-        let quarantineRoot = temporary.appendingPathComponent("Quarantine", isDirectory: true)
-        try fileManager.createDirectory(at: quarantineRoot, withIntermediateDirectories: true)
-        let quarantineDryRun = try QuarantineExecutor.preflight(
-            report: reviewReport,
-            plan: standalonePlan,
-            targetURL: quarantineRoot
-        )
-        try require(quarantineDryRun.dryRun, "quarantine preflight should be a dry run")
-        try require(quarantineDryRun.resourceCount == 1, "expected one synthetic quarantine candidate")
-        try require(fileManager.fileExists(atPath: fileB.path), "dry run must not move the Takeout copy")
-
-        let quarantineAgentJSON = String(
-            decoding: try encoder.encode(AgentSafeQuarantineReport(report: quarantineDryRun)),
-            as: UTF8.self
-        )
-        try require(!quarantineAgentJSON.contains(rootB.path), "agent-safe quarantine output exposed a path")
-        try require(!quarantineAgentJSON.contains("copy.jpg"), "agent-safe quarantine output exposed a filename")
-
-        let quarantineApplied = try QuarantineExecutor.apply(
-            report: reviewReport,
-            plan: standalonePlan,
-            targetURL: quarantineRoot,
-            catalogURL: mainCatalogURL
-        )
-        try require(quarantineApplied.filesModified, "quarantine apply should report file modification")
-        try require(fileManager.fileExists(atPath: fileA.path), "preferred local copy must remain in place")
-        try require(!fileManager.fileExists(atPath: fileB.path), "redundant Takeout copy should move to quarantine")
-        guard let movedDestination = quarantineApplied.moves.first?.destinationPath else {
-            throw SelfTestFailure("quarantine apply did not record a destination")
-        }
-        try require(fileManager.fileExists(atPath: movedDestination), "quarantined copy is missing at its destination")
-        try require(try Data(contentsOf: URL(fileURLWithPath: movedDestination)) == beforeB, "quarantined bytes changed")
-        guard let manifestPath = quarantineApplied.manifestPath else {
-            throw SelfTestFailure("quarantine apply did not create a restore manifest")
-        }
-        try require(fileManager.fileExists(atPath: manifestPath), "quarantine restore manifest is missing")
-
-        let restoreDryRun = try QuarantineRestoreExecutor.preflight(
-            manifestURL: URL(fileURLWithPath: manifestPath),
-            catalogURL: temporary.appendingPathComponent("catalog.sqlite3")
-        )
-        try require(restoreDryRun.dryRun, "quarantine restore preflight must be a dry run")
-        try require(restoreDryRun.resourceCount == 1, "restore preflight should contain one synthetic resource")
-        try require(!fileManager.fileExists(atPath: fileB.path), "restore dry run must not move the quarantined resource")
-        let restoreAgentJSON = String(
-            decoding: try encoder.encode(AgentSafeQuarantineRestoreReport(report: restoreDryRun)),
-            as: UTF8.self
-        )
-        try require(!restoreAgentJSON.contains(rootB.path), "agent-safe restore output exposed a source path")
-        try require(!restoreAgentJSON.contains(manifestPath), "agent-safe restore output exposed a manifest path")
-        try require(!restoreAgentJSON.contains("copy.jpg"), "agent-safe restore output exposed a filename")
-
-        try Data("tampered-quarantine-resource".utf8).write(to: URL(fileURLWithPath: movedDestination))
-        do {
-            _ = try QuarantineRestoreExecutor.preflight(
-                manifestURL: URL(fileURLWithPath: manifestPath),
-                catalogURL: temporary.appendingPathComponent("catalog.sqlite3")
-            )
-            throw SelfTestFailure("restore preflight accepted a changed quarantine resource")
-        } catch QuarantineRestoreError.quarantineResourceChanged {
-            // Expected: restore must re-verify the local catalog's exact-file evidence.
-        }
-        try beforeB.write(to: URL(fileURLWithPath: movedDestination))
-
-        let restored = try QuarantineRestoreExecutor.apply(
-            manifestURL: URL(fileURLWithPath: manifestPath),
-            catalogURL: temporary.appendingPathComponent("catalog.sqlite3")
-        )
-        try require(restored.filesModified, "restore apply should report file modification")
-        try require(fileManager.fileExists(atPath: fileB.path), "restore apply did not return the resource to its source")
-        try require(!fileManager.fileExists(atPath: movedDestination), "restore apply left the resource in quarantine")
-        try require(try Data(contentsOf: fileB) == beforeB, "restored bytes changed")
-        try require(restored.restoreStatePath != nil, "restore apply should write local restore state")
-
+    private static func checkRootRelocation(fileManager: FileManager, temporary: URL) async throws {
         let trackingRoot = temporary.appendingPathComponent("Tracking", isDirectory: true)
         let trackingMovedRoot = temporary.appendingPathComponent("TrackingMoved", isDirectory: true)
         let trackingCatalog = temporary.appendingPathComponent("tracking.sqlite3")
@@ -3004,7 +3117,13 @@ struct PhotoArchiveSelfTest {
             ) == 3,
             "organization catalog commit should append the destination to location history without a full rescan"
         )
+    }
 
+    private static func checkOrganizationAndCoverage(
+        fileManager: FileManager,
+        temporary: URL,
+        encoder: JSONEncoder
+    ) async throws {
         let organizationReport = syntheticOrganizationReport()
         let organizationPlan = OrganizationPlanner.makePlan(from: organizationReport)
         try require(
@@ -3487,7 +3606,13 @@ struct PhotoArchiveSelfTest {
                 "redundant Live Photo resources must move as one complete set"
             )
         }
+    }
 
+    private static func checkNestedAndTakeoutSemantics(
+        fileManager: FileManager,
+        temporary: URL,
+        encoder: JSONEncoder
+    ) async throws {
         let parentRoot = temporary.appendingPathComponent("Pictures", isDirectory: true)
         let takeoutRoot = parentRoot.appendingPathComponent("Takeout", isDirectory: true)
         try fileManager.createDirectory(at: takeoutRoot, withIntermediateDirectories: true)
