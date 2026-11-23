@@ -30,5 +30,8 @@ jobs:
       - name: Run synthetic self-test
         run: swift run photoarchive-selftest
 
+      - name: Check CLI privacy and root commands
+        run: bash scripts/test-cli.sh
+
       - name: Check CLI startup
         run: swift run photoarchive doctor

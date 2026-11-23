@@ -7,14 +7,13 @@ private let version = "0.1.0-dev"
 @main
 struct PhotoArchiveCLI {
     static func main() async {
+        let invocation = CommandLine.arguments.dropFirst()
+        guard let command = invocation.first else {
+            printHelp()
+            return
+        }
+        let arguments = Array(invocation.dropFirst())
         do {
-            var arguments = Array(CommandLine.arguments.dropFirst())
-            guard let command = arguments.first else {
-                printHelp()
-                return
-            }
-            arguments.removeFirst()
-
             switch command {
             case "scan":
                 try await runScan(arguments, mode: .scan)
@@ -55,11 +54,30 @@ struct PhotoArchiveCLI {
             case "help", "--help", "-h":
                 printHelp()
             default:
-                throw CLIError("Unknown command: \(command)")
+                throw CLIError(detail: "Unknown command: \(command)")
             }
         } catch {
-            writeStandardError("error: \(error.localizedDescription)\n")
+            // A parser can fail before reaching the privacy flag.
+            let message = invocation.contains("--agent-json")
+                ? agentErrorMessage(error)
+                : error.localizedDescription
+            writeStandardError("error: \(message)\n")
             exit(1)
+        }
+    }
+
+    private static func agentErrorMessage(_ error: Error) -> String {
+        switch error {
+        case let error as CLIError:
+            return error.agentMessage ?? "Invalid command or arguments. See --help."
+        case DuplicateReviewWorkspaceError.outputAlreadyExists:
+            return "Duplicate review output already exists."
+        case RootRegistryError.rootNotFound:
+            return "No catalog root matches the supplied target."
+        case RootRegistryError.rootPathNotDirectory:
+            return "The supplied root is not an existing directory."
+        default:
+            return "The operation failed. Local error details are hidden in --agent-json mode."
         }
     }
 
@@ -141,7 +159,7 @@ struct PhotoArchiveCLI {
                 return
             default:
                 if argument.hasPrefix("-") {
-                    throw CLIError("Unknown archive-copy option: \(argument)")
+                    throw CLIError(detail: "Unknown archive-copy option: \(argument)")
                 }
                 planPaths.append(argument)
             }
@@ -214,7 +232,7 @@ struct PhotoArchiveCLI {
                 return
             default:
                 if argument.hasPrefix("-") {
-                    throw CLIError("Unknown archive-index option: \(argument)")
+                    throw CLIError(detail: "Unknown archive-index option: \(argument)")
                 }
                 paths.append(argument)
             }
@@ -273,7 +291,7 @@ struct PhotoArchiveCLI {
                 return
             default:
                 if argument.hasPrefix("-") {
-                    throw CLIError("Unknown restore-quarantine option: \(argument)")
+                    throw CLIError(detail: "Unknown restore-quarantine option: \(argument)")
                 }
                 manifestPaths.append(argument)
             }
@@ -318,7 +336,7 @@ struct PhotoArchiveCLI {
                 return
             default:
                 if argument.hasPrefix("-") {
-                    throw CLIError("Unknown cleanup-empty-dirs option: \(argument)")
+                    throw CLIError(detail: "Unknown cleanup-empty-dirs option: \(argument)")
                 }
                 manifestPaths.append(argument)
             }
@@ -373,7 +391,7 @@ struct PhotoArchiveCLI {
                     printCatalogExportHelp()
                     return
                 default:
-                    throw CLIError("Unknown catalog export option: \(argument)")
+                    throw CLIError(detail: "Unknown catalog export option: \(argument)")
                 }
                 index += 1
             }
@@ -416,7 +434,7 @@ struct PhotoArchiveCLI {
                     return
                 default:
                     if argument.hasPrefix("-") {
-                        throw CLIError("Unknown catalog restore option: \(argument)")
+                        throw CLIError(detail: "Unknown catalog restore option: \(argument)")
                     }
                     snapshotPaths.append(argument)
                 }
@@ -450,240 +468,206 @@ struct PhotoArchiveCLI {
         case "help", "--help", "-h":
             printCatalogHelp()
         default:
-            throw CLIError("Unknown catalog action: \(action)")
+            throw CLIError(detail: "Unknown catalog action: \(action)")
         }
     }
 
+    private enum RootAction: String {
+        case list, add, role, enable, disable, remove, inspect
+        case initialize = "init"
+
+        var usesCatalog: Bool { self != .inspect && self != .initialize }
+    }
+
+    private struct RootMarkerReport: Encodable {
+        enum Status: String, Encodable {
+            case absent, present, wouldCreate, created
+        }
+
+        let status: Status
+        let schemaVersion: Int?
+    }
+
     private static func runRoot(_ arguments: [String]) throws {
-        guard let action = arguments.first else {
+        guard let name = arguments.first, !["help", "--help", "-h"].contains(name) else {
             printRootHelp()
             return
         }
-        let rest = Array(arguments.dropFirst())
+        guard let action = RootAction(rawValue: name == "set-role" ? "role" : name) else {
+            throw CLIError(detail: "Unknown root action: \(name)")
+        }
+
+        var catalogURL = PhotoArchivePaths.defaultCatalogURL
+        var outputOptions = JSONOutputOptions()
+        var includeHistory = false
+        var apply = false
+        var kind: SourceRootKind?
+        var usageRole: RootUsageRole?
+        var provenance = SourceProvenance.unknown
+        var values: [String] = []
+        var index = 1
+        while index < arguments.count {
+            let argument = arguments[index]
+            switch argument {
+            case "--catalog" where action.usesCatalog:
+                catalogURL = fileURL(try value(after: argument, at: &index, in: arguments))
+            case "--json", "--agent-json":
+                outputOptions.consume(argument)
+            case "--all" where action == .list:
+                includeHistory = true
+            case "--apply" where action == .initialize:
+                apply = true
+            case "--kind" where action == .add:
+                let raw = try value(after: argument, at: &index, in: arguments)
+                guard let parsed = SourceRootKind(rawValue: raw) else {
+                    throw CLIError("--kind must be one of: inbox, archive, import_source, reference.")
+                }
+                kind = parsed
+            case "--role" where action == .add:
+                let raw = try value(after: argument, at: &index, in: arguments)
+                guard let parsed = RootUsageRole(rawValue: raw) else {
+                    throw CLIError("--role must be one of: staging, primary_library, archive, import_source, reference.")
+                }
+                usageRole = parsed
+            case "--provenance" where action == .add:
+                let raw = try value(after: argument, at: &index, in: arguments)
+                guard let parsed = SourceProvenance(rawValue: raw) else {
+                    throw CLIError(detail: "Unknown --provenance value: \(raw)")
+                }
+                provenance = parsed
+            case "--help", "-h":
+                printRootHelp()
+                return
+            default:
+                guard !argument.hasPrefix("-"), action != .list else {
+                    throw CLIError(detail: "Unknown root \(action.rawValue) option: \(argument)")
+                }
+                values.append(argument)
+            }
+            index += 1
+        }
+        try outputOptions.validate()
+
         switch action {
-        case "list":
-            var catalogURL = PhotoArchivePaths.defaultCatalogURL
-            var includeHistory = false
-            var outputOptions = JSONOutputOptions()
-            var index = 0
-            while index < rest.count {
-                let argument = rest[index]
-                switch argument {
-                case "--catalog":
-                    catalogURL = fileURL(try value(after: argument, at: &index, in: rest))
-                case "--all":
-                    includeHistory = true
-                case "--json", "--agent-json":
-                    outputOptions.consume(argument)
-                case "--help", "-h":
-                    printRootHelp(); return
-                default:
-                    throw CLIError("Unknown root list option: \(argument)")
-                }
-                index += 1
-            }
-            try outputOptions.validate()
+        case .list:
             let reports = try RootRegistry.list(catalogURL: catalogURL, includeHistory: includeHistory)
-            if outputOptions.mode == .agentJSON {
-                try printJSON(reports.map(AgentSafeRegisteredRootReport.init))
-            } else if outputOptions.mode == .json {
-                try printJSON(reports)
-            } else if reports.isEmpty {
-                print("No registered roots. Use 'photoarchive root list --all' to show catalog history.")
-            } else {
-                print("PhotoArchiveKit registered roots")
-                for report in reports {
-                    print("[\(report.state.rawValue)] \(report.rootID) \(report.canonicalPath)")
-                    print("  role: \(report.usageRole.rawValue)")
-                    print("  kind/provenance: \(report.kind.rawValue) / \(report.provenance.rawValue)")
-                    print("  available: \(report.isAvailable)  catalog resources: \(report.currentResourceCount)")
-                }
-            }
-        case "add":
-            var catalogURL = PhotoArchivePaths.defaultCatalogURL
-            var kind = SourceRootKind.reference
-            var kindWasExplicit = false
-            var provenance = SourceProvenance.unknown
-            var usageRole: RootUsageRole?
-            var paths: [String] = []
-            var index = 0
-            while index < rest.count {
-                let argument = rest[index]
-                switch argument {
-                case "--catalog":
-                    catalogURL = fileURL(try value(after: argument, at: &index, in: rest))
-                case "--kind":
-                    let raw = try value(after: argument, at: &index, in: rest)
-                    guard let parsed = SourceRootKind(rawValue: raw) else {
-                        throw CLIError("--kind must be one of: inbox, archive, import_source, reference.")
+            try outputOptions.write(
+                json: { try printJSON(reports) },
+                agentJSON: { try printJSON(reports.map(AgentSafeRegisteredRootReport.init)) },
+                text: {
+                    guard !reports.isEmpty else {
+                        print("No registered roots. Use 'photoarchive root list --all' to show catalog history.")
+                        return
                     }
-                    kind = parsed
-                    kindWasExplicit = true
-                case "--role":
-                    let raw = try value(after: argument, at: &index, in: rest)
-                    guard let parsed = RootUsageRole(rawValue: raw) else {
-                        throw CLIError("--role must be one of: staging, primary_library, archive, import_source, reference.")
+                    print("PhotoArchiveKit registered roots")
+                    for report in reports {
+                        print("[\(report.state.rawValue)] \(report.rootID) \(report.canonicalPath)")
+                        print("  role: \(report.usageRole.rawValue)")
+                        print("  kind/provenance: \(report.kind.rawValue) / \(report.provenance.rawValue)")
+                        print("  available: \(report.isAvailable)  catalog resources: \(report.currentResourceCount)")
                     }
-                    usageRole = parsed
-                case "--provenance":
-                    let raw = try value(after: argument, at: &index, in: rest)
-                    guard let parsed = SourceProvenance(rawValue: raw) else {
-                        throw CLIError("Unknown --provenance value: \(raw)")
-                    }
-                    provenance = parsed
-                case "--help", "-h":
-                    printRootHelp(); return
-                default:
-                    if argument.hasPrefix("-") { throw CLIError("Unknown root add option: \(argument)") }
-                    paths.append(argument)
                 }
-                index += 1
-            }
-            guard paths.count == 1 else { throw CLIError("Usage: photoarchive root add [options] PATH") }
-            if let usageRole {
-                if kindWasExplicit && kind != usageRole.sourceKind {
-                    throw CLIError("--kind \(kind.rawValue) conflicts with --role \(usageRole.rawValue).")
-                }
-                kind = usageRole.sourceKind
+            )
+        case .add:
+            guard values.count == 1 else { throw CLIError("Usage: photoarchive root add [options] PATH") }
+            if let kind, let usageRole, kind != usageRole.sourceKind {
+                throw CLIError("--kind and --role conflict. See 'photoarchive root --help'.")
             }
             let report = try RootRegistry.add(
-                url: fileURL(paths[0]),
-                kind: kind,
+                url: fileURL(values[0]),
+                kind: usageRole?.sourceKind ?? kind ?? .reference,
                 provenance: provenance,
                 usageRole: usageRole,
                 catalogURL: catalogURL
             )
-            print("Registered root as active: \(report.canonicalPath)")
-            print("Role: \(report.usageRole.rawValue)")
-            print("Media files were not modified.")
-        case "role", "set-role":
-            var catalogURL = PhotoArchivePaths.defaultCatalogURL
-            var outputOptions = JSONOutputOptions()
-            var values: [String] = []
-            var index = 0
-            while index < rest.count {
-                let argument = rest[index]
-                if argument == "--catalog" {
-                    catalogURL = fileURL(try value(after: argument, at: &index, in: rest))
-                } else if argument == "--json" || argument == "--agent-json" {
-                    outputOptions.consume(argument)
-                } else if argument == "--help" || argument == "-h" {
-                    printRootHelp(); return
-                } else if argument.hasPrefix("-") {
-                    throw CLIError("Unknown root role option: \(argument)")
-                } else {
-                    values.append(argument)
-                }
-                index += 1
+            try writeRootReport(report, options: outputOptions) {
+                print("Registered root as active: \(report.canonicalPath)")
+                print("Role: \(report.usageRole.rawValue)")
+                print("Media files were not modified.")
             }
-            guard values.count == 2,
-                  let role = RootUsageRole(rawValue: values[1])
-            else {
-                throw CLIError("Usage: photoarchive root role [--catalog PATH] ROOT_ID_OR_PATH ROLE")
+        case .role:
+            guard values.count == 2, let role = RootUsageRole(rawValue: values[1]) else {
+                throw CLIError("Usage: photoarchive root role [options] ROOT_ID_OR_PATH ROLE")
             }
-            try outputOptions.validate()
-            let report = try RootRegistry.setUsageRole(
-                target: values[0],
-                role: role,
-                catalogURL: catalogURL
-            )
-            if outputOptions.mode == .agentJSON {
-                try printJSON(AgentSafeRegisteredRootReport(report: report))
-            } else if outputOptions.mode == .json {
-                try printJSON(report)
-            } else {
+            let report = try RootRegistry.setUsageRole(target: values[0], role: role, catalogURL: catalogURL)
+            try writeRootReport(report, options: outputOptions) {
                 print("Root role is now \(report.usageRole.rawValue): \(report.canonicalPath)")
                 print("Media files were not modified. The new policy applies to future plans and reviews.")
             }
-        case "enable", "disable":
-            var catalogURL = PhotoArchivePaths.defaultCatalogURL
-            var targets: [String] = []
-            var index = 0
-            while index < rest.count {
-                let argument = rest[index]
-                if argument == "--catalog" {
-                    catalogURL = fileURL(try value(after: argument, at: &index, in: rest))
-                } else if argument == "--help" || argument == "-h" {
-                    printRootHelp(); return
-                } else if argument.hasPrefix("-") {
-                    throw CLIError("Unknown root \(action) option: \(argument)")
-                } else {
-                    targets.append(argument)
+        case .enable, .disable:
+            guard values.count == 1 else {
+                throw CLIError("Usage: photoarchive root enable|disable [options] ROOT_ID_OR_PATH")
+            }
+            let state: RootRegistrationState = action == .enable ? .active : .inactive
+            let report = try RootRegistry.setState(target: values[0], state: state, catalogURL: catalogURL)
+            try writeRootReport(report, options: outputOptions) {
+                print("Root is now \(report.state.rawValue): \(report.canonicalPath)")
+                print("Media files were not modified.")
+            }
+        case .remove:
+            guard values.count == 1 else {
+                throw CLIError("Usage: photoarchive root remove [options] ROOT_ID_OR_PATH")
+            }
+            let report = try RootRegistry.remove(target: values[0], catalogURL: catalogURL)
+            try outputOptions.write(
+                json: { try printJSON(report) },
+                agentJSON: { try printJSON(AgentSafeRootRemovalReport(report: report)) },
+                text: {
+                    print("Removed root from the current PhotoArchiveKit library.")
+                    print("Catalog resources pruned: \(report.prunedResourceCount)")
+                    print("Media files were not modified. Minimal root identity/history is retained.")
                 }
-                index += 1
+            )
+        case .inspect, .initialize:
+            guard values.count == 1 else {
+                throw CLIError("Usage: photoarchive root inspect|init [options] PATH")
             }
-            guard targets.count == 1 else { throw CLIError("Usage: photoarchive root \(action) [--catalog PATH] ROOT_ID_OR_PATH") }
-            let state: RootRegistrationState = action == "enable" ? .active : .inactive
-            let report = try RootRegistry.setState(target: targets[0], state: state, catalogURL: catalogURL)
-            print("Root is now \(report.state.rawValue): \(report.canonicalPath)")
-            print("Media files were not modified.")
-        case "remove":
-            var catalogURL = PhotoArchivePaths.defaultCatalogURL
-            var outputOptions = JSONOutputOptions()
-            var targets: [String] = []
-            var index = 0
-            while index < rest.count {
-                let argument = rest[index]
-                switch argument {
-                case "--catalog":
-                    catalogURL = fileURL(try value(after: argument, at: &index, in: rest))
-                case "--json", "--agent-json": outputOptions.consume(argument)
-                case "--help", "-h": printRootHelp(); return
-                default:
-                    if argument.hasPrefix("-") { throw CLIError("Unknown root remove option: \(argument)") }
-                    targets.append(argument)
-                }
-                index += 1
-            }
-            guard targets.count == 1 else { throw CLIError("Usage: photoarchive root remove [--catalog PATH] ROOT_ID_OR_PATH") }
-            try outputOptions.validate()
-            let report = try RootRegistry.remove(target: targets[0], catalogURL: catalogURL)
-            if outputOptions.mode == .agentJSON {
-                try printJSON(AgentSafeRootRemovalReport(report: report))
-            } else if outputOptions.mode == .json {
-                try printJSON(report)
-            } else {
-                print("Removed root from the current PhotoArchiveKit library.")
-                print("Catalog resources pruned: \(report.prunedResourceCount)")
-                print("Media files were not modified. Minimal root identity/history is retained.")
-            }
-        case "inspect":
-            guard rest.count == 1 else { throw CLIError("Usage: photoarchive root inspect PATH") }
-            let rootURL = fileURL(rest[0])
+            let rootURL = fileURL(values[0])
+            let report: RootMarkerReport
             if let marker = try RootMarkerStore.readIfPresent(at: rootURL) {
-                print("PhotoArchiveKit root marker: present")
-                print("Schema: \(marker.schemaVersion)")
+                report = RootMarkerReport(status: .present, schemaVersion: marker.schemaVersion)
+            } else if action == .inspect {
+                report = RootMarkerReport(status: .absent, schemaVersion: nil)
+            } else if apply {
+                let marker = try RootMarkerStore.create(at: rootURL)
+                report = RootMarkerReport(status: .created, schemaVersion: marker.schemaVersion)
             } else {
-                print("PhotoArchiveKit root marker: absent")
+                report = RootMarkerReport(status: .wouldCreate, schemaVersion: nil)
             }
-        case "init":
-            var apply = false
-            var paths: [String] = []
-            for argument in rest {
-                if argument == "--apply" { apply = true }
-                else if argument == "--help" || argument == "-h" { printRootHelp(); return }
-                else if argument.hasPrefix("-") { throw CLIError("Unknown root init option: \(argument)") }
-                else { paths.append(argument) }
-            }
-            guard paths.count == 1 else { throw CLIError("Usage: photoarchive root init [--apply] PATH") }
-            let rootURL = fileURL(paths[0])
-            if try RootMarkerStore.readIfPresent(at: rootURL) != nil {
-                print("PhotoArchiveKit root marker already present. No change needed.")
+            if outputOptions.mode != .text {
+                try printJSON(report)
                 return
             }
-            if !apply {
+            switch report.status {
+            case .present:
+                if action == .inspect {
+                    print("PhotoArchiveKit root marker: present")
+                    if let schemaVersion = report.schemaVersion { print("Schema: \(schemaVersion)") }
+                } else {
+                    print("PhotoArchiveKit root marker already present. No change needed.")
+                }
+            case .absent:
+                print("PhotoArchiveKit root marker: absent")
+            case .wouldCreate:
                 print("Dry run: a .photoarchive-root marker would be created in the supplied root.")
                 print("No files were modified. Re-run with --apply to create it.")
-                return
+            case .created:
+                print("Created .photoarchive-root marker.")
+                print("Media files were not modified.")
             }
-            _ = try RootMarkerStore.create(at: rootURL)
-            print("Created .photoarchive-root marker.")
-            print("Media files were not modified.")
-        case "help", "--help", "-h":
-            printRootHelp()
-        default:
-            throw CLIError("Unknown root action: \(action)")
         }
+    }
+
+    private static func writeRootReport(
+        _ report: RegisteredRootReport,
+        options: JSONOutputOptions,
+        text: () -> Void
+    ) throws {
+        try options.write(
+            json: { try printJSON(report) },
+            agentJSON: { try printJSON(AgentSafeRegisteredRootReport(report: report)) },
+            text: text
+        )
     }
 
     private static func runSettings(_ arguments: [String]) throws {
@@ -914,7 +898,7 @@ struct PhotoArchiveCLI {
                 return
             default:
                 if argument.hasPrefix("-") {
-                    throw CLIError("Unknown scan option: \(argument)")
+                    throw CLIError(detail: "Unknown scan option: \(argument)")
                 }
                 roots.append(ScanRoot(url: fileURL(argument), kind: .inbox))
             }
@@ -923,8 +907,10 @@ struct PhotoArchiveCLI {
 
         if mode == .duplicateReview && !duplicateReviewRefresh && !roots.isEmpty {
             throw CLIError(
-                "duplicate-review uses the latest reusable active-root catalog snapshot by default. "
-                    + "Remove ROOT arguments, or add --refresh to perform a fresh scan."
+                """
+                duplicate-review uses the latest reusable active-root catalog snapshot by default. \
+                Remove ROOT arguments, or add --refresh to perform a fresh scan.
+                """
             )
         }
         if mode == .duplicateReview && !duplicateReviewRefresh && forceFreshScan {
@@ -970,8 +956,10 @@ struct PhotoArchiveCLI {
             let scanner = try ArchiveScanner(catalogURL: catalogURL)
             guard let report = try scanner.latestReusableActiveRootsDuplicateReviewScanReport() else {
                 throw CLIError(
-                    "No reusable complete scan snapshot matches the currently active roots. "
-                        + "Run duplicate-review with --refresh once to refresh the catalog."
+                    """
+                    No reusable complete scan snapshot matches the currently active roots. \
+                    Run duplicate-review with --refresh once to refresh the catalog.
+                    """
                 )
             }
             let plan = ReconciliationPlanner.makePlan(from: report)
@@ -1222,7 +1210,7 @@ struct PhotoArchiveCLI {
                 )
                 return
             default:
-                throw CLIError("Unknown review-decisions option: \(argument)")
+                throw CLIError(detail: "Unknown review-decisions option: \(argument)")
             }
         }
         try outputOptions.validate()
@@ -1667,7 +1655,7 @@ struct PhotoArchiveCLI {
     ) throws -> String {
         index += 1
         guard index < arguments.count else {
-            throw CLIError("Missing value after \(option).")
+            throw CLIError(detail: "Missing value after \(option).")
         }
         return arguments[index]
     }
@@ -1695,8 +1683,7 @@ struct PhotoArchiveCLI {
               photoarchive cleanup-empty-dirs [--apply] [--catalog PATH] ORGANIZATION_MANIFEST
               photoarchive catalog export --output PATH [--catalog PATH]
               photoarchive catalog restore [--apply] --to PATH [--bind-root ROOT_ID=PATH] SNAPSHOT
-              photoarchive root inspect PATH
-              photoarchive root init [--apply] PATH
+              photoarchive root <list|add|role|enable|disable|remove|inspect|init> [options]
               photoarchive settings [show]
               photoarchive settings deletion-destination trash
               photoarchive settings deletion-destination quarantine PATH
@@ -1718,7 +1705,7 @@ struct PhotoArchiveCLI {
             'photoarchive organize --help',
             'photoarchive quarantine --help', 'photoarchive restore-quarantine --help',
             'photoarchive cleanup-empty-dirs --help', or 'photoarchive catalog --help'
-            for options.
+            for options. Run 'photoarchive root --help' for folder management.
             """
         )
     }
@@ -1905,13 +1892,17 @@ struct PhotoArchiveCLI {
             """
             Usage:
               photoarchive root list [--all] [--json|--agent-json] [--catalog PATH]
-              photoarchive root add [--role ROLE] [--kind KIND] [--provenance VALUE] [--catalog PATH] PATH
+              photoarchive root add [--json|--agent-json] [--role ROLE] [--kind KIND] [--provenance VALUE] [--catalog PATH] PATH
               photoarchive root role [--json|--agent-json] [--catalog PATH] ROOT_ID_OR_PATH ROLE
-              photoarchive root enable [--catalog PATH] ROOT_ID_OR_PATH
-              photoarchive root disable [--catalog PATH] ROOT_ID_OR_PATH
+              photoarchive root enable [--json|--agent-json] [--catalog PATH] ROOT_ID_OR_PATH
+              photoarchive root disable [--json|--agent-json] [--catalog PATH] ROOT_ID_OR_PATH
               photoarchive root remove [--json|--agent-json] [--catalog PATH] ROOT_ID_OR_PATH
-              photoarchive root inspect PATH
-              photoarchive root init [--apply] PATH
+              photoarchive root inspect [--json|--agent-json] PATH
+              photoarchive root init [--json|--agent-json] [--apply] PATH
+
+            Every root action supports --help. --json is for local diagnostics. --agent-json
+            omits folder paths and labels. Marker inspection and initialization report only
+            status and, when present, schema version in both JSON modes.
 
             ROLE is one of staging, primary_library, archive, import_source, reference. Roles are
             per registered root, not per device. Changing a role updates policy only; it never
@@ -2147,9 +2138,16 @@ private final class ScanProgressRenderer: @unchecked Sendable {
 
 private struct CLIError: LocalizedError {
     let message: String
+    let agentMessage: String?
 
-    init(_ message: String) {
+    init(_ message: StaticString) {
+        self.message = message.description
+        agentMessage = self.message
+    }
+
+    init(detail message: String) {
         self.message = message
+        agentMessage = nil
     }
 
     var errorDescription: String? { message }

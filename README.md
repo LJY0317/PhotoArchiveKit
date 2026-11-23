@@ -121,7 +121,7 @@ For AI-agent workflows:
 swift run photoarchive scan --agent-json --inbox "~/Photo Inbox"
 ```
 
-`--json` may contain local paths and filenames. `--agent-json` is the privacy-minimized interface.
+`--json` may contain local paths and filenames. `--agent-json` is the privacy-minimized interface. Failures exit with status 1 and print a path-free diagnostic to stderr.
 
 ## Root registry and purposes
 
@@ -130,11 +130,13 @@ The native app exposes only three purposes: **Default** for normal comparison an
 Examples:
 
 ```bash
-swift run photoarchive root add "~/Pictures"
+swift run photoarchive root --help
+swift run photoarchive root add "~/Pictures" --agent-json
+swift run photoarchive root list --agent-json
 swift run photoarchive root init --apply "/Volumes/My HDD/My Photos"
 ```
 
-Changing a purpose changes policy only; it does not itself move or delete media.
+Changing a purpose changes policy only; it does not itself move or delete media. Every root action supports `--json` and `--agent-json`. Marker inspection and initialization return a status (`absent`, `present`, `wouldCreate`, or `created`) and the schema version when a marker exists.
 
 ## Exact duplicate review and cleanup
 
